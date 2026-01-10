@@ -32,6 +32,7 @@ python main.py
 - PyMuPDF >= 1.20.0
 - OpenCV >= 4.5.0
 - NumPy >= 1.20.0
+- Pillow >= 9.0.0
 
 ## Sử dụng
 
@@ -42,7 +43,7 @@ python main.py
 
 ## Screenshots
 
-*(Coming soon)*
+![Xóa Vết Ghim PDF](screenshot.png)
 
 ## License
 
