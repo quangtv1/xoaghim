@@ -132,7 +132,8 @@ class ProcessThread(QThread):
                 self.output_path,
                 process_func,
                 dpi=self.settings.get('dpi', 200),
-                jpeg_quality=85,
+                jpeg_quality=self.settings.get('jpeg_quality', 90),
+                optimize_size=self.settings.get('optimize_size', False),
                 progress_callback=progress_callback
             )
             
@@ -212,7 +213,8 @@ class BatchProcessThread(QThread):
                         output_path,
                         process_func,
                         dpi=self.settings.get('dpi', 200),
-                        jpeg_quality=85,
+                        jpeg_quality=self.settings.get('jpeg_quality', 90),
+                        optimize_size=self.settings.get('optimize_size', False),
                         progress_callback=page_progress
                     )
                     
@@ -237,24 +239,13 @@ class BatchProcessThread(QThread):
             self.finished.emit(False, stats)
     
     def _get_output_path(self, input_path: str) -> str:
-        """Generate output path for input file"""
+        """Generate output path for input file - matches batch_preview logic"""
         rel_path = os.path.relpath(input_path, self.base_dir)
-        name, ext = os.path.splitext(rel_path)
-        
+        name, _ = os.path.splitext(rel_path)
         pattern = self.settings.get('filename_pattern', '{gốc}_clean.pdf')
-        
-        if self.output_dir == self.base_dir:
-            # Same folder - add suffix
-            output_name = pattern.replace('{gốc}', name)
-            return os.path.join(self.output_dir, output_name)
-        else:
-            # Different folder - keep original name or use pattern
-            if pattern == '{gốc}_clean.pdf':
-                # Keep original name
-                return os.path.join(self.output_dir, rel_path)
-            else:
-                output_name = pattern.replace('{gốc}', name)
-                return os.path.join(self.output_dir, output_name)
+        # Always apply filename pattern
+        output_name = pattern.replace('{gốc}', name)
+        return os.path.join(self.output_dir, output_name)
     
     def cancel(self):
         self._cancelled = True
@@ -1073,15 +1064,22 @@ class MainWindow(QMainWindow):
             self.page_spin.setMaximum(self._pdf_handler.page_count)
             self.page_spin.setValue(1)
             self.total_pages_label.setText(str(self._pdf_handler.page_count))
-            
-            # Set output path
-            output_dir = str(Path(file_path).parent)
-            self.settings_panel.set_output_path(output_dir)
-            
-            # Calculate output file path
+
+            # Set output path and calculate dest_path
             source_path = Path(file_path)
-            dest_path = source_path.parent / f"{source_path.stem}_clean{source_path.suffix}"
-            
+            if self._batch_mode:
+                # In batch mode: use batch output dir, don't reset settings
+                output_dir = self._batch_output_dir or str(source_path.parent)
+                settings = self.settings_panel.get_settings()
+                pattern = settings.get('filename_pattern', '{gốc}_clean.pdf')
+                output_name = pattern.replace('{gốc}', source_path.stem)
+                dest_path = Path(output_dir) / output_name
+            else:
+                # Single file mode: set output path to file's parent
+                output_dir = str(source_path.parent)
+                self.settings_panel.set_output_path(output_dir)
+                dest_path = source_path.parent / f"{source_path.stem}_clean{source_path.suffix}"
+
             # Update preview panel titles with file paths
             self.preview.set_file_paths(str(file_path), str(dest_path))
             
@@ -1263,23 +1261,14 @@ class MainWindow(QMainWindow):
         if not output_dir:
             output_dir = self._batch_base_dir
         
-        # Check for existing files
+        # Check for existing files - use same logic as batch_preview
         existing_files = []
+        pattern = settings.get('filename_pattern', '{gốc}_clean.pdf')
         for f in checked_files:
             rel_path = os.path.relpath(f, self._batch_base_dir)
-            name, ext = os.path.splitext(rel_path)
-            pattern = settings.get('filename_pattern', '{gốc}_clean.pdf')
-            
-            if output_dir == self._batch_base_dir:
-                output_name = pattern.replace('{gốc}', name)
-                output_path = os.path.join(output_dir, output_name)
-            else:
-                if pattern == '{gốc}_clean.pdf':
-                    output_path = os.path.join(output_dir, rel_path)
-                else:
-                    output_name = pattern.replace('{gốc}', name)
-                    output_path = os.path.join(output_dir, output_name)
-            
+            name, _ = os.path.splitext(rel_path)
+            output_name = pattern.replace('{gốc}', name)
+            output_path = os.path.join(output_dir, output_name)
             if os.path.exists(output_path):
                 existing_files.append(output_path)
         

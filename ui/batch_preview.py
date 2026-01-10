@@ -17,10 +17,11 @@ from typing import List, Optional
 
 class FileListWidget(QListWidget):
     """Widget danh sách file với checkbox"""
-    
+
     file_selected = pyqtSignal(str, int)  # Emit (file_path, row_index) khi file được chọn
     selection_changed = pyqtSignal(list)  # Emit danh sách file được check
     filter_changed = pyqtSignal(list)  # Emit visible file indices
+    checkbox_changed = pyqtSignal(int, bool)  # Emit (original_index, is_checked) khi checkbox thay đổi
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -135,6 +136,9 @@ class FileListWidget(QListWidget):
     
     def _on_item_changed(self, item: QListWidgetItem):
         """Khi checkbox thay đổi"""
+        original_idx = item.data(Qt.UserRole + 1)
+        is_checked = item.checkState() == Qt.Checked
+        self.checkbox_changed.emit(original_idx, is_checked)
         self.selection_changed.emit(self.get_checked_files())
     
     def get_checked_files(self) -> List[str]:
@@ -202,14 +206,26 @@ class FileListWidget(QListWidget):
                 return False
         return True
 
+    def set_item_checked_by_index(self, original_idx: int, checked: bool):
+        """Set checkbox state by original index without emitting signal"""
+        self.blockSignals(True)
+        for i in range(self.count()):
+            item = self.item(i)
+            if item.data(Qt.UserRole + 1) == original_idx:
+                item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+                break
+        self.blockSignals(False)
+
 
 class FileListPanel(QFrame):
     """Panel chứa file list với title bar"""
-    
+
     file_selected = pyqtSignal(str, int)  # file_path, original_index
     selection_changed = pyqtSignal(list)
     close_requested = pyqtSignal()
     search_changed = pyqtSignal(str)  # Emit search text
+    checkbox_changed = pyqtSignal(int, bool)  # (original_index, is_checked)
+    toggle_all_changed = pyqtSignal(bool)  # Emit when toggle all checkbox changes
     
     def __init__(self, title: str, show_close_btn: bool = False, 
                  show_search: bool = False, parent=None):
@@ -321,6 +337,7 @@ class FileListPanel(QFrame):
         self.file_list = FileListWidget()
         self.file_list.file_selected.connect(self._on_file_selected)
         self.file_list.selection_changed.connect(self._on_selection_changed)
+        self.file_list.checkbox_changed.connect(self._on_checkbox_changed)
         list_layout.addWidget(self.file_list)
         
         layout.addWidget(list_container)
@@ -358,11 +375,21 @@ class FileListPanel(QFrame):
             # All checked -> uncheck all
             self.file_list.uncheck_all()
             self.toggle_checkbox.setChecked(False)
+            self.toggle_all_changed.emit(False)
         else:
             # Some or none checked -> check all
             self.file_list.check_all()
             self.toggle_checkbox.setChecked(True)
+            self.toggle_all_changed.emit(True)
         self._update_count()
+
+    def set_all_checked(self, checked: bool):
+        """Set all items checked/unchecked without emitting toggle signal"""
+        if checked:
+            self.file_list.check_all()
+        else:
+            self.file_list.uncheck_all()
+        self._update_toggle_state()
     
     def _on_search_changed(self, text: str):
         """Filter file list and notify parent"""
@@ -384,6 +411,16 @@ class FileListPanel(QFrame):
         self._update_count()
         self._update_toggle_state()
         self.selection_changed.emit(checked_files)
+
+    def _on_checkbox_changed(self, original_idx: int, is_checked: bool):
+        """Forward checkbox change signal"""
+        self.checkbox_changed.emit(original_idx, is_checked)
+
+    def set_item_checked(self, original_idx: int, checked: bool):
+        """Set checkbox state by original index"""
+        self.file_list.set_item_checked_by_index(original_idx, checked)
+        self._update_count()
+        self._update_toggle_state()
     
     def select_row(self, row: int):
         self.file_list.select_row(row)
@@ -438,11 +475,15 @@ class BatchFileListWidget(QWidget):
         self.goc_panel.file_selected.connect(self._on_goc_file_selected)
         self.goc_panel.close_requested.connect(self.close_requested.emit)
         self.goc_panel.search_changed.connect(self._on_search_changed)
+        self.goc_panel.checkbox_changed.connect(self._on_goc_checkbox_changed)
+        self.goc_panel.toggle_all_changed.connect(self._on_goc_toggle_all)
         self.splitter.addWidget(self.goc_panel)
-        
+
         # Đích panel (no search)
         self.dich_panel = FileListPanel("Đích:", show_close_btn=False, show_search=False)
         self.dich_panel.file_selected.connect(self._on_dich_file_selected)
+        self.dich_panel.checkbox_changed.connect(self._on_dich_checkbox_changed)
+        self.dich_panel.toggle_all_changed.connect(self._on_dich_toggle_all)
         self.splitter.addWidget(self.dich_panel)
         
         # Equal sizes
@@ -502,14 +543,46 @@ class BatchFileListWidget(QWidget):
         """When file selected in Đích panel"""
         if self._syncing:
             return
-        
+
         self._syncing = True
         self.goc_panel.select_by_original_index(original_idx)
         self._syncing = False
-        
+
         # Emit corresponding source file
         if 0 <= original_idx < len(self._files):
             self.file_selected.emit(self._files[original_idx])
+
+    def _on_goc_checkbox_changed(self, original_idx: int, is_checked: bool):
+        """Sync checkbox from Gốc to Đích"""
+        if self._syncing:
+            return
+        self._syncing = True
+        self.dich_panel.set_item_checked(original_idx, is_checked)
+        self._syncing = False
+
+    def _on_dich_checkbox_changed(self, original_idx: int, is_checked: bool):
+        """Sync checkbox from Đích to Gốc"""
+        if self._syncing:
+            return
+        self._syncing = True
+        self.goc_panel.set_item_checked(original_idx, is_checked)
+        self._syncing = False
+
+    def _on_goc_toggle_all(self, checked: bool):
+        """Sync toggle all from Gốc to Đích"""
+        if self._syncing:
+            return
+        self._syncing = True
+        self.dich_panel.set_all_checked(checked)
+        self._syncing = False
+
+    def _on_dich_toggle_all(self, checked: bool):
+        """Sync toggle all from Đích to Gốc"""
+        if self._syncing:
+            return
+        self._syncing = True
+        self.goc_panel.set_all_checked(checked)
+        self._syncing = False
     
     def get_checked_files(self) -> List[str]:
         return self.goc_panel.get_checked_files()

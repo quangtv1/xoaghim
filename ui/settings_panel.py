@@ -312,31 +312,64 @@ class SettingsPanel(QWidget):
         output_layout = QGridLayout()
         output_layout.setSpacing(6)
         
-        lbl_cl = QLabel("Chất lượng:")
-        lbl_cl.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
-        output_layout.addWidget(lbl_cl, 0, 0)
+        # DPI (độ phân giải)
+        lbl_dpi = QLabel("Độ phân giải:")
+        lbl_dpi.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
+        output_layout.addWidget(lbl_dpi, 0, 0)
         self.quality_combo = QComboBox()
         self.quality_combo.addItems(["300 dpi", "250 dpi", "200 dpi", "100 dpi", "72 dpi"])
-        self.quality_combo.setCurrentIndex(1)  # Default 250 dpi
+        self.quality_combo.setCurrentIndex(2)  # Default 200 dpi
         output_layout.addWidget(self.quality_combo, 0, 1, 1, 2)
-        
+
+        # JPEG Quality (chất lượng nén)
+        lbl_jpeg = QLabel("Nén JPEG:")
+        lbl_jpeg.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
+        output_layout.addWidget(lbl_jpeg, 1, 0)
+        self.jpeg_quality_combo = QComboBox()
+        self.jpeg_quality_combo.addItems(["Gốc (100%)", "90%", "80%", "70%"])
+        self.jpeg_quality_combo.setCurrentIndex(1)  # Default: 90%
+        output_layout.addWidget(self.jpeg_quality_combo, 1, 1, 1, 2)
+
+        # Optimize size checkbox
+        self.optimize_size_cb = QCheckBox("Nén siêu nhẹ (đen trắng)")
+        self.optimize_size_cb.setChecked(False)  # Default: disabled
+        self.optimize_size_cb.setToolTip(
+            "Chuyển ảnh thành đen trắng 1-bit với CCITT Group 4.\n"
+            "Dung lượng giảm ~90% nhưng mất màu xám/gradient."
+        )
+        self.optimize_size_cb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
+        output_layout.addWidget(self.optimize_size_cb, 2, 0, 1, 3)
+
         lbl_tm = QLabel("Thư mục:")
         lbl_tm.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
-        output_layout.addWidget(lbl_tm, 1, 0)
+        output_layout.addWidget(lbl_tm, 3, 0)
         self.output_path = QLineEdit()
         self.output_path.setPlaceholderText("Chọn thư mục...")
-        output_layout.addWidget(self.output_path, 1, 1)
-        
-        self.browse_btn = QPushButton("...")
-        self.browse_btn.setFixedWidth(32)
+        output_layout.addWidget(self.output_path, 3, 1)
+
+        self.browse_btn = QPushButton("📁")
+        self.browse_btn.setFixedSize(36, 28)
+        self.browse_btn.setToolTip("Chọn thư mục đầu ra")
+        self.browse_btn.setStyleSheet("""
+            QPushButton {
+                font-size: 16px;
+                padding: 0px;
+                background-color: #FFFFFF;
+                border: 1px solid #D1D5DB;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #F3F4F6;
+            }
+        """)
         self.browse_btn.clicked.connect(self._on_browse_output)
-        output_layout.addWidget(self.browse_btn, 1, 2)
-        
+        output_layout.addWidget(self.browse_btn, 3, 2)
+
         lbl_tf = QLabel("Tên file:")
         lbl_tf.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
-        output_layout.addWidget(lbl_tf, 2, 0)
+        output_layout.addWidget(lbl_tf, 4, 0)
         self.filename_pattern = QLineEdit("{gốc}_clean.pdf")
-        output_layout.addWidget(self.filename_pattern, 2, 1, 1, 2)
+        output_layout.addWidget(self.filename_pattern, 4, 1, 1, 2)
 
         # Connect output settings changes
         self.output_path.textChanged.connect(self._on_output_settings_changed)
@@ -580,7 +613,8 @@ class SettingsPanel(QWidget):
     def get_settings(self) -> dict:
         """Lấy settings"""
         dpi_map = {0: 300, 1: 250, 2: 200, 3: 100, 4: 72}
-        
+        jpeg_quality_map = {0: 100, 1: 90, 2: 80, 3: 70}  # Gốc=100, 90%, 80%, 70%
+
         # Determine apply_pages from checkboxes
         if self.apply_all_cb.isChecked():
             apply_pages = 'all'
@@ -590,10 +624,12 @@ class SettingsPanel(QWidget):
             apply_pages = 'even'
         else:
             apply_pages = 'all'
-        
+
         return {
             'threshold': self.threshold_slider.value(),
-            'dpi': dpi_map.get(self.quality_combo.currentIndex(), 250),
+            'dpi': dpi_map.get(self.quality_combo.currentIndex(), 200),
+            'jpeg_quality': jpeg_quality_map.get(self.jpeg_quality_combo.currentIndex(), 90),
+            'optimize_size': self.optimize_size_cb.isChecked(),
             'output_path': self.output_path.text(),
             'filename_pattern': self.filename_pattern.text(),
             'apply_pages': apply_pages,
