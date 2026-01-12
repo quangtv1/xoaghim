@@ -37,11 +37,27 @@ class SafeZone:
 
     @property
     def vertices(self) -> List[Tuple[int, int]]:
-        """Get polygon vertices as list of (x, y) tuples"""
+        """Get polygon exterior vertices as list of (x, y) tuples"""
         if self.polygon.is_empty:
             return []
         coords = list(self.polygon.exterior.coords)
         return [(int(x), int(y)) for x, y in coords[:-1]]  # Exclude closing point
+
+    @property
+    def interior_rings(self) -> List[List[Tuple[int, int]]]:
+        """Get interior rings (holes) as list of vertex lists"""
+        if self.polygon.is_empty:
+            return []
+        rings = []
+        for interior in self.polygon.interiors:
+            coords = list(interior.coords)
+            rings.append([(int(x), int(y)) for x, y in coords[:-1]])
+        return rings
+
+    @property
+    def has_holes(self) -> bool:
+        """Check if polygon has interior holes"""
+        return len(self.polygon.interiors) > 0
 
     @property
     def area(self) -> float:
@@ -49,13 +65,27 @@ class SafeZone:
         return self.polygon.area
 
     def to_mask(self, width: int, height: int) -> np.ndarray:
-        """Convert polygon to binary mask"""
+        """
+        Convert polygon to binary mask, properly handling interior holes.
+
+        Interior holes (protected regions completely inside user zone)
+        are filled with 0 (black) to exclude them from processing.
+        """
         import cv2
         mask = np.zeros((height, width), dtype=np.uint8)
         if not self.vertices:
             return mask
-        pts = np.array(self.vertices, dtype=np.int32)
-        cv2.fillPoly(mask, [pts], 255)
+
+        # Fill exterior ring with white (255)
+        exterior_pts = np.array(self.vertices, dtype=np.int32)
+        cv2.fillPoly(mask, [exterior_pts], 255)
+
+        # Fill interior rings (holes) with black (0) to exclude them
+        for hole_vertices in self.interior_rings:
+            if hole_vertices:
+                hole_pts = np.array(hole_vertices, dtype=np.int32)
+                cv2.fillPoly(mask, [hole_pts], 0)
+
         return mask
 
     def to_contour(self) -> np.ndarray:
@@ -207,15 +237,21 @@ class HybridPolygonOptimizer:
             # Calculate coverage
             coverage = simplified.area / original_area
 
-            safe_zones.append(SafeZone(
+            sz = SafeZone(
                 polygon=simplified,
                 original_zone=user_zone,
                 coverage=coverage
-            ))
+            )
+            safe_zones.append(sz)
+
+            # Debug: log if polygon has holes
+            if sz.has_holes:
+                print(f"[DEBUG ZoneOptimizer]   safe_zone has {len(sz.interior_rings)} hole(s) - protected regions inside")
 
         print(f"[DEBUG ZoneOptimizer]   Returning {len(safe_zones)} safe zones")
         for i, sz in enumerate(safe_zones):
-            print(f"[DEBUG ZoneOptimizer]   safe_zone[{i}]: bbox={sz.bbox}, coverage={sz.coverage:.2f}")
+            holes_info = f", holes={len(sz.interior_rings)}" if sz.has_holes else ""
+            print(f"[DEBUG ZoneOptimizer]   safe_zone[{i}]: bbox={sz.bbox}, coverage={sz.coverage:.2f}{holes_info}")
         return safe_zones
 
     def _extract_polygons(self, geometry) -> List['Polygon']:
