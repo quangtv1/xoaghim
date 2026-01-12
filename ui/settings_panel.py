@@ -7,14 +7,15 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QSlider, QComboBox, QPushButton,
     QFrame, QGridLayout, QLineEdit,
-    QFileDialog, QGroupBox, QCheckBox
+    QFileDialog, QCheckBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor
 
-from typing import List, Dict
-from core.processor import Zone, PRESET_ZONES
+from typing import List, Dict, Set
+from core.processor import Zone, PRESET_ZONES, TextProtectionOptions
 from ui.zone_selector import ZoneSelectorWidget
+from ui.text_protection_dialog import TextProtectionDialog
 
 
 # Thêm preset cho margin_top và margin_bottom
@@ -45,6 +46,7 @@ class SettingsPanel(QWidget):
     process_clicked = pyqtSignal()
     page_filter_changed = pyqtSignal(str)  # 'all', 'odd', 'even'
     output_settings_changed = pyqtSignal(str, str)  # output_dir, filename_pattern
+    text_protection_changed = pyqtSignal(object)  # TextProtectionOptions
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -288,6 +290,51 @@ class SettingsPanel(QWidget):
         params_layout.addWidget(self.threshold_label, 3, 2)
         
         params_container.addLayout(params_layout)
+
+        # Separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("background-color: #E5E7EB; margin: 8px 0;")
+        sep.setFixedHeight(1)
+        params_container.addWidget(sep)
+
+        # Text protection section - simplified with settings button
+        protection_row = QHBoxLayout()
+        protection_row.setSpacing(8)
+
+        self.text_protection_cb = QCheckBox("Bảo vệ văn bản (AI)")
+        self.text_protection_cb.setChecked(True)  # Mặc định bật
+        self.text_protection_cb.setToolTip(
+            "Sử dụng AI để phát hiện và bảo vệ vùng văn bản,\n"
+            "bảng biểu khỏi bị xóa nhầm."
+        )
+        self.text_protection_cb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
+        self.text_protection_cb.stateChanged.connect(self._on_text_protection_checkbox_changed)
+        protection_row.addWidget(self.text_protection_cb)
+
+        self.text_protection_settings_btn = QPushButton("⚙")
+        self.text_protection_settings_btn.setFixedSize(24, 24)
+        self.text_protection_settings_btn.setToolTip("Cài đặt bảo vệ văn bản")
+        self.text_protection_settings_btn.setStyleSheet("""
+            QPushButton {
+                font-size: 14px;
+                background-color: #F3F4F6;
+                border: 1px solid #D1D5DB;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #E5E7EB;
+            }
+        """)
+        self.text_protection_settings_btn.clicked.connect(self._open_text_protection_dialog)
+        protection_row.addWidget(self.text_protection_settings_btn)
+
+        protection_row.addStretch()
+        params_container.addLayout(protection_row)
+
+        # Store current text protection options
+        self._text_protection_options = TextProtectionOptions()
+
         params_container.addStretch()
         main_row.addWidget(params_widget, stretch=1)
         
@@ -598,6 +645,36 @@ class SettingsPanel(QWidget):
         filename_pattern = self.filename_pattern.text()
         self.output_settings_changed.emit(output_dir, filename_pattern)
 
+    def _on_text_protection_checkbox_changed(self):
+        """Handle text protection checkbox change"""
+        enabled = self.text_protection_cb.isChecked()
+        self._text_protection_options.enabled = enabled
+
+        # Emit signal with current options
+        self.text_protection_changed.emit(self._text_protection_options)
+
+    def _open_text_protection_dialog(self):
+        """Open text protection settings dialog"""
+        dialog = TextProtectionDialog(self, self._text_protection_options)
+        dialog.settings_changed.connect(self._on_text_protection_dialog_saved)
+        dialog.exec_()
+
+    def _on_text_protection_dialog_saved(self, options: TextProtectionOptions):
+        """Handle text protection dialog save"""
+        self._text_protection_options = options
+
+        # Update checkbox state
+        self.text_protection_cb.blockSignals(True)
+        self.text_protection_cb.setChecked(options.enabled)
+        self.text_protection_cb.blockSignals(False)
+
+        # Emit signal
+        self.text_protection_changed.emit(options)
+
+    def get_text_protection_options(self) -> TextProtectionOptions:
+        """Get current text protection options"""
+        return self._text_protection_options
+
     def _emit_zones(self):
         """Emit signal zones changed"""
         enabled_zones = [z for z in self._zones.values() if z.enabled]
@@ -633,6 +710,7 @@ class SettingsPanel(QWidget):
             'output_path': self.output_path.text(),
             'filename_pattern': self.filename_pattern.text(),
             'apply_pages': apply_pages,
+            'text_protection': self.get_text_protection_options(),
         }
     
     def _on_apply_all_changed(self, state):

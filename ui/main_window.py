@@ -295,6 +295,7 @@ class MainWindow(QMainWindow):
         self.settings_panel.settings_changed.connect(self._on_settings_changed)
         self.settings_panel.page_filter_changed.connect(self._on_page_filter_changed)
         self.settings_panel.output_settings_changed.connect(self._on_output_settings_changed)
+        self.settings_panel.text_protection_changed.connect(self._on_text_protection_changed)
         self.settings_panel.setVisible(True)  # Visible by default
         layout.addWidget(self.settings_panel)
         
@@ -1087,7 +1088,11 @@ class MainWindow(QMainWindow):
             self.preview.set_pages(self._all_pages)
             zones = self.settings_panel.get_zones()
             self.preview.set_zones(zones)
-            
+
+            # Apply text protection options (để vẽ bounding boxes ngay khi mở file)
+            text_protection_opts = self.settings_panel.get_text_protection_options()
+            self.preview.set_text_protection(text_protection_opts)
+
             self._update_ui_state()
             self.statusBar().showMessage(f"Đã mở: {file_path}")
             
@@ -1177,6 +1182,10 @@ class MainWindow(QMainWindow):
     
     def _on_settings_changed(self, settings: dict):
         pass
+
+    def _on_text_protection_changed(self, options):
+        """Handle text protection settings change"""
+        self.preview.set_text_protection(options)
 
     def _on_output_settings_changed(self, output_dir: str, filename_pattern: str):
         """Handle output settings change - update batch file list"""

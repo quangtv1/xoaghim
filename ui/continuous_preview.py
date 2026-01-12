@@ -12,7 +12,7 @@ from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QBrush, QPen, QCursor
 
 import numpy as np
 import cv2
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, TYPE_CHECKING
 
 from ui.zone_item import ZoneItem
 from core.processor import Zone, StapleRemover
@@ -293,6 +293,9 @@ class ContinuousPreviewPanel(QFrame):
         self._placeholder_folder_rect = None
         self._file_hover_bg = None
         self._folder_hover_bg = None
+        # Clear protected regions
+        if hasattr(self, '_protected_region_items'):
+            self._protected_region_items.clear()
         # Reset cursor on both view and viewport
         self.view.setCursor(Qt.ArrowCursor)
         self.view.viewport().setCursor(Qt.ArrowCursor)
@@ -865,7 +868,7 @@ class ContinuousPreviewPanel(QFrame):
         """Lấy rect của zone (%) - từ zone item trong scene"""
         # zone_id format: "custom_1_0" -> base_id should be "custom_1"
         base_id = zone_id.rsplit('_', 1)[0]
-        
+
         # Find the zone item in scene and get its actual rect
         for zone_item in self._zones:
             zone_base_id = zone_item.zone_id.rsplit('_', 1)[0]
@@ -876,10 +879,82 @@ class ContinuousPreviewPanel(QFrame):
                     page_rect = self._page_items[page_idx].boundingRect()
                     # Get normalized rect (as percentages)
                     return zone_item.get_normalized_rect(
-                        int(page_rect.width()), 
+                        int(page_rect.width()),
                         int(page_rect.height())
                     )
         return None
+
+    def set_protected_regions(self, page_idx: int, regions: list, margin: int = 10):
+        """
+        Set protected regions to display as overlay for a specific page.
+
+        Args:
+            page_idx: Page index (0-based)
+            regions: List of ProtectedRegion objects with bbox (x1, y1, x2, y2)
+            margin: Padding to add around each bbox (pixels)
+        """
+        if not hasattr(self, '_protected_region_items'):
+            self._protected_region_items: Dict[int, List[QGraphicsRectItem]] = {}
+
+        # Clear existing regions for this page
+        if page_idx in self._protected_region_items:
+            for item in self._protected_region_items[page_idx]:
+                self.scene.removeItem(item)
+            self._protected_region_items[page_idx].clear()
+        else:
+            self._protected_region_items[page_idx] = []
+
+        if not regions or page_idx >= len(self._page_items):
+            return
+
+        # Colors: Red for protected regions (text areas to protect)
+        pen = QPen(QColor(220, 38, 38))  # #DC2626 Red
+        pen.setWidth(2)
+        pen.setCosmetic(True)  # Pen width is in screen pixels
+        brush = QBrush(QColor(220, 38, 38, 60))  # ~24% opacity
+
+        page_item = self._page_items[page_idx]
+        page_pos = page_item.pos()
+        page_rect = page_item.boundingRect()
+
+        print(f"[DEBUG ContinuousPanel] Drawing {len(regions)} protected regions for page {page_idx} (margin={margin})")
+
+        for region in regions:
+            x1, y1, x2, y2 = region.bbox
+
+            # Add margin/padding to bbox (expand the box)
+            x1_expanded = max(0, x1 - margin)
+            y1_expanded = max(0, y1 - margin)
+            x2_expanded = min(int(page_rect.width()), x2 + margin)
+            y2_expanded = min(int(page_rect.height()), y2 + margin)
+
+            # Create rect relative to page position
+            scene_x = page_pos.x() + x1_expanded
+            scene_y = page_pos.y() + y1_expanded
+            width = x2_expanded - x1_expanded
+            height = y2_expanded - y1_expanded
+            rect = QRectF(scene_x, scene_y, width, height)
+            print(f"[DEBUG ContinuousPanel] Region bbox=({x1}, {y1}, {x2}, {y2}) + margin={margin} -> ({x1_expanded}, {y1_expanded}, {x2_expanded}, {y2_expanded})")
+
+            rect_item = QGraphicsRectItem(rect)
+            rect_item.setPen(pen)
+            rect_item.setBrush(brush)
+            rect_item.setZValue(100)  # High z-value to be on top
+            self.scene.addItem(rect_item)
+            self._protected_region_items[page_idx].append(rect_item)
+            print(f"[DEBUG ContinuousPanel] Added rect_item, scene now has {len(self.scene.items())} items")
+
+        # Force view update
+        self.view.viewport().update()
+        self.scene.update()
+
+    def clear_protected_regions(self):
+        """Clear all protected region overlays"""
+        if hasattr(self, '_protected_region_items'):
+            for page_idx, items in self._protected_region_items.items():
+                for item in items:
+                    self.scene.removeItem(item)
+            self._protected_region_items.clear()
 
 
 class ContinuousPreviewWidget(QWidget):
@@ -898,17 +973,20 @@ class ContinuousPreviewWidget(QWidget):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        
+
         self._pages: List[np.ndarray] = []  # Original pages
         self._processed_pages: List[np.ndarray] = []  # Processed pages
         self._zones: List[Zone] = []
         self._processor = StapleRemover(protect_red=True)
-        
+        self._text_protection_enabled = False
+        self._text_protection_margin = 10  # Default margin for protected regions overlay
+        self._cached_regions: Dict[int, list] = {}  # Cache protected regions per page
+
         # Debounce timer
         self._process_timer = QTimer()
         self._process_timer.setSingleShot(True)
         self._process_timer.timeout.connect(self._do_process_all)
-        
+
         self._setup_ui()
     
     def _setup_ui(self):
@@ -988,10 +1066,13 @@ class ContinuousPreviewWidget(QWidget):
         """Set danh sách ảnh các trang"""
         self._pages = [p.copy() for p in pages]
         self._processed_pages = [p.copy() for p in pages]
-        
+
+        # Clear cached regions khi load pages mới
+        self._cached_regions.clear()
+
         self.before_panel.set_pages(pages)
         self.after_panel.set_pages(self._processed_pages)
-        
+
         self._schedule_process()
     
     def set_view_mode(self, mode: str):
@@ -1076,20 +1157,35 @@ class ContinuousPreviewWidget(QWidget):
         """Xử lý tất cả các trang"""
         if not self._pages:
             return
-        
+
+        print(f"[DEBUG ContinuousPreview] _do_process_all: text_protection_enabled={self._text_protection_enabled}")
+
+        # Clear protected regions display before processing
+        self.before_panel.clear_protected_regions()
+
         # Get page filter from before_panel
         page_filter = self.before_panel._page_filter
-        
+
         for i, page in enumerate(self._pages):
             # Check if this page should be processed based on filter
             page_num = i + 1  # 1-based page number
-            
+
             if page_filter == 'none':
                 # Per-page mode: use page-specific zones
                 page_zones = self._get_zones_for_page(i)
                 if page_zones:
-                    processed = self._processor.process_image(page, page_zones)
-                    self._processed_pages[i] = processed
+                    if self._text_protection_enabled:
+                        # Sử dụng cached regions hoặc detect mới
+                        regions = self._get_cached_regions(i, page)
+                        # Process với regions đã cache
+                        processed = self._processor.process_image(page, page_zones, protected_regions=regions)
+                        self._processed_pages[i] = processed
+                        # Draw protected regions on before panel
+                        self.before_panel.set_protected_regions(i, regions, margin=self._text_protection_margin)
+                        print(f"[DEBUG ContinuousPreview] Page {i}: using {len(regions)} cached regions")
+                    else:
+                        processed = self._processor.process_image(page, page_zones)
+                        self._processed_pages[i] = processed
                 else:
                     self._processed_pages[i] = page.copy()
             else:
@@ -1099,15 +1195,38 @@ class ContinuousPreviewWidget(QWidget):
                     (page_filter == 'odd' and page_num % 2 == 1) or
                     (page_filter == 'even' and page_num % 2 == 0)
                 )
-                
+
                 if should_process:
-                    processed = self._processor.process_image(page, self._zones)
-                    self._processed_pages[i] = processed
+                    if self._text_protection_enabled:
+                        # Sử dụng cached regions hoặc detect mới
+                        regions = self._get_cached_regions(i, page)
+                        # Process với regions đã cache
+                        processed = self._processor.process_image(page, self._zones, protected_regions=regions)
+                        self._processed_pages[i] = processed
+                        # Draw protected regions on before panel
+                        self.before_panel.set_protected_regions(i, regions, margin=self._text_protection_margin)
+                        print(f"[DEBUG ContinuousPreview] Page {i}: using {len(regions)} cached regions")
+                    else:
+                        processed = self._processor.process_image(page, self._zones)
+                        self._processed_pages[i] = processed
                 else:
                     # Keep original page if not processed
                     self._processed_pages[i] = page.copy()
-        
+
         self.after_panel.set_pages(self._processed_pages)
+
+    def _get_cached_regions(self, page_idx: int, page: 'np.ndarray') -> list:
+        """Lấy cached regions hoặc detect mới nếu chưa có"""
+        if page_idx not in self._cached_regions:
+            regions = self._processor.detect_protected_regions(page)
+            self._cached_regions[page_idx] = regions
+            print(f"[DEBUG ContinuousPreview] Page {page_idx}: detected and cached {len(regions)} regions")
+        return self._cached_regions[page_idx]
+
+    def clear_cached_regions(self):
+        """Xóa cache khi cần detect lại (thay đổi settings, load PDF mới)"""
+        self._cached_regions.clear()
+        print("[DEBUG ContinuousPreview] Cleared cached regions")
     
     def _get_zones_for_page(self, page_idx: int) -> List[Zone]:
         """Get zones with page-specific coordinates for 'none' mode"""
@@ -1210,3 +1329,15 @@ class ContinuousPreviewWidget(QWidget):
     def get_processed_pages(self) -> List[np.ndarray]:
         """Lấy danh sách ảnh đã xử lý"""
         return self._processed_pages
+
+    def set_text_protection(self, options):
+        """Set text protection options"""
+        from core.processor import TextProtectionOptions
+        self._text_protection_enabled = options.enabled
+        self._text_protection_margin = options.margin  # Store margin for overlay display
+
+        # Clear cache khi settings thay đổi để detect lại với settings mới
+        self._cached_regions.clear()
+
+        self._processor.set_text_protection(options)
+        self._schedule_process()
