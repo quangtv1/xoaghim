@@ -8,10 +8,6 @@ Pillow>=9.0.0
 # Geometry processing (for text protection)
 shapely>=2.0.0
 
-# AI Model dependencies (for text protection feature)
-# Layout Parser (Detectron2) - recommended
-# pip install layoutparser torchvision
-# pip install "detectron2@git+https://github.com/facebookresearch/detectron2.git@v0.5#egg=detectron2"
-
-# Alternative: PaddleOCR (if Detectron2 installation fails)
-# pip install paddlepaddle paddleocr
+# YOLO DocLayNet (AI text protection)
+ultralytics>=8.0.0
+huggingface_hub>=0.20.0

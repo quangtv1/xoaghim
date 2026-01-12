@@ -35,13 +35,28 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: XoaVetGhim-Windows
-          path: dist/XoaVetGhim.exe
+          name: XoaGhim-Windows
+          path: dist/XoaGhim.exe
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: dist/XoaVetGhim.exe
+          files: dist/XoaGhim.exe
+          name: "Xóa Ghim PDF ${{ github.ref_name }}"
+          body: |
+            ## Xóa Vết Ghim PDF ${{ github.ref_name }}
+
+            ### Tính năng mới
+            - Tích hợp YOLO DocLayNet (YOLOv12l) để phát hiện layout tài liệu
+            - Bảo vệ vùng văn bản, bảng biểu, công thức khỏi bị xóa nhầm
+            - Cài đặt AI: bật mặc định, lề 5px, độ tin cậy 10%
+
+            ### Cải tiến
+            - UI/UX dialog cài đặt AI được cải thiện
+            - Hiển thị bounding box ngay khi mở file
+
+            ### Tải về
+            - **XoaGhim.exe** - Chạy trực tiếp trên Windows (không cần cài Python)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
