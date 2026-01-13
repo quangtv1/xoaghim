@@ -48,13 +48,15 @@ jobs:
             ## Xóa Vết Ghim PDF ${{ github.ref_name }}
 
             ### Tính năng mới
-            - Tích hợp YOLO DocLayNet (YOLOv12l) để phát hiện layout tài liệu
-            - Bảo vệ vùng văn bản, bảng biểu, công thức khỏi bị xóa nhầm
-            - Cài đặt AI: bật mặc định, lề 5px, độ tin cậy 10%
+            - Auto-fit chiều rộng trang khi mở file và resize cửa sổ
+            - Nhớ thư mục đã mở gần nhất
+            - Đồng bộ số trang với vị trí scroll
 
             ### Cải tiến
-            - UI/UX dialog cài đặt AI được cải thiện
-            - Hiển thị bounding box ngay khi mở file
+            - Fix điều hướng trang (prev/next, nhập số) cập nhật preview đúng
+            - Fix nút fit width giữ trang hiện tại (không nhảy về trang đầu)
+            - Căn giữa trang khi PDF có nhiều kích thước khác nhau
+            - Validate số trang nhập vào (clamp vào dải hợp lệ)
 
             ### Tải về
             - **XoaGhim.exe** - Chạy trực tiếp trên Windows (không cần cài Python)
