@@ -2,9 +2,12 @@
 # PyInstaller spec file for Windows build
 
 import sys
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
+
+# Collect all ultralytics submodules
+ultralytics_imports = collect_submodules('ultralytics')
 
 a = Analysis(
     ['main.py'],
@@ -12,26 +15,69 @@ a = Analysis(
     binaries=[],
     datas=[
         ('resources', 'resources'),
-    ],
+    ] + collect_data_files('ultralytics'),
     hiddenimports=[
+        # PyQt5
         'PyQt5',
         'PyQt5.QtCore',
         'PyQt5.QtGui',
         'PyQt5.QtWidgets',
+        # Image processing
         'cv2',
         'numpy',
         'fitz',
         'PIL',
         'PIL.Image',
+        # Geometry
         'shapely',
         'shapely.geometry',
+        'shapely.ops',
+        'shapely.validation',
+        # YOLO / Ultralytics
         'ultralytics',
+        'ultralytics.nn',
+        'ultralytics.nn.tasks',
+        'ultralytics.engine',
+        'ultralytics.engine.model',
+        'ultralytics.engine.predictor',
+        'ultralytics.engine.results',
+        'ultralytics.models',
+        'ultralytics.models.yolo',
+        'ultralytics.models.yolo.detect',
+        'ultralytics.utils',
+        'ultralytics.data',
+        'ultralytics.cfg',
+        # HuggingFace
         'huggingface_hub',
-    ],
+        'huggingface_hub.hf_api',
+        'huggingface_hub.file_download',
+        # PyTorch (CPU)
+        'torch',
+        'torch.nn',
+        'torch.nn.functional',
+        'torch.utils',
+        'torch.utils.data',
+        'torchvision',
+        'torchvision.ops',
+        # Config/Utils
+        'yaml',
+        'scipy',
+        'scipy.ndimage',
+        'requests',
+        'tqdm',
+        'matplotlib',
+        'pandas',
+        'seaborn',
+        'psutil',
+    ] + ultralytics_imports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'tensorflow',
+        'tensorboard',
+        'keras',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -54,7 +100,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,  # No console window
+    console=True,  # Enable console to see errors (can disable later)
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
