@@ -2,20 +2,24 @@
 # PyInstaller spec file for Windows build
 
 import sys
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs, collect_all
 
 block_cipher = None
 
 # Collect all ultralytics submodules
 ultralytics_imports = collect_submodules('ultralytics')
 
+# Collect ALL torch files (data, binaries, submodules) to fix DLL loading
+torch_datas, torch_binaries, torch_hiddenimports = collect_all('torch')
+torchvision_datas, torchvision_binaries, torchvision_hiddenimports = collect_all('torchvision')
+
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
+    binaries=torch_binaries + torchvision_binaries,
     datas=[
         ('resources', 'resources'),  # Includes resources/models/*.pt
-    ] + collect_data_files('ultralytics'),
+    ] + collect_data_files('ultralytics') + torch_datas + torchvision_datas,
     hiddenimports=[
         # PyQt5
         'PyQt5',
@@ -69,7 +73,7 @@ a = Analysis(
         'pandas',
         'seaborn',
         'psutil',
-    ] + ultralytics_imports,
+    ] + ultralytics_imports + torch_hiddenimports + torchvision_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
