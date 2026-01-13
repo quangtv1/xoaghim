@@ -47,6 +47,9 @@ jobs:
           body: |
             ## Xóa Vết Ghim PDF ${{ github.ref_name }}
 
+            ### Sửa lỗi
+            - **Fix YOLO không hoạt động trên Windows** - Bundle model trực tiếp vào exe
+
             ### Tính năng mới
             - Thêm nút Fit Height (vừa chiều cao trang) cạnh nút Fit Width
             - Hover effect cho các nút fit (nền xám khi di chuột)
@@ -56,9 +59,8 @@ jobs:
             - Auto-fit chiều rộng trang khi mở file và resize cửa sổ
             - Đồng bộ số trang với vị trí scroll khi cuộn chuột
             - Fix nút fit giữ trang hiện tại (không nhảy trang)
-            - Nhớ thư mục đã mở gần nhất
 
             ### Tải về
-            - **XoaGhim.exe** - Chạy trực tiếp trên Windows (không cần cài Python)
+            - **XoaGhim.exe** (~150MB) - Chạy trực tiếp trên Windows (không cần cài Python)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
