@@ -38,6 +38,69 @@ class Zone:
         x, y, w, h = self.to_pixels(img_width, img_height)
         return (x, y, x + w, y + h)
 
+    def to_bbox_with_edge_padding(self, img_width: int, img_height: int, padding: int = 10) -> Tuple[int, int, int, int]:
+        """Chuyển đổi sang bbox với padding mở rộng ra ngoài đường viền trang.
+
+        - Góc (corner_*): mở rộng padding ở 2 cạnh giao nhau
+        - Cạnh (margin_*): mở rộng padding ở 1 cạnh
+
+        Args:
+            img_width: Chiều rộng ảnh
+            img_height: Chiều cao ảnh
+            padding: Số pixel mở rộng ra ngoài viền (default 10px)
+
+        Returns:
+            (x1, y1, x2, y2) đã được mở rộng và clip vào bounds
+        """
+        x1, y1, x2, y2 = self.to_bbox(img_width, img_height)
+
+        # Xác định hướng mở rộng dựa trên zone ID
+        zone_id = self.id.lower()
+
+        if zone_id == 'corner_tl':
+            # Góc trên trái: mở rộng lên trên và sang trái
+            x1 = max(0, x1 - padding)
+            y1 = max(0, y1 - padding)
+        elif zone_id == 'corner_tr':
+            # Góc trên phải: mở rộng lên trên và sang phải
+            x2 = min(img_width, x2 + padding)
+            y1 = max(0, y1 - padding)
+        elif zone_id == 'corner_bl':
+            # Góc dưới trái: mở rộng xuống dưới và sang trái
+            x1 = max(0, x1 - padding)
+            y2 = min(img_height, y2 + padding)
+        elif zone_id == 'corner_br':
+            # Góc dưới phải: mở rộng xuống dưới và sang phải
+            x2 = min(img_width, x2 + padding)
+            y2 = min(img_height, y2 + padding)
+        elif zone_id == 'margin_left':
+            # Cạnh trái: mở rộng sang trái
+            x1 = max(0, x1 - padding)
+        elif zone_id == 'margin_right':
+            # Cạnh phải: mở rộng sang phải
+            x2 = min(img_width, x2 + padding)
+        elif zone_id == 'margin_top':
+            # Cạnh trên: mở rộng lên trên
+            y1 = max(0, y1 - padding)
+        elif zone_id == 'margin_bottom':
+            # Cạnh dưới: mở rộng xuống dưới
+            y2 = min(img_height, y2 + padding)
+        # Zone tùy chỉnh (custom_*): không mở rộng
+
+        return (x1, y1, x2, y2)
+
+    def to_pixels_with_edge_padding(self, img_width: int, img_height: int, padding: int = 10) -> Tuple[int, int, int, int]:
+        """Chuyển đổi sang pixels với padding mở rộng ra ngoài đường viền trang.
+
+        - Góc (corner_*): mở rộng padding ở 2 cạnh giao nhau
+        - Cạnh (margin_*): mở rộng padding ở 1 cạnh
+
+        Returns:
+            (x, y, w, h) đã được mở rộng và clip vào bounds
+        """
+        x1, y1, x2, y2 = self.to_bbox_with_edge_padding(img_width, img_height, padding)
+        return (x1, y1, x2 - x1, y2 - y1)
+
 
 @dataclass
 class TextProtectionOptions:
@@ -223,8 +286,8 @@ class StapleRemover:
         h, w = image.shape[:2]
         is_color = len(image.shape) == 3
         
-        # Lấy tọa độ vùng
-        zx, zy, zw, zh = zone.to_pixels(w, h)
+        # Lấy tọa độ vùng (với edge padding cho góc/cạnh)
+        zx, zy, zw, zh = zone.to_pixels_with_edge_padding(w, h, padding=10)
         
         # Đảm bảo không vượt quá biên
         zx = max(0, min(zx, w - 1))
@@ -394,9 +457,9 @@ class StapleRemover:
                 if not zone.enabled:
                     continue
 
-                # Convert zone to bbox
-                user_bbox = zone.to_bbox(w, h)
-                print(f"[DEBUG process_image] Zone '{zone.name}' bbox={user_bbox}")
+                # Convert zone to bbox (với edge padding cho góc/cạnh)
+                user_bbox = zone.to_bbox_with_edge_padding(w, h, padding=10)
+                print(f"[DEBUG process_image] Zone '{zone.name}' bbox={user_bbox} (with edge padding)")
 
                 # Optimize zone to get safe zones (avoiding text)
                 safe_zones = self.zone_optimizer.optimize(user_bbox, protected_regions)
