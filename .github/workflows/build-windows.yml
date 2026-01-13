@@ -48,15 +48,15 @@ jobs:
             ## Xóa Vết Ghim PDF ${{ github.ref_name }}
 
             ### Tính năng mới
-            - Auto-fit chiều rộng trang khi mở file và resize cửa sổ
-            - Nhớ thư mục đã mở gần nhất
-            - Đồng bộ số trang với vị trí scroll
+            - Thêm nút Fit Height (vừa chiều cao trang) cạnh nút Fit Width
+            - Hover effect cho các nút fit (nền xám khi di chuột)
+            - Edge padding 10px cho vùng Góc/Cạnh (xử lý trang scan nghiêng)
 
             ### Cải tiến
-            - Fix điều hướng trang (prev/next, nhập số) cập nhật preview đúng
-            - Fix nút fit width giữ trang hiện tại (không nhảy về trang đầu)
-            - Căn giữa trang khi PDF có nhiều kích thước khác nhau
-            - Validate số trang nhập vào (clamp vào dải hợp lệ)
+            - Auto-fit chiều rộng trang khi mở file và resize cửa sổ
+            - Đồng bộ số trang với vị trí scroll khi cuộn chuột
+            - Fix nút fit giữ trang hiện tại (không nhảy trang)
+            - Nhớ thư mục đã mở gần nhất
 
             ### Tải về
             - **XoaGhim.exe** - Chạy trực tiếp trên Windows (không cần cài Python)
