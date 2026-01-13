@@ -34,17 +34,22 @@ jobs:
         run: |
           pyinstaller build_windows.spec --clean
 
+      - name: Create ZIP archive
+        run: |
+          cd dist
+          Compress-Archive -Path XoaGhim -DestinationPath XoaGhim-Windows.zip
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: XoaGhim-Windows
-          path: dist/XoaGhim.exe
+          path: dist/XoaGhim-Windows.zip
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: dist/XoaGhim.exe
+          files: dist/XoaGhim-Windows.zip
           name: "Xóa Ghim PDF ${{ github.ref_name }}"
           body: |
             ## Xóa Vết Ghim PDF ${{ github.ref_name }}
