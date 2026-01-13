@@ -1208,7 +1208,294 @@ class YOLODocLayNetDetector:
         self.confidence_threshold = max(0.0, min(1.0, threshold))
 
 
+class YOLODocLayNetONNXDetector:
+    """
+    YOLO DocLayNet Detector using ONNX Runtime - Windows compatible.
+
+    Uses ONNX Runtime instead of PyTorch for better Windows compatibility.
+    No CUDA/PyTorch DLL dependencies.
+    """
+
+    # DocLayNet class names (11 classes)
+    CLASS_NAMES = [
+        'caption', 'footnote', 'formula', 'list-item', 'page-footer',
+        'page-header', 'picture', 'section-header', 'table', 'text', 'title'
+    ]
+
+    # DocLayNet label mapping to internal labels
+    LABEL_MAPPING = {
+        'text': 'plain_text',
+        'title': 'title',
+        'section-header': 'title',
+        'list-item': 'plain_text',
+        'table': 'table',
+        'picture': 'figure',
+        'caption': 'figure_caption',
+        'formula': 'isolate_formula',
+        'footnote': 'table_footnote',
+        'page-header': 'abandon',
+        'page-footer': 'abandon',
+    }
+
+    # Default labels to protect
+    DEFAULT_PROTECTED_LABELS = {
+        'title', 'plain_text', 'table', 'figure',
+        'figure_caption', 'isolate_formula', 'table_footnote'
+    }
+
+    ALL_LABELS = {
+        'title', 'plain_text', 'table', 'figure',
+        'figure_caption', 'isolate_formula', 'table_footnote', 'abandon'
+    }
+
+    def __init__(self,
+                 confidence_threshold: float = 0.1,
+                 protected_labels: Optional[Set[str]] = None,
+                 imgsz: int = 1024):
+        self.session = None
+        self.confidence_threshold = confidence_threshold
+        self.protected_labels = protected_labels or self.DEFAULT_PROTECTED_LABELS.copy()
+        self.imgsz = imgsz
+        self._model_loaded = False
+        self._load_error = None
+
+    def _get_model_path(self) -> str:
+        """Get ONNX model path."""
+        filename = 'yolov12s-doclaynet.onnx'  # Small model (35MB) - good balance of speed/accuracy
+        print(f"[ONNX] Looking for model: {filename}")
+
+        # 1. Check PyInstaller bundle
+        if hasattr(sys, '_MEIPASS'):
+            bundled_path = os.path.join(sys._MEIPASS, 'resources', 'models', filename)
+            if os.path.exists(bundled_path):
+                print(f"[ONNX] Using bundled model: {bundled_path}")
+                return bundled_path
+
+        # 2. Check relative to source
+        source_path = os.path.join(os.path.dirname(__file__), '..', 'resources', 'models', filename)
+        source_path = os.path.abspath(source_path)
+        if os.path.exists(source_path):
+            print(f"[ONNX] Using source model: {source_path}")
+            return source_path
+
+        # 3. Check cache
+        cache_path = os.path.expanduser(f"~/.cache/yolo-doclaynet/{filename}")
+        if os.path.exists(cache_path):
+            print(f"[ONNX] Using cached model: {cache_path}")
+            return cache_path
+
+        raise FileNotFoundError(f"ONNX model not found: {filename}")
+
+    def _load_model(self) -> bool:
+        """Load ONNX model."""
+        if self._model_loaded:
+            return self.session is not None
+
+        self._model_loaded = True
+
+        try:
+            import onnxruntime as ort
+            model_path = self._get_model_path()
+            print(f"[ONNX] Loading model: {model_path}")
+
+            # Create session with CPU provider
+            self.session = ort.InferenceSession(
+                model_path,
+                providers=['CPUExecutionProvider']
+            )
+            print(f"[ONNX] Model loaded successfully")
+            return True
+
+        except ImportError as e:
+            self._load_error = f"Missing onnxruntime: {e}"
+            print(f"[ONNX] {self._load_error}")
+            return False
+        except Exception as e:
+            self._load_error = str(e)
+            print(f"[ONNX] Load error: {e}")
+            return False
+
+    def is_available(self) -> bool:
+        if self.session is not None:
+            return True
+        return self._load_model()
+
+    def get_load_error(self) -> Optional[str]:
+        return self._load_error
+
+    def _preprocess(self, image: np.ndarray) -> Tuple[np.ndarray, float, float]:
+        """Preprocess image for YOLO inference."""
+        import cv2
+        h, w = image.shape[:2]
+
+        # Calculate scale to fit imgsz
+        scale = min(self.imgsz / h, self.imgsz / w)
+        new_h, new_w = int(h * scale), int(w * scale)
+
+        # Resize
+        resized = cv2.resize(image, (new_w, new_h))
+
+        # Pad to square
+        pad_h = (self.imgsz - new_h) // 2
+        pad_w = (self.imgsz - new_w) // 2
+        padded = np.full((self.imgsz, self.imgsz, 3), 114, dtype=np.uint8)
+        padded[pad_h:pad_h+new_h, pad_w:pad_w+new_w] = resized
+
+        # BGR to RGB, HWC to CHW, normalize
+        img = padded[:, :, ::-1].transpose(2, 0, 1)
+        img = img.astype(np.float32) / 255.0
+        img = np.expand_dims(img, 0)  # Add batch dimension
+
+        return img, scale, (pad_w, pad_h)
+
+    def _postprocess(self, output: np.ndarray, scale: float, pad: Tuple[int, int],
+                     orig_shape: Tuple[int, int]) -> List[Tuple]:
+        """Postprocess YOLO output to get detections."""
+        # Output shape: (1, 15, 21504) = (batch, 4+11, num_anchors)
+        # 4 = x, y, w, h; 11 = class scores
+        predictions = output[0].T  # (21504, 15)
+
+        # Get boxes and scores
+        boxes = predictions[:, :4]  # x, y, w, h
+        scores = predictions[:, 4:]  # class scores
+
+        # Get best class for each detection
+        class_ids = np.argmax(scores, axis=1)
+        confidences = scores[np.arange(len(scores)), class_ids]
+
+        # Filter by confidence
+        mask = confidences > self.confidence_threshold
+        boxes = boxes[mask]
+        class_ids = class_ids[mask]
+        confidences = confidences[mask]
+
+        if len(boxes) == 0:
+            return []
+
+        # Convert xywh to xyxy
+        x, y, w, h = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+        x1 = x - w / 2
+        y1 = y - h / 2
+        x2 = x + w / 2
+        y2 = y + h / 2
+
+        # Remove padding and scale back
+        pad_w, pad_h = pad
+        x1 = (x1 - pad_w) / scale
+        y1 = (y1 - pad_h) / scale
+        x2 = (x2 - pad_w) / scale
+        y2 = (y2 - pad_h) / scale
+
+        # Clip to image bounds
+        orig_h, orig_w = orig_shape
+        x1 = np.clip(x1, 0, orig_w)
+        y1 = np.clip(y1, 0, orig_h)
+        x2 = np.clip(x2, 0, orig_w)
+        y2 = np.clip(y2, 0, orig_h)
+
+        # NMS
+        detections = []
+        for i in range(len(boxes)):
+            detections.append((x1[i], y1[i], x2[i], y2[i], confidences[i], class_ids[i]))
+
+        # Simple NMS
+        detections = self._nms(detections, iou_threshold=0.5)
+
+        return detections
+
+    def _nms(self, detections: List[Tuple], iou_threshold: float = 0.5) -> List[Tuple]:
+        """Non-maximum suppression."""
+        if len(detections) == 0:
+            return []
+
+        # Sort by confidence
+        detections = sorted(detections, key=lambda x: x[4], reverse=True)
+
+        keep = []
+        while detections:
+            best = detections.pop(0)
+            keep.append(best)
+
+            detections = [d for d in detections
+                         if self._iou(best[:4], d[:4]) < iou_threshold or best[5] != d[5]]
+
+        return keep
+
+    def _iou(self, box1: Tuple, box2: Tuple) -> float:
+        """Calculate IoU between two boxes."""
+        x1 = max(box1[0], box2[0])
+        y1 = max(box1[1], box2[1])
+        x2 = min(box1[2], box2[2])
+        y2 = min(box1[3], box2[3])
+
+        inter = max(0, x2 - x1) * max(0, y2 - y1)
+        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        union = area1 + area2 - inter
+
+        return inter / union if union > 0 else 0
+
+    def detect(self, image: np.ndarray,
+               protected_labels: Optional[Set[str]] = None,
+               scale_factor: float = 1.0) -> List[ProtectedRegion]:
+        """Detect layout regions using ONNX Runtime."""
+        if not self._load_model():
+            return []
+
+        if protected_labels is None:
+            protected_labels = self.protected_labels
+
+        try:
+            # Preprocess
+            input_tensor, scale, pad = self._preprocess(image)
+            orig_shape = image.shape[:2]
+
+            # Run inference
+            input_name = self.session.get_inputs()[0].name
+            output = self.session.run(None, {input_name: input_tensor})[0]
+
+            # Postprocess
+            detections = self._postprocess(output, scale, pad, orig_shape)
+
+            # Convert to ProtectedRegion
+            regions = []
+            for x1, y1, x2, y2, conf, cls_id in detections:
+                label = self.CLASS_NAMES[int(cls_id)]
+                internal_label = self.LABEL_MAPPING.get(label, label)
+
+                if internal_label in protected_labels:
+                    if scale_factor != 1.0:
+                        x1 *= scale_factor
+                        y1 *= scale_factor
+                        x2 *= scale_factor
+                        y2 *= scale_factor
+
+                    regions.append(ProtectedRegion(
+                        bbox=(int(x1), int(y1), int(x2), int(y2)),
+                        label=internal_label,
+                        confidence=float(conf)
+                    ))
+
+            return regions
+
+        except Exception as e:
+            print(f"[ONNX] Detection error: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+    def detect_all(self, image: np.ndarray, scale_factor: float = 1.0) -> List[ProtectedRegion]:
+        return self.detect(image, protected_labels=self.ALL_LABELS, scale_factor=scale_factor)
+
+    def set_protected_labels(self, labels: Set[str]):
+        self.protected_labels = labels & self.ALL_LABELS
+
+    def set_confidence_threshold(self, threshold: float):
+        self.confidence_threshold = max(0.0, min(1.0, threshold))
+
+
 # Singleton instance for shared use
+_yolo_onnx_instance: Optional[YOLODocLayNetONNXDetector] = None
 _yolo_doclaynet_instance: Optional[YOLODocLayNetDetector] = None
 _detector_instance: Optional[LayoutParserDetector] = None
 _paddle_detector_instance: Optional[PPDocLayoutDetector] = None
@@ -1216,9 +1503,17 @@ _legacy_detector_instance: Optional[DocLayoutYOLO] = None
 _remote_detector_instance: Optional[RemoteLayoutDetector] = None
 
 
-def get_layout_detector() -> YOLODocLayNetDetector:
-    """Get shared YOLODocLayNetDetector instance - NEW DEFAULT detector"""
-    return get_yolo_doclaynet_detector()
+def get_layout_detector() -> YOLODocLayNetONNXDetector:
+    """Get shared ONNX detector instance - Windows compatible"""
+    return get_yolo_onnx_detector()
+
+
+def get_yolo_onnx_detector() -> YOLODocLayNetONNXDetector:
+    """Get shared YOLODocLayNetONNXDetector instance - Windows compatible"""
+    global _yolo_onnx_instance
+    if _yolo_onnx_instance is None:
+        _yolo_onnx_instance = YOLODocLayNetONNXDetector()
+    return _yolo_onnx_instance
 
 
 def get_layoutparser_detector() -> LayoutParserDetector:

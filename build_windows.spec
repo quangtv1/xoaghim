@@ -1,25 +1,22 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec file for Windows build
+# PyInstaller spec file for Windows build - ONNX Runtime version
+# No PyTorch dependencies - uses ONNX for YOLO inference
 
 import sys
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs, collect_all
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_all
 
 block_cipher = None
 
-# Collect all ultralytics submodules
-ultralytics_imports = collect_submodules('ultralytics')
-
-# Collect ALL torch files (data, binaries, submodules) to fix DLL loading
-torch_datas, torch_binaries, torch_hiddenimports = collect_all('torch')
-torchvision_datas, torchvision_binaries, torchvision_hiddenimports = collect_all('torchvision')
+# Collect onnxruntime data files
+onnx_datas, onnx_binaries, onnx_hiddenimports = collect_all('onnxruntime')
 
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=torch_binaries + torchvision_binaries,
+    binaries=onnx_binaries,
     datas=[
-        ('resources', 'resources'),  # Includes resources/models/*.pt
-    ] + collect_data_files('ultralytics') + torch_datas + torchvision_datas,
+        ('resources', 'resources'),  # Includes resources/models/*.onnx
+    ] + onnx_datas,
     hiddenimports=[
         # PyQt5
         'PyQt5',
@@ -37,50 +34,29 @@ a = Analysis(
         'shapely.geometry',
         'shapely.ops',
         'shapely.validation',
-        # YOLO / Ultralytics
-        'ultralytics',
-        'ultralytics.nn',
-        'ultralytics.nn.tasks',
-        'ultralytics.engine',
-        'ultralytics.engine.model',
-        'ultralytics.engine.predictor',
-        'ultralytics.engine.results',
-        'ultralytics.models',
-        'ultralytics.models.yolo',
-        'ultralytics.models.yolo.detect',
-        'ultralytics.utils',
-        'ultralytics.data',
-        'ultralytics.cfg',
-        # HuggingFace
-        'huggingface_hub',
-        'huggingface_hub.hf_api',
-        'huggingface_hub.file_download',
-        # PyTorch (CPU)
-        'torch',
-        'torch.nn',
-        'torch.nn.functional',
-        'torch.utils',
-        'torch.utils.data',
-        'torchvision',
-        'torchvision.ops',
+        # ONNX Runtime
+        'onnxruntime',
         # Config/Utils
         'yaml',
-        'scipy',
-        'scipy.ndimage',
         'requests',
         'tqdm',
-        'matplotlib',
-        'pandas',
-        'seaborn',
         'psutil',
-    ] + ultralytics_imports + torch_hiddenimports + torchvision_hiddenimports,
-    hookspath=['hooks'],
+    ] + onnx_hiddenimports,
+    hookspath=[],
     hooksconfig={},
-    runtime_hooks=['hooks/hook-torch.py'],
+    runtime_hooks=[],
     excludes=[
+        # Exclude PyTorch and related
+        'torch',
+        'torchvision',
+        'ultralytics',
         'tensorflow',
         'tensorboard',
         'keras',
+        'scipy',
+        'matplotlib',
+        'pandas',
+        'seaborn',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -90,12 +66,14 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-# Use onedir mode for better DLL compatibility
+# Single exe mode (simpler distribution)
 exe = EXE(
     pyz,
     a.scripts,
-    [],  # No binaries in exe for onedir mode
-    exclude_binaries=True,  # Exclude binaries from exe
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
     name='XoaGhim',
     debug=False,
     bootloader_ignore_signals=False,
@@ -109,16 +87,4 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-)
-
-# Collect all files into a directory
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='XoaGhim',
 )
