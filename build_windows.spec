@@ -74,9 +74,9 @@ a = Analysis(
         'seaborn',
         'psutil',
     ] + ultralytics_imports + torch_hiddenimports + torchvision_hiddenimports,
-    hookspath=[],
+    hookspath=['hooks'],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['hooks/hook-torch.py'],
     excludes=[
         'tensorflow',
         'tensorboard',
