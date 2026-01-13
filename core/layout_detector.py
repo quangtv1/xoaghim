@@ -1003,20 +1003,41 @@ class YOLODocLayNetDetector:
     def _get_model_path(self) -> str:
         """Get model file path. Check bundled first, then cache, then download."""
         filename = self._model_files.get(self.model_size, 'yolov8n-doclaynet.pt')
+        print(f"[YOLODocLayNet] Looking for model: {filename}")
 
         # 1. Check bundled model (for PyInstaller)
-        bundled_paths = [
-            # Running from source
-            os.path.join(os.path.dirname(__file__), '..', 'resources', 'models', filename),
-            # PyInstaller bundle
-            os.path.join(getattr(sys, '_MEIPASS', ''), 'resources', 'models', filename),
-        ]
-        for bundled_path in bundled_paths:
+        # PyInstaller sets sys._MEIPASS to temp extraction directory
+        if hasattr(sys, '_MEIPASS'):
+            bundled_path = os.path.join(sys._MEIPASS, 'resources', 'models', filename)
+            bundled_path = os.path.abspath(bundled_path)
+            print(f"[YOLODocLayNet] PyInstaller mode, checking: {bundled_path}")
             if os.path.exists(bundled_path):
                 print(f"[YOLODocLayNet] Using bundled model: {bundled_path}")
                 return bundled_path
+            else:
+                print(f"[YOLODocLayNet] Bundled model NOT found at: {bundled_path}")
+                # List what's in _MEIPASS for debugging
+                try:
+                    meipass_contents = os.listdir(sys._MEIPASS)
+                    print(f"[YOLODocLayNet] _MEIPASS contents: {meipass_contents[:20]}...")
+                    resources_path = os.path.join(sys._MEIPASS, 'resources')
+                    if os.path.exists(resources_path):
+                        print(f"[YOLODocLayNet] resources/ contents: {os.listdir(resources_path)}")
+                        models_path = os.path.join(resources_path, 'models')
+                        if os.path.exists(models_path):
+                            print(f"[YOLODocLayNet] resources/models/ contents: {os.listdir(models_path)}")
+                except Exception as e:
+                    print(f"[YOLODocLayNet] Error listing _MEIPASS: {e}")
 
-        # 2. Check cache directory
+        # 2. Check relative to source file (running from source)
+        source_path = os.path.join(os.path.dirname(__file__), '..', 'resources', 'models', filename)
+        source_path = os.path.abspath(source_path)
+        print(f"[YOLODocLayNet] Checking source path: {source_path}")
+        if os.path.exists(source_path):
+            print(f"[YOLODocLayNet] Using source model: {source_path}")
+            return source_path
+
+        # 3. Check cache directory
         os.makedirs(self.MODEL_CACHE_DIR, exist_ok=True)
         local_path = os.path.join(self.MODEL_CACHE_DIR, filename)
 
@@ -1024,7 +1045,7 @@ class YOLODocLayNetDetector:
             print(f"[YOLODocLayNet] Using cached model: {local_path}")
             return local_path
 
-        # 3. Download if not exists
+        # 4. Download if not exists
         print(f"[YOLODocLayNet] Downloading {filename} from HuggingFace...")
         try:
             from huggingface_hub import hf_hub_download
