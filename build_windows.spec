@@ -14,7 +14,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('resources', 'resources'),
+        ('resources', 'resources'),  # Includes resources/models/*.pt
     ] + collect_data_files('ultralytics'),
     hiddenimports=[
         # PyQt5

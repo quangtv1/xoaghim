@@ -1001,26 +1001,42 @@ class YOLODocLayNetDetector:
         }
 
     def _get_model_path(self) -> str:
-        """Get or download model file."""
-        os.makedirs(self.MODEL_CACHE_DIR, exist_ok=True)
-
+        """Get model file path. Check bundled first, then cache, then download."""
         filename = self._model_files.get(self.model_size, 'yolov8n-doclaynet.pt')
+
+        # 1. Check bundled model (for PyInstaller)
+        bundled_paths = [
+            # Running from source
+            os.path.join(os.path.dirname(__file__), '..', 'resources', 'models', filename),
+            # PyInstaller bundle
+            os.path.join(getattr(sys, '_MEIPASS', ''), 'resources', 'models', filename),
+        ]
+        for bundled_path in bundled_paths:
+            if os.path.exists(bundled_path):
+                print(f"[YOLODocLayNet] Using bundled model: {bundled_path}")
+                return bundled_path
+
+        # 2. Check cache directory
+        os.makedirs(self.MODEL_CACHE_DIR, exist_ok=True)
         local_path = os.path.join(self.MODEL_CACHE_DIR, filename)
 
-        # Download if not exists
-        if not os.path.exists(local_path):
-            print(f"[YOLODocLayNet] Downloading {filename} from HuggingFace...")
-            try:
-                from huggingface_hub import hf_hub_download
-                local_path = hf_hub_download(
-                    repo_id=self.HF_REPO_ID,
-                    filename=filename,
-                    local_dir=self.MODEL_CACHE_DIR
-                )
-                print(f"[YOLODocLayNet] Model downloaded: {local_path}")
-            except Exception as e:
-                print(f"[YOLODocLayNet] Download error: {e}")
-                raise
+        if os.path.exists(local_path):
+            print(f"[YOLODocLayNet] Using cached model: {local_path}")
+            return local_path
+
+        # 3. Download if not exists
+        print(f"[YOLODocLayNet] Downloading {filename} from HuggingFace...")
+        try:
+            from huggingface_hub import hf_hub_download
+            local_path = hf_hub_download(
+                repo_id=self.HF_REPO_ID,
+                filename=filename,
+                local_dir=self.MODEL_CACHE_DIR
+            )
+            print(f"[YOLODocLayNet] Model downloaded: {local_path}")
+        except Exception as e:
+            print(f"[YOLODocLayNet] Download error: {e}")
+            raise
 
         return local_path
 
