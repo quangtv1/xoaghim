@@ -1753,6 +1753,67 @@ class ContinuousPreviewWidget(QWidget):
         self.before_panel.view.horizontalScrollBar().setValue(target_h_scroll)
         self.after_panel.view.horizontalScrollBar().setValue(target_h_scroll)
 
+    def zoom_fit_height(self, page_index: int = None):
+        """Fit chiều cao trang vào viewport
+
+        Args:
+            page_index: Index của trang cần fit. None = trang hiện tại
+        """
+        if not self._pages:
+            return
+
+        # Xác định trang cần fit
+        if page_index is None:
+            page_index = self.before_panel.get_current_page()
+        page_index = max(0, min(page_index, len(self._pages) - 1))
+
+        # Đảm bảo page items đã được tạo
+        if page_index >= len(self.before_panel._page_items):
+            return
+
+        # Lấy page item và kích thước
+        page_item = self.before_panel._page_items[page_index]
+        page_rect = page_item.boundingRect()
+        page_height = page_rect.height()
+
+        if page_height <= 0:
+            return
+
+        # Lấy viewport height thực tế (trừ scrollbar nếu visible)
+        viewport = self.before_panel.view.viewport()
+        viewport_height = viewport.height()
+
+        # Nếu viewport quá nhỏ (chưa layout xong), dùng parent height
+        if viewport_height < 100:
+            viewport_height = self.before_panel.view.height() - 20
+
+        # Trừ scrollbar height nếu visible
+        h_scrollbar = self.before_panel.view.horizontalScrollBar()
+        if h_scrollbar.isVisible():
+            viewport_height -= h_scrollbar.height()
+
+        # Margin nhỏ để tránh tràn
+        viewport_height -= 4
+
+        if viewport_height <= 0:
+            return
+
+        # Tính zoom để fit chiều cao trang vào viewport
+        new_zoom = viewport_height / page_height
+        new_zoom = max(0.1, min(new_zoom, 2.0))
+
+        # Reset và apply zoom đồng bộ cho cả 2 panel
+        self.before_panel.view.resetTransform()
+        self.before_panel.view.scale(new_zoom, new_zoom)
+        self.before_panel.view._zoom = new_zoom
+
+        self.after_panel.view.resetTransform()
+        self.after_panel.view.scale(new_zoom, new_zoom)
+        self.after_panel.view._zoom = new_zoom
+
+        # Scroll đến trang và căn giữa
+        self._scroll_to_page(page_index, align_top=False)
+
     def set_zoom(self, zoom: float):
         """Set zoom level"""
         zoom = max(0.1, min(5.0, zoom))

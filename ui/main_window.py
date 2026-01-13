@@ -429,7 +429,30 @@ class MainWindow(QMainWindow):
             painter.drawLine(iw - 5 - arrow_len, cy, iw - 5, cy)  # Arrow shaft
             painter.drawLine(iw - 5, cy, iw - 8, cy - 3)  # Arrow head top
             painter.drawLine(iw - 5, cy, iw - 8, cy + 3)  # Arrow head bottom
-            
+
+        elif icon_type == "fit_height":
+            # Box with vertical arrows inside
+            m = 0
+            iw = size - 1
+            ih = size - 1
+
+            # Draw rounded rectangle border
+            painter.drawRoundedRect(m, m, iw, ih, 3, 3)
+
+            # Center x position
+            cx = iw // 2
+
+            # Top arrow ↑ (pointing to top edge)
+            arrow_len = ih // 3
+            painter.drawLine(cx, 5, cx, 5 + arrow_len)  # Arrow shaft
+            painter.drawLine(cx, 5, cx - 3, 8)  # Arrow head left
+            painter.drawLine(cx, 5, cx + 3, 8)  # Arrow head right
+
+            # Bottom arrow ↓ (pointing to bottom edge)
+            painter.drawLine(cx, ih - 5 - arrow_len, cx, ih - 5)  # Arrow shaft
+            painter.drawLine(cx, ih - 5, cx - 3, ih - 8)  # Arrow head left
+            painter.drawLine(cx, ih - 5, cx + 3, ih - 8)  # Arrow head right
+
         elif icon_type == "single_page":
             # Single document
             painter.drawRect(margin + 2, margin, w - 4, h)
@@ -851,7 +874,31 @@ class MainWindow(QMainWindow):
         """)
         self.zoom_fit_btn.clicked.connect(self._on_zoom_fit_width)
         bar_layout.addWidget(self.zoom_fit_btn)
-        
+
+        # Fit height - icon button
+        self.zoom_fit_height_btn = QToolButton()
+        fit_height_path = os.path.join(os.path.dirname(__file__), "..", "resources", "fit_height.png")
+        if os.path.exists(fit_height_path):
+            self.zoom_fit_height_btn.setIcon(QIcon(fit_height_path))
+        else:
+            self.zoom_fit_height_btn.setIcon(self._create_line_icon("fit_height", 30))
+        self.zoom_fit_height_btn.setIconSize(QSize(30, 27))
+        self.zoom_fit_height_btn.setToolTip("Vừa chiều cao trang")
+        self.zoom_fit_height_btn.setFixedSize(30, 27)
+        self.zoom_fit_height_btn.setStyleSheet("""
+            QToolButton {
+                padding: 0px;
+                border: 1px solid #D1D5DB;
+                border-radius: 4px;
+                background-color: #E5E7EB;
+            }
+            QToolButton:hover {
+                background-color: #D1D5DB;
+            }
+        """)
+        self.zoom_fit_height_btn.clicked.connect(self._on_zoom_fit_height)
+        bar_layout.addWidget(self.zoom_fit_height_btn)
+
         # Separator
         sep2 = QLabel("|")
         sep2.setStyleSheet("color: #D1D5DB; padding: 0 6px;")
@@ -1215,7 +1262,13 @@ class MainWindow(QMainWindow):
         self._user_zoomed = False  # Cho phép auto-fit khi resize
         self.preview.zoom_fit_width()  # Fit trang hiện tại (không truyền param)
         self._update_zoom_combo()
-    
+
+    def _on_zoom_fit_height(self):
+        """Fit chiều cao trang hiện tại"""
+        self._user_zoomed = True  # Không auto-fit khi resize
+        self.preview.zoom_fit_height()  # Fit theo chiều cao
+        self._update_zoom_combo()
+
     def _on_zoom_combo_changed(self, text):
         try:
             zoom = int(text.replace('%', '')) / 100.0
