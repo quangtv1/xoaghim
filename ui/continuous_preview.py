@@ -5,17 +5,186 @@ Continuous Preview - Preview liên tục nhiều trang với nền đen
 from PyQt5.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
-    QGraphicsRectItem, QFrame, QSplitter, QScrollArea, QPushButton
+    QGraphicsRectItem, QFrame, QSplitter, QScrollArea, QPushButton,
+    QGraphicsOpacityEffect
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QRectF, QTimer, QPointF
-from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QBrush, QPen, QCursor, QPainterPath
+from PyQt5.QtCore import Qt, pyqtSignal, QRectF, QTimer, QPointF, QPropertyAnimation, QEasingCurve
+from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QBrush, QPen, QCursor, QPainterPath, QFont
+
+
+class SpinnerWidget(QWidget):
+    """Custom spinning loader widget với gradient arc"""
+
+    def __init__(self, parent=None, size=40, line_width=4):
+        super().__init__(parent)
+        self._size = size
+        self._line_width = line_width
+        self._angle = 0
+        self.setFixedSize(size, size)
+
+        # Animation timer
+        self._timer = QTimer()
+        self._timer.timeout.connect(self._rotate)
+
+    def _rotate(self):
+        self._angle = (self._angle + 10) % 360
+        self.update()
+
+    def start(self):
+        self._timer.start(20)  # 50 FPS smooth animation
+
+    def stop(self):
+        self._timer.stop()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Calculate rect for arc
+        margin = self._line_width / 2
+        rect = QRectF(margin, margin,
+                      self._size - self._line_width,
+                      self._size - self._line_width)
+
+        # Draw background circle (light gray)
+        bg_pen = QPen(QColor("#E5E7EB"), self._line_width)
+        bg_pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(bg_pen)
+        painter.drawEllipse(rect)
+
+        # Draw spinning arc with gradient effect
+        # Create gradient from blue to transparent
+        from PyQt5.QtGui import QConicalGradient
+        gradient = QConicalGradient(self._size / 2, self._size / 2, -self._angle)
+        gradient.setColorAt(0, QColor("#2563EB"))      # Blue
+        gradient.setColorAt(0.25, QColor("#3B82F6"))   # Lighter blue
+        gradient.setColorAt(0.5, QColor("#93C5FD"))    # Even lighter
+        gradient.setColorAt(0.75, QColor("#DBEAFE"))   # Very light
+        gradient.setColorAt(1, QColor("#2563EB"))      # Back to blue
+
+        arc_pen = QPen(QBrush(gradient), self._line_width)
+        arc_pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(arc_pen)
+
+        # Draw arc (270 degrees, leaving 90 degree gap)
+        start_angle = int(self._angle * 16)  # Qt uses 1/16 degree
+        span_angle = 270 * 16
+        painter.drawArc(rect, start_angle, span_angle)
+
+
+class LoadingOverlay(QWidget):
+    """Loading overlay với spinning indicator"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setStyleSheet("background-color: rgba(0, 0, 0, 0.15);")
+
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignCenter)
+
+        # Container cho loading indicator
+        container = QFrame()
+        container.setStyleSheet("""
+            QFrame {
+                background-color: #F9FAFB;
+                border-radius: 12px;
+            }
+        """)
+        container.setFixedSize(100, 90)
+        container_layout = QVBoxLayout(container)
+        container_layout.setAlignment(Qt.AlignCenter)
+        container_layout.setSpacing(10)
+
+        # Custom spinner widget
+        self._spinner = SpinnerWidget(size=36, line_width=4)
+        container_layout.addWidget(self._spinner, alignment=Qt.AlignCenter)
+
+        # Loading text (smaller, below)
+        self._loading_label = QLabel("Đang phát hiện")
+        self._loading_label.setStyleSheet("""
+            font-size: 11px;
+            color: #6B7280;
+        """)
+        self._loading_label.setAlignment(Qt.AlignCenter)
+        container_layout.addWidget(self._loading_label)
+
+        layout.addWidget(container)
+        self.hide()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._spinner.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self._spinner.stop()
 
 import numpy as np
 import cv2
 from typing import List, Optional, Dict, TYPE_CHECKING
 
+
 from ui.zone_item import ZoneItem
 from core.processor import Zone, StapleRemover
+
+
+import threading
+
+
+class DetectionRunner:
+    """Runner để chạy YOLO detection trong Python thread (không dùng QThread)"""
+
+    def __init__(self, processor, pages, original_indices, callback):
+        self._processor = processor
+        self._pages = pages  # Copy of pages
+        self._original_indices = original_indices
+        self._callback = callback  # Called when done with results
+        self._cancelled = False
+        self._thread = None
+
+    def start(self):
+        """Start detection in background thread"""
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def cancel(self):
+        """Request cancellation"""
+        self._cancelled = True
+
+    def is_running(self):
+        """Check if thread is running"""
+        return self._thread is not None and self._thread.is_alive()
+
+    def wait(self, timeout=None):
+        """Wait for thread to finish"""
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+            return not self._thread.is_alive()
+        return True
+
+    def _run(self):
+        """Run detection (called in background thread)"""
+        results = {}
+
+        for i, page in enumerate(self._pages):
+            if self._cancelled:
+                print("[DEBUG DetectionRunner] Cancelled, stopping detection")
+                break
+
+            try:
+                original_idx = self._original_indices[i]
+                regions = self._processor.detect_protected_regions(page)
+                results[original_idx] = regions
+                print(f"[DEBUG DetectionRunner] Page {original_idx}: detected {len(regions)} regions")
+            except Exception as e:
+                original_idx = self._original_indices[i]
+                print(f"[DEBUG DetectionRunner] Error detecting page {original_idx}: {e}")
+                results[original_idx] = []
+
+        # Call callback with results (if not cancelled)
+        if not self._cancelled and self._callback:
+            self._callback(results)
 
 
 class ContinuousGraphicsView(QGraphicsView):
@@ -206,11 +375,15 @@ class ContinuousPreviewPanel(QFrame):
             self._rebuild_scene()
     
     def set_current_page(self, index: int):
-        """Set current page index for single page mode"""
+        """Set current page index - scroll in continuous mode, rebuild in single mode"""
         if 0 <= index < len(self._pages):
             self._current_page = index
             if self._view_mode == 'single':
                 self._rebuild_scene()
+            elif self._view_mode == 'continuous' and index < len(self._page_positions):
+                # Scroll to page position in continuous mode
+                y_pos = self._page_positions[index]
+                self.view.verticalScrollBar().setValue(int(y_pos * self.view._zoom))
     
     def get_current_page(self) -> int:
         """Get current page index"""
@@ -962,7 +1135,7 @@ class ContinuousPreviewWidget(QWidget):
     Widget preview side-by-side với continuous pages
     TRƯỚC (với overlay) | SAU (kết quả)
     """
-    
+
     zone_changed = pyqtSignal(str, float, float, float, float)  # zone_id, x, y, w, h
     zone_selected = pyqtSignal(str)  # zone_id
     zone_delete = pyqtSignal(str)  # zone_id - request to delete custom zone
@@ -970,7 +1143,8 @@ class ContinuousPreviewWidget(QWidget):
     open_folder_requested = pyqtSignal()  # When placeholder "Mở thư mục" is clicked
     file_dropped = pyqtSignal(str)  # When file is dropped (file_path)
     close_requested = pyqtSignal()  # When close button is clicked
-    
+    page_changed = pyqtSignal(int)  # Emitted when visible page changes (0-based index)
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -982,12 +1156,34 @@ class ContinuousPreviewWidget(QWidget):
         self._text_protection_margin = 10  # Default margin for protected regions overlay
         self._cached_regions: Dict[int, list] = {}  # Cache protected regions per page
 
+        # Background detection using Python threading (not QThread to avoid crashes)
+        self._detection_runner: Optional[DetectionRunner] = None
+        self._detection_pending = False  # Track if detection is pending/running
+        self._detection_results: Optional[dict] = None  # Store results from thread
+
+        # Timer to check for detection results (cross-thread communication)
+        self._result_check_timer = QTimer()
+        self._result_check_timer.timeout.connect(self._check_detection_results)
+        self._result_check_timer.setInterval(100)  # Check every 100ms
+
         # Debounce timer
         self._process_timer = QTimer()
         self._process_timer.setSingleShot(True)
         self._process_timer.timeout.connect(self._do_process_all)
 
+        # Track last emitted page to avoid duplicate signals
+        self._last_emitted_page = -1
+
         self._setup_ui()
+
+    def closeEvent(self, event):
+        """Cleanup khi widget bị đóng"""
+        self._stop_detection()
+        super().closeEvent(event)
+
+    def __del__(self):
+        """Destructor - đảm bảo cleanup"""
+        self._stop_detection()
     
     def _setup_ui(self):
         self.setStyleSheet("background-color: #E5E7EB;")
@@ -1035,7 +1231,29 @@ class ContinuousPreviewWidget(QWidget):
         
         splitter.setSizes([1, 1])
         layout.addWidget(splitter)
-    
+
+        # Loading overlay (centered on widget)
+        self._loading_overlay = LoadingOverlay(self)
+        self._loading_overlay.hide()
+
+    def resizeEvent(self, event):
+        """Resize loading overlay to match widget size"""
+        super().resizeEvent(event)
+        self._loading_overlay.setGeometry(self.rect())
+
+    def _show_loading(self):
+        """Show loading overlay"""
+        self._loading_overlay.setGeometry(self.rect())
+        self._loading_overlay.show()
+        self._loading_overlay.raise_()
+        # Force repaint
+        from PyQt5.QtWidgets import QApplication
+        QApplication.processEvents()
+
+    def _hide_loading(self):
+        """Hide loading overlay"""
+        self._loading_overlay.hide()
+
     def _on_placeholder_clicked(self):
         """Handle placeholder click - request to open file"""
         self.open_file_requested.emit()
@@ -1064,6 +1282,10 @@ class ContinuousPreviewWidget(QWidget):
     
     def set_pages(self, pages: List[np.ndarray]):
         """Set danh sách ảnh các trang"""
+        # Stop any running detection first
+        self._stop_detection()
+        self._hide_loading()
+
         self._pages = [p.copy() for p in pages]
         self._processed_pages = [p.copy() for p in pages]
 
@@ -1081,7 +1303,7 @@ class ContinuousPreviewWidget(QWidget):
         self.after_panel.set_view_mode(mode)
     
     def set_current_page(self, index: int):
-        """Set current page index for single page mode"""
+        """Set current page index - scroll in continuous mode, rebuild in single mode"""
         self.before_panel.set_current_page(index)
         self.after_panel.set_current_page(index)
     
@@ -1160,6 +1382,94 @@ class ContinuousPreviewWidget(QWidget):
 
         print(f"[DEBUG ContinuousPreview] _do_process_all: text_protection_enabled={self._text_protection_enabled}")
 
+        # Check if we need YOLO detection (when text protection enabled and pages not cached)
+        pages_to_detect = []
+        if self._text_protection_enabled:
+            for i in range(len(self._pages)):
+                if i not in self._cached_regions:
+                    pages_to_detect.append(i)
+
+        # If detection needed, run in background thread
+        if pages_to_detect:
+            self._start_background_detection(pages_to_detect)
+            return  # Will continue processing after detection finishes
+
+        # No detection needed, process directly
+        self._process_pages_with_cached_regions()
+
+    def _start_background_detection(self, pages_to_detect: List[int]):
+        """Bắt đầu detection trong background thread (Python threading)"""
+        # Stop any existing detection
+        self._stop_detection()
+
+        self._detection_pending = True
+        self._detection_results = None
+        self._show_loading()
+
+        # Create a copy of pages for the thread to avoid thread safety issues
+        pages_copy = [self._pages[i].copy() for i in pages_to_detect]
+
+        # Create runner with callback
+        self._detection_runner = DetectionRunner(
+            self._processor,
+            pages_copy,
+            pages_to_detect,  # Original indices
+            self._on_detection_complete  # Callback when done
+        )
+
+        # Start detection thread
+        self._detection_runner.start()
+
+        # Start timer to check for results
+        self._result_check_timer.start()
+
+        print(f"[DEBUG ContinuousPreview] Started background detection for {len(pages_to_detect)} pages")
+
+    def _on_detection_complete(self, results: dict):
+        """Callback from detection thread - store results for main thread to pick up"""
+        self._detection_results = results
+        print(f"[DEBUG ContinuousPreview] Detection complete, {len(results)} pages detected")
+
+    def _check_detection_results(self):
+        """Check if detection results are ready (called by timer in main thread)"""
+        if self._detection_results is not None and self._detection_pending:
+            # Stop the timer
+            self._result_check_timer.stop()
+
+            # Process results in main thread
+            results = self._detection_results
+            self._detection_results = None
+
+            # Update cache
+            for page_idx, regions in results.items():
+                if page_idx < len(self._pages):
+                    self._cached_regions[page_idx] = regions
+                    print(f"[DEBUG ContinuousPreview] Cached {len(regions)} regions for page {page_idx}")
+
+            self._detection_pending = False
+            self._detection_runner = None
+
+            # Continue processing
+            self._process_pages_with_cached_regions()
+
+    def _stop_detection(self):
+        """Stop any running detection"""
+        self._detection_pending = False
+        self._detection_results = None
+        self._result_check_timer.stop()
+
+        if self._detection_runner is not None:
+            self._detection_runner.cancel()
+            # Don't wait - let daemon thread die naturally
+            print("[DEBUG ContinuousPreview] Requested detection cancellation")
+            self._detection_runner = None
+
+    def _process_pages_with_cached_regions(self):
+        """Xử lý tất cả trang với cached regions (không blocking)"""
+        if not self._pages:
+            self._hide_loading()
+            return
+
         # Clear protected regions display before processing
         self.before_panel.clear_protected_regions()
 
@@ -1175,9 +1485,8 @@ class ContinuousPreviewWidget(QWidget):
                 page_zones = self._get_zones_for_page(i)
                 if page_zones:
                     if self._text_protection_enabled:
-                        # Sử dụng cached regions hoặc detect mới
-                        regions = self._get_cached_regions(i, page)
-                        # Process với regions đã cache
+                        # Use cached regions (already populated)
+                        regions = self._cached_regions.get(i, [])
                         processed = self._processor.process_image(page, page_zones, protected_regions=regions)
                         self._processed_pages[i] = processed
                         # Draw protected regions on before panel
@@ -1198,9 +1507,8 @@ class ContinuousPreviewWidget(QWidget):
 
                 if should_process:
                     if self._text_protection_enabled:
-                        # Sử dụng cached regions hoặc detect mới
-                        regions = self._get_cached_regions(i, page)
-                        # Process với regions đã cache
+                        # Use cached regions (already populated)
+                        regions = self._cached_regions.get(i, [])
                         processed = self._processor.process_image(page, self._zones, protected_regions=regions)
                         self._processed_pages[i] = processed
                         # Draw protected regions on before panel
@@ -1214,6 +1522,9 @@ class ContinuousPreviewWidget(QWidget):
                     self._processed_pages[i] = page.copy()
 
         self.after_panel.set_pages(self._processed_pages)
+
+        # Hide loading overlay after processing complete
+        self._hide_loading()
 
     def _get_cached_regions(self, page_idx: int, page: 'np.ndarray') -> list:
         """Lấy cached regions hoặc detect mới nếu chưa có"""
@@ -1266,9 +1577,46 @@ class ContinuousPreviewWidget(QWidget):
     
     def _sync_scroll_from_before(self, h: int, v: int):
         self.after_panel.view.sync_scroll(h, v)
-    
+        # Detect visible page and emit signal if changed
+        self._detect_and_emit_page_change()
+
     def _sync_scroll_from_after(self, h: int, v: int):
         self.before_panel.view.sync_scroll(h, v)
+        # Detect visible page and emit signal if changed
+        self._detect_and_emit_page_change()
+
+    def _detect_and_emit_page_change(self):
+        """Detect current visible page from scroll position and emit page_changed if changed"""
+        if not self._pages or not self.before_panel._page_positions:
+            return
+
+        # Get current vertical scroll position in scene coordinates
+        v_scroll = self.before_panel.view.verticalScrollBar().value()
+        zoom = self.before_panel.view._zoom
+
+        # Convert scroll position to scene coordinates
+        scene_y = v_scroll / zoom if zoom > 0 else v_scroll
+
+        # Add viewport height / 3 to find page that's mostly visible (not just at top)
+        viewport_height = self.before_panel.view.viewport().height()
+        scene_y += (viewport_height / zoom / 3) if zoom > 0 else 0
+
+        # Find which page is at this position
+        page_positions = self.before_panel._page_positions
+        current_page = 0
+
+        for i, pos in enumerate(page_positions):
+            if scene_y >= pos:
+                current_page = i
+            else:
+                break
+
+        # Emit signal if page changed
+        if current_page != self._last_emitted_page:
+            self._last_emitted_page = current_page
+            self.before_panel._current_page = current_page  # Update internal state
+            self.after_panel._current_page = current_page
+            self.page_changed.emit(current_page)
     
     def zoom_in(self):
         zoom = self.before_panel.view._zoom * 1.2
@@ -1289,30 +1637,122 @@ class ContinuousPreviewWidget(QWidget):
             Qt.KeepAspectRatio
         )
     
-    def zoom_fit_width(self):
-        """Fit vừa chiều rộng trang (từng trang)"""
+    def zoom_fit_width(self, page_index: int = None, scroll_to_page: bool = False):
+        """Fit vừa chiều rộng trang và căn giữa trang trong view
+
+        Args:
+            page_index: Index của trang cần fit. None = trang hiện tại
+            scroll_to_page: True = scroll vertical đến TOP của trang (dùng khi mở file mới)
+                           False = giữ trang hiện tại visible (scroll đến trang đó)
+        """
         if not self._pages:
             return
-        
-        # Lấy chiều rộng trang đầu tiên
-        first_page = self._pages[0]
-        page_width = first_page.shape[1]  # width
-        
-        # Tính zoom để fit vừa chiều rộng view
-        view_width = self.before_panel.view.viewport().width() - 40  # padding
-        
-        if page_width > 0 and view_width > 0:
-            zoom = view_width / page_width
-            
-            # Reset transform và set zoom mới
-            self.before_panel.view.resetTransform()
-            self.before_panel.view.scale(zoom, zoom)
-            self.before_panel.view._zoom = zoom
-            
-            self.after_panel.view.resetTransform()
-            self.after_panel.view.scale(zoom, zoom)
-            self.after_panel.view._zoom = zoom
-    
+
+        # Xác định trang cần fit
+        if page_index is None:
+            page_index = self.before_panel.get_current_page()
+        page_index = max(0, min(page_index, len(self._pages) - 1))
+
+        # Đảm bảo page items đã được tạo
+        if page_index >= len(self.before_panel._page_items):
+            return
+
+        # Lấy page item và vị trí trong scene
+        page_item = self.before_panel._page_items[page_index]
+        page_rect = page_item.boundingRect()
+        page_pos = page_item.pos()
+        page_width = page_rect.width()
+
+        if page_width <= 0:
+            return
+
+        # Lấy viewport width thực tế (trừ scrollbar nếu visible)
+        viewport = self.before_panel.view.viewport()
+        viewport_width = viewport.width()
+
+        # Nếu viewport quá nhỏ (chưa layout xong), dùng parent width
+        if viewport_width < 100:
+            viewport_width = self.before_panel.view.width() - 20
+
+        # Trừ scrollbar width nếu visible
+        v_scrollbar = self.before_panel.view.verticalScrollBar()
+        if v_scrollbar.isVisible():
+            viewport_width -= v_scrollbar.width()
+
+        # Margin nhỏ để tránh tràn
+        viewport_width -= 4
+
+        if viewport_width <= 0:
+            return
+
+        # Tính zoom để fit chiều rộng trang vào viewport
+        new_zoom = viewport_width / page_width
+        new_zoom = max(0.1, min(new_zoom, 2.0))
+
+        # Reset và apply zoom đồng bộ cho cả 2 panel
+        self.before_panel.view.resetTransform()
+        self.before_panel.view.scale(new_zoom, new_zoom)
+        self.before_panel.view._zoom = new_zoom
+
+        self.after_panel.view.resetTransform()
+        self.after_panel.view.scale(new_zoom, new_zoom)
+        self.after_panel.view._zoom = new_zoom
+
+        # Scroll đến trang hiện tại để giữ nó visible
+        # scroll_to_page=True: scroll đến TOP của trang
+        # scroll_to_page=False: scroll đến trang (giữ trang visible)
+        self._scroll_to_page(page_index, align_top=scroll_to_page)
+
+    def _scroll_to_page(self, page_index: int, align_top: bool = False):
+        """Scroll view đến trang chỉ định
+
+        Args:
+            page_index: Index của trang
+            align_top: True = căn top của trang với top của viewport
+                      False = căn trang sao cho visible (center nếu có thể)
+        """
+        if page_index >= len(self.before_panel._page_items):
+            return
+
+        # Lấy page item
+        page_item = self.before_panel._page_items[page_index]
+        page_rect = page_item.boundingRect()
+        page_pos = page_item.pos()
+        zoom = self.before_panel.view._zoom
+
+        # Tính vị trí vertical scroll
+        page_top_scaled = page_pos.y() * zoom
+
+        if align_top:
+            # Căn top của trang với top của viewport
+            target_v_scroll = int(page_top_scaled)
+        else:
+            # Căn trang ở giữa viewport (hoặc gần top nếu trang cao)
+            viewport_height = self.before_panel.view.viewport().height()
+            page_height_scaled = page_rect.height() * zoom
+
+            if page_height_scaled <= viewport_height:
+                # Trang nhỏ hơn viewport: center trang trong viewport
+                target_v_scroll = int(page_top_scaled - (viewport_height - page_height_scaled) / 2)
+            else:
+                # Trang lớn hơn viewport: căn top với một chút margin
+                target_v_scroll = int(page_top_scaled - 20)
+
+            target_v_scroll = max(0, target_v_scroll)
+
+        # Apply vertical scroll
+        self.before_panel.view.verticalScrollBar().setValue(target_v_scroll)
+        self.after_panel.view.verticalScrollBar().setValue(target_v_scroll)
+
+        # Căn giữa horizontal
+        viewport_width = self.before_panel.view.viewport().width()
+        page_center_x_scaled = (page_pos.x() + page_rect.width() / 2) * zoom
+        target_h_scroll = int(page_center_x_scaled - viewport_width / 2)
+        target_h_scroll = max(0, target_h_scroll)
+
+        self.before_panel.view.horizontalScrollBar().setValue(target_h_scroll)
+        self.after_panel.view.horizontalScrollBar().setValue(target_h_scroll)
+
     def set_zoom(self, zoom: float):
         """Set zoom level"""
         zoom = max(0.1, min(5.0, zoom))
@@ -1339,5 +1779,6 @@ class ContinuousPreviewWidget(QWidget):
         # Clear cache khi settings thay đổi để detect lại với settings mới
         self._cached_regions.clear()
 
+        # Loading overlay will be shown automatically in _start_background_detection
         self._processor.set_text_protection(options)
         self._schedule_process()

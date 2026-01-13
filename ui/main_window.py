@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QMenu, QDialog, QRadioButton, QStackedWidget,
     QGroupBox, QDialogButtonBox, QSplitter
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QEvent, QObject, QRect
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QEvent, QObject, QRect, QTimer
 from PyQt5.QtGui import QKeySequence, QDragEnterEvent, QDropEvent, QPixmap, QPainter, QPen, QIcon, QColor
 
 import os
@@ -268,6 +268,8 @@ class MainWindow(QMainWindow):
         self._batch_base_dir = ""
         self._batch_output_dir = ""
         self._batch_files: List[str] = []
+        self._last_dir = ""  # Remember last opened folder
+        self._user_zoomed = False  # Track if user has manually zoomed
         
         self.setWindowTitle("Xóa Vết Ghim PDF")
         self.setMinimumSize(1200, 800)
@@ -335,6 +337,7 @@ class MainWindow(QMainWindow):
         self.preview.open_folder_requested.connect(self._on_open_folder_batch)
         self.preview.file_dropped.connect(self._on_file_dropped)
         self.preview.close_requested.connect(self._on_close_file)
+        self.preview.page_changed.connect(self._on_page_changed_from_scroll)
         self.preview_splitter.addWidget(self.preview)
         
         # Set initial splitter sizes (file list: 200, preview: stretch)
@@ -927,9 +930,9 @@ class MainWindow(QMainWindow):
         
         if has_file:
             current = self.page_spin.value()
-            max_page = self.page_spin.maximum()
+            max_loaded = len(self._all_pages)
             self.prev_page_btn.setEnabled(current > 1)
-            self.next_page_btn.setEnabled(current < max_page)
+            self.next_page_btn.setEnabled(current < max_loaded)
         else:
             self.prev_page_btn.setEnabled(False)
             self.next_page_btn.setEnabled(False)
@@ -937,10 +940,11 @@ class MainWindow(QMainWindow):
     def _on_open(self):
         """Mở file"""
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Mở file PDF", "",
+            self, "Mở file PDF", self._last_dir,
             "PDF Files (*.pdf);;All Files (*)"
         )
         if file_path:
+            self._last_dir = str(Path(file_path).parent)
             self._load_pdf(file_path)
     
     def _on_file_dropped(self, file_path: str):
@@ -951,9 +955,10 @@ class MainWindow(QMainWindow):
     def _on_open_folder_batch(self):
         """Mở thư mục để xử lý batch"""
         folder_path = QFileDialog.getExistingDirectory(
-            self, "Chọn thư mục chứa file PDF", ""
+            self, "Chọn thư mục chứa file PDF", self._last_dir
         )
         if folder_path:
+            self._last_dir = folder_path
             self._load_folder(folder_path)
     
     def _load_folder(self, folder_path: str):
@@ -1095,75 +1100,127 @@ class MainWindow(QMainWindow):
 
             self._update_ui_state()
             self.statusBar().showMessage(f"Đã mở: {file_path}")
-            
-            # Fit width
-            self.preview.zoom_fit_width()
-            self._update_zoom_combo()
+
+            # Reset to first page
+            self._user_zoomed = False
+            self.preview.set_current_page(0)  # Scroll về trang đầu
+
+            # Defer fit width đến sau khi layout hoàn tất
+            # Dùng 100ms delay để đảm bảo viewport đã có kích thước đúng
+            QTimer.singleShot(100, self._fit_first_page_width)
             
         except Exception as e:
             QMessageBox.critical(self, "Lỗi", f"Không thể mở file:\n{e}")
     
+    def _fit_first_page_width(self):
+        """Fit chiều rộng trang đầu và scroll đến trang đầu - được gọi sau khi layout cập nhật"""
+        if self._all_pages:
+            # scroll_to_page=True để scroll đến trang đầu tiên
+            self.preview.zoom_fit_width(0, scroll_to_page=True)
+            self._update_zoom_combo()
+
     def _on_prev_page(self):
         if self.page_spin.value() > 1:
             self.page_spin.setValue(self.page_spin.value() - 1)
-    
+
     def _on_next_page(self):
-        if self.page_spin.value() < self.page_spin.maximum():
+        max_loaded = len(self._all_pages)
+        if self.page_spin.value() < max_loaded:
             self.page_spin.setValue(self.page_spin.value() + 1)
     
     def _on_page_changed(self, value):
         """Handle page number change"""
         if not self._pdf_handler:
             return
-            
-        # Update preview in single page mode
-        if self.view_mode_combo.currentIndex() == 1:  # Single page mode
-            self.preview.set_current_page(value - 1)  # 0-based index
-        
+
+        # Validate: giới hạn trong phạm vi trang đã load
+        max_loaded = len(self._all_pages)
+        if max_loaded == 0:
+            return
+
+        # Clamp value to valid range
+        clamped_value = max(1, min(value, max_loaded))
+        if clamped_value != value:
+            # Block signals to avoid recursion, then update spinbox
+            self.page_spin.blockSignals(True)
+            self.page_spin.setValue(clamped_value)
+            self.page_spin.blockSignals(False)
+            value = clamped_value
+
+        # Update preview - works for both continuous and single page mode
+        self.preview.set_current_page(value - 1)  # 0-based index
+
         # Update prev/next button states
         self.prev_page_btn.setEnabled(value > 1)
-        self.next_page_btn.setEnabled(value < self.page_spin.maximum())
-    
+        self.next_page_btn.setEnabled(value < max_loaded)
+
+    def _on_page_changed_from_scroll(self, page_index: int):
+        """Handle page change from scroll - update spinbox without triggering scroll"""
+        if not self._pdf_handler:
+            return
+
+        max_loaded = len(self._all_pages)
+        if max_loaded == 0:
+            return
+
+        # Convert 0-based index to 1-based page number
+        page_num = page_index + 1
+        page_num = max(1, min(page_num, max_loaded))
+
+        # Update spinbox without triggering _on_page_changed
+        self.page_spin.blockSignals(True)
+        self.page_spin.setValue(page_num)
+        self.page_spin.blockSignals(False)
+
+        # Update prev/next button states
+        self.prev_page_btn.setEnabled(page_num > 1)
+        self.next_page_btn.setEnabled(page_num < max_loaded)
+
     def _on_zoom_in(self):
         """Zoom in to next preset level"""
+        self._user_zoomed = True  # Track manual zoom
         zoom_levels = list(range(25, 425, 25))  # 25, 50, 75, ... 400
         current = int(self.preview.before_panel.view._zoom * 100)
-        
+
         # Find next level
         for level in zoom_levels:
             if level > current:
                 self.preview.set_zoom(level / 100.0)
                 self._update_zoom_combo()
                 return
-        
+
         # Already at max
         self.preview.set_zoom(4.0)
         self._update_zoom_combo()
     
     def _on_zoom_out(self):
         """Zoom out to previous preset level"""
+        self._user_zoomed = True  # Track manual zoom
         zoom_levels = list(range(25, 425, 25))  # 25, 50, 75, ... 400
         current = int(self.preview.before_panel.view._zoom * 100)
-        
+
         # Find previous level
         for level in reversed(zoom_levels):
             if level < current:
                 self.preview.set_zoom(level / 100.0)
                 self._update_zoom_combo()
                 return
-        
+
         # Already at min
         self.preview.set_zoom(0.25)
         self._update_zoom_combo()
     
     def _on_zoom_fit_width(self):
-        self.preview.zoom_fit_width()
+        """Fit chiều rộng trang hiện tại"""
+        self._user_zoomed = False  # Cho phép auto-fit khi resize
+        self.preview.zoom_fit_width()  # Fit trang hiện tại (không truyền param)
         self._update_zoom_combo()
     
     def _on_zoom_combo_changed(self, text):
         try:
             zoom = int(text.replace('%', '')) / 100.0
             if 0.1 <= zoom <= 5.0:
+                self._user_zoomed = True  # Track manual zoom
                 self.preview.set_zoom(zoom)
         except:
             pass
@@ -1693,11 +1750,18 @@ Dung lượng: {input_mb:.1f}MB → {output_mb:.1f}MB"""
             else:
                 event.ignore()
                 return
-        
+
         if self._pdf_handler:
             self._pdf_handler.close()
-        
+
         event.accept()
+
+    def resizeEvent(self, event):
+        """Auto fit preview to page width on window resize (unless user manually zoomed)"""
+        super().resizeEvent(event)
+        if self._pdf_handler and not self._user_zoomed:
+            self.preview.zoom_fit_width()
+            self._update_zoom_combo()
     
     def _on_open_output_folder(self):
         """Open output folder in file explorer"""
@@ -1730,8 +1794,9 @@ Dung lượng: {input_mb:.1f}MB → {output_mb:.1f}MB"""
         QMessageBox.information(self, "Hướng dẫn", help_text)
     
     def _on_fit_width(self):
-        """Fit preview to width"""
-        self.preview.zoom_fit_width()
+        """Fit chiều rộng trang hiện tại (menu action)"""
+        self._user_zoomed = False  # Cho phép auto-fit khi resize
+        self.preview.zoom_fit_width()  # Fit trang hiện tại
         self._update_zoom_combo()
     
     def _on_single_page(self):
@@ -1744,11 +1809,69 @@ Dung lượng: {input_mb:.1f}MB → {output_mb:.1f}MB"""
         # Already in continuous mode by default
         QMessageBox.information(self, "Thông báo", "Đang ở chế độ cuộn liên tục.")
     
+    def _get_device_info(self):
+        """
+        Detect GPU/CPU và trả về thông tin thiết bị YOLO sẽ sử dụng.
+
+        Returns:
+            dict: {
+                'device': 'cuda' | 'mps' | 'cpu',
+                'name': tên thiết bị,
+                'memory': dung lượng memory (nếu có),
+                'has_gpu': True/False,
+                'cpu_name': tên CPU,
+                'cpu_cores': số cores
+            }
+        """
+        import platform
+        import os
+
+        # Get CPU info
+        cpu_name = platform.processor() or 'CPU'
+        if len(cpu_name) > 30:
+            cpu_name = cpu_name[:27] + '...'
+        cpu_cores = os.cpu_count() or 1
+
+        info = {
+            'device': 'cpu',
+            'name': 'CPU',
+            'memory': '',
+            'has_gpu': False,
+            'cpu_name': cpu_name,
+            'cpu_cores': cpu_cores
+        }
+
+        try:
+            import torch
+
+            # Check CUDA (NVIDIA GPU)
+            if torch.cuda.is_available():
+                info['device'] = 'cuda'
+                info['has_gpu'] = True
+                info['name'] = torch.cuda.get_device_name(0)
+                # Get memory info
+                total_mem = torch.cuda.get_device_properties(0).total_memory
+                info['memory'] = f"{total_mem / (1024**3):.1f} GB"
+            # Check MPS (Apple Silicon)
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                info['device'] = 'mps'
+                info['has_gpu'] = True
+                info['name'] = 'Apple Silicon GPU'
+                info['memory'] = 'Shared'
+            else:
+                info['name'] = cpu_name
+        except ImportError:
+            info['name'] = cpu_name
+        except Exception:
+            info['name'] = cpu_name
+
+        return info
+
     def _show_settings_dialog(self):
         """Show settings dialog for algorithm selection"""
         dialog = QDialog(self)
         dialog.setWindowTitle("Cài đặt thuật toán")
-        dialog.setMinimumSize(450, 320)
+        dialog.setMinimumSize(500, 380)
         dialog.setStyleSheet("""
             QDialog {
                 background-color: white;
@@ -1770,42 +1893,141 @@ Dung lượng: {input_mb:.1f}MB → {output_mb:.1f}MB"""
                 height: 16px;
             }
         """)
-        
+
         layout = QVBoxLayout(dialog)
         layout.setSpacing(8)
         layout.setContentsMargins(24, 24, 24, 24)
-        
+
         # Algorithm section title
         algo_title = QLabel("Thuật toán xử lý")
         algo_title.setProperty("class", "section-title")
         algo_title.setStyleSheet("font-weight: bold; font-size: 14px; color: #374151; padding: 4px 0;")
         layout.addWidget(algo_title)
-        
+
         algo_opencv = QRadioButton("OpenCV (CPU) - Nhanh, phù hợp hầu hết trường hợp")
         algo_opencv.setChecked(True)
         layout.addWidget(algo_opencv)
-        
+
         algo_gpu = QRadioButton("Model GPU - Chất lượng cao, yêu cầu GPU")
         layout.addWidget(algo_gpu)
-        
+
         # Spacer between sections
         layout.addSpacing(16)
-        
-        # GPU options section title
+
+        # === Device Info Section ===
+        device_info = self._get_device_info()
+
+        # Title
         gpu_title = QLabel("Tùy chọn GPU")
         gpu_title.setStyleSheet("font-weight: bold; font-size: 14px; color: #374151; padding: 4px 0;")
         layout.addWidget(gpu_title)
-        
+
+        # Two-column layout: radio buttons (left) + device info (right)
+        gpu_row = QHBoxLayout()
+        gpu_row.setSpacing(16)
+
+        # Left column: Radio buttons (in button group for mutual exclusion)
+        from PyQt5.QtWidgets import QButtonGroup
+        radio_column = QVBoxLayout()
+        radio_column.setSpacing(4)
+
+        gpu_button_group = QButtonGroup(dialog)
+
         gpu_auto = QRadioButton("Tự động phát hiện")
         gpu_auto.setChecked(True)
-        layout.addWidget(gpu_auto)
-        
+        gpu_button_group.addButton(gpu_auto, 0)
+        radio_column.addWidget(gpu_auto)
+
         gpu_cuda = QRadioButton("CUDA (NVIDIA)")
-        layout.addWidget(gpu_cuda)
-        
+        gpu_button_group.addButton(gpu_cuda, 1)
+        radio_column.addWidget(gpu_cuda)
+
         gpu_cpu = QRadioButton("CPU fallback")
-        layout.addWidget(gpu_cpu)
-        
+        gpu_button_group.addButton(gpu_cpu, 2)
+        radio_column.addWidget(gpu_cpu)
+
+        radio_column.addStretch()
+        gpu_row.addLayout(radio_column)
+
+        # Right column: Device info panel (no border)
+        info_panel = QFrame()
+        info_panel.setStyleSheet("""
+            QFrame {
+                background-color: #F3F4F6;
+                border-radius: 6px;
+            }
+        """)
+        info_panel.setMinimumWidth(220)
+        info_layout = QVBoxLayout(info_panel)
+        info_layout.setContentsMargins(12, 10, 12, 10)
+        info_layout.setSpacing(2)
+
+        # Device info label (code-style, small font)
+        self._device_info_label = QLabel()
+        self._device_info_label.setStyleSheet("""
+            QLabel {
+                font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+                font-size: 11px;
+                color: #374151;
+            }
+        """)
+        self._device_info_label.setWordWrap(True)
+        info_layout.addWidget(self._device_info_label)
+
+        gpu_row.addWidget(info_panel)
+        layout.addLayout(gpu_row)
+
+        # Store device info for updates
+        self._cached_device_info = device_info
+        cpu_name = device_info['cpu_name']
+        cpu_cores = device_info['cpu_cores']
+
+        # Function to update info panel based on selection
+        def update_device_info():
+            if gpu_auto.isChecked():
+                # Auto detect - show what YOLO will actually use
+                if device_info['has_gpu']:
+                    text = f"<b>GPU (Auto)</b><br>"
+                    text += f"• {device_info['name']}<br>"
+                    if device_info['memory']:
+                        text += f"• Memory: {device_info['memory']}<br>"
+                    text += f"• CPU: {cpu_name} ({cpu_cores} cores)"
+                else:
+                    text = f"<b>CPU (Auto)</b><br>"
+                    text += f"• {cpu_name}<br>"
+                    text += f"• Cores: {cpu_cores}<br>"
+                    text += "• GPU: <i>Không tìm thấy</i>"
+
+            elif gpu_cuda.isChecked():
+                # CUDA mode - show NVIDIA info if available
+                if device_info['device'] == 'cuda':
+                    text = f"<b>CUDA</b><br>"
+                    text += f"• {device_info['name']}<br>"
+                    if device_info['memory']:
+                        text += f"• Memory: {device_info['memory']}<br>"
+                    text += f"• CPU: {cpu_name} ({cpu_cores} cores)"
+                else:
+                    text = "<b>CUDA</b><br>"
+                    text += "• <span style='color:#DC2626'>Không có NVIDIA GPU</span><br>"
+                    text += f"• Fallback: {cpu_name}<br>"
+                    text += f"• Cores: {cpu_cores}"
+
+            else:  # CPU fallback
+                text = f"<b>CPU</b><br>"
+                text += f"• {cpu_name}<br>"
+                text += f"• Cores: {cpu_cores}<br>"
+                text += "• GPU: <i>Bỏ qua</i>"
+
+            self._device_info_label.setText(text)
+
+        # Connect radio buttons to update function
+        gpu_auto.toggled.connect(update_device_info)
+        gpu_cuda.toggled.connect(update_device_info)
+        gpu_cpu.toggled.connect(update_device_info)
+
+        # Initial update
+        update_device_info()
+
         layout.addStretch()
         
         # Buttons
