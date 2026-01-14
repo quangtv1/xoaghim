@@ -1,19 +1,23 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec file for Windows build - ONNX Runtime version
-# No PyTorch dependencies - uses ONNX for YOLO inference
+# PyInstaller spec file for Windows build - ONNX Runtime version (onedir mode)
+# Builds to folder with all DLLs included for proper ONNX Runtime support
 
 import sys
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_all
+import os
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_all, collect_dynamic_libs
 
 block_cipher = None
 
-# Collect onnxruntime data files
+# Collect onnxruntime - ensure all DLLs are included
 onnx_datas, onnx_binaries, onnx_hiddenimports = collect_all('onnxruntime')
+
+# Also collect dynamic libs explicitly
+onnx_dynamic_libs = collect_dynamic_libs('onnxruntime')
 
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=onnx_binaries,
+    binaries=onnx_binaries + onnx_dynamic_libs,
     datas=[
         ('resources', 'resources'),  # Includes resources/models/*.onnx
     ] + onnx_datas,
@@ -36,6 +40,8 @@ a = Analysis(
         'shapely.validation',
         # ONNX Runtime
         'onnxruntime',
+        'onnxruntime.capi',
+        'onnxruntime.capi._pybind_state',
         # Config/Utils
         'yaml',
         'requests',
@@ -66,25 +72,33 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-# Single exe mode (simpler distribution)
+# Onedir mode - creates folder with all DLLs
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,  # Important: binaries go to COLLECT
     name='XoaGhim',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
     console=True,  # Enable console for debugging
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+# COLLECT creates the output folder with all dependencies
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='XoaGhim',
 )

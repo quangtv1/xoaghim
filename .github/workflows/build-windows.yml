@@ -30,39 +30,39 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build executable
+      - name: Build executable (onedir)
         run: |
           pyinstaller build_windows.spec --clean
+
+      - name: Create ZIP archive
+        run: |
+          cd dist
+          Compress-Archive -Path XoaGhim -DestinationPath XoaGhim-Windows.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: XoaGhim-Windows
-          path: dist/XoaGhim.exe
+          path: dist/XoaGhim-Windows.zip
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: dist/XoaGhim.exe
+          files: dist/XoaGhim-Windows.zip
           name: "Xóa Ghim PDF ${{ github.ref_name }}"
           body: |
             ## Xóa Vết Ghim PDF ${{ github.ref_name }}
 
-            ### Sửa lỗi
-            - **Fix YOLO không hoạt động trên Windows** - Bundle model trực tiếp vào exe
-
             ### Tính năng mới
-            - Thêm nút Fit Height (vừa chiều cao trang) cạnh nút Fit Width
-            - Hover effect cho các nút fit (nền xám khi di chuột)
-            - Edge padding 10px cho vùng Góc/Cạnh (xử lý trang scan nghiêng)
+            - **Custom Zone Draw Mode** - Vẽ vùng xử lý tùy chỉnh trực tiếp trên preview
+            - **Cải thiện quản lý vùng xử lý** - UI/UX tốt hơn cho việc chọn và chỉnh sửa zones
 
-            ### Cải tiến
-            - Auto-fit chiều rộng trang khi mở file và resize cửa sổ
-            - Đồng bộ số trang với vị trí scroll khi cuộn chuột
-            - Fix nút fit giữ trang hiện tại (không nhảy trang)
+            ### Sửa lỗi
+            - **Fix Qt xcb plugin error** - Sửa lỗi Qt trên Rocky Linux/RHEL/CentOS
+            - **Fix ONNX Runtime DLL** - Bundle đầy đủ thư viện ONNX Runtime
 
             ### Tải về
-            - **XoaGhim.exe** (~150MB) - Chạy trực tiếp trên Windows (không cần cài Python)
+            - **XoaGhim-Windows.zip** - Giải nén và chạy `XoaGhim.exe`
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
