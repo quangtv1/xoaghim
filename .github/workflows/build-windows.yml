@@ -25,6 +25,13 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install Visual C++ Redistributable
+        run: |
+          # Download and install VC++ Redistributable 2015-2022
+          $url = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+          Invoke-WebRequest -Uri $url -OutFile vc_redist.x64.exe
+          Start-Process -FilePath vc_redist.x64.exe -Args "/install /quiet /norestart" -Wait
+
       - name: Download ONNX Runtime DLLs
         run: |
           # Download official ONNX Runtime release with all DLLs
@@ -48,11 +55,38 @@ jobs:
 
       - name: Copy ONNX Runtime DLLs to dist
         run: |
-          # Copy official ONNX Runtime DLLs to ensure all dependencies are included
+          # Copy official ONNX Runtime DLLs
           $dllPath = "onnxruntime-official\onnxruntime-win-x64-${{ env.ONNX_VERSION }}\lib"
           Copy-Item "$dllPath\*.dll" -Destination "dist\XoaGhim\" -Force
-          # List DLLs in dist for verification
+
+          # Also copy DLLs from Python onnxruntime package
+          $pythonOnnx = python -c "import onnxruntime; import os; print(os.path.dirname(onnxruntime.__file__))"
+          Write-Host "Python onnxruntime path: $pythonOnnx"
+
+          # Copy all DLLs from onnxruntime capi folder
+          if (Test-Path "$pythonOnnx\capi\*.dll") {
+            Copy-Item "$pythonOnnx\capi\*.dll" -Destination "dist\XoaGhim\" -Force
+            Write-Host "Copied DLLs from capi folder"
+          }
+
+          # List all DLLs in dist for verification
+          Write-Host "`nDLLs in dist\XoaGhim:"
           Get-ChildItem dist\XoaGhim\*.dll | Select-Object Name, Length
+
+      - name: Copy VC++ Runtime DLLs
+        run: |
+          # Copy VC++ runtime DLLs to ensure they're bundled
+          $vcRuntimeDlls = @(
+            "C:\Windows\System32\msvcp140.dll",
+            "C:\Windows\System32\vcruntime140.dll",
+            "C:\Windows\System32\vcruntime140_1.dll"
+          )
+          foreach ($dll in $vcRuntimeDlls) {
+            if (Test-Path $dll) {
+              Copy-Item $dll -Destination "dist\XoaGhim\" -Force
+              Write-Host "Copied: $dll"
+            }
+          }
 
       - name: Create ZIP archive
         run: |
@@ -80,7 +114,7 @@ jobs:
 
             ### Sửa lỗi
             - **Fix Qt xcb plugin error** - Sửa lỗi Qt trên Rocky Linux/RHEL/CentOS
-            - **Fix ONNX Runtime DLL** - Bundle đầy đủ thư viện ONNX Runtime từ official release
+            - **Fix ONNX Runtime DLL** - Bundle đầy đủ VC++ Runtime và ONNX Runtime DLLs
 
             ### Tải về
             - **XoaGhim-Windows.zip** - Giải nén và chạy `XoaGhim.exe`
