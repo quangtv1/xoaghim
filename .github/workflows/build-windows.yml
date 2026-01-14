@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 env:
-  ONNX_VERSION: "1.20.1"
+  ONNX_VERSION: "1.22.0"
 
 jobs:
   build:
