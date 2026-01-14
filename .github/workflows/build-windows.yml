@@ -9,6 +9,9 @@ on:
 permissions:
   contents: write
 
+env:
+  ONNX_VERSION: "1.20.1"
+
 jobs:
   build:
     runs-on: windows-latest
@@ -22,17 +25,34 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Download ONNX Runtime DLLs
+        run: |
+          # Download official ONNX Runtime release with all DLLs
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v${{ env.ONNX_VERSION }}/onnxruntime-win-x64-${{ env.ONNX_VERSION }}.zip"
+          Invoke-WebRequest -Uri $url -OutFile onnxruntime.zip
+          Expand-Archive -Path onnxruntime.zip -DestinationPath onnxruntime-official
+          # List contents for debugging
+          Get-ChildItem -Recurse onnxruntime-official\*\lib\*.dll
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           # Install ONNX Runtime (no PyTorch needed)
-          pip install onnxruntime
+          pip install onnxruntime==${{ env.ONNX_VERSION }}
           pip install -r requirements.txt
           pip install pyinstaller
 
       - name: Build executable (onedir)
         run: |
           pyinstaller build_windows.spec --clean
+
+      - name: Copy ONNX Runtime DLLs to dist
+        run: |
+          # Copy official ONNX Runtime DLLs to ensure all dependencies are included
+          $dllPath = "onnxruntime-official\onnxruntime-win-x64-${{ env.ONNX_VERSION }}\lib"
+          Copy-Item "$dllPath\*.dll" -Destination "dist\XoaGhim\" -Force
+          # List DLLs in dist for verification
+          Get-ChildItem dist\XoaGhim\*.dll | Select-Object Name, Length
 
       - name: Create ZIP archive
         run: |
@@ -60,7 +80,7 @@ jobs:
 
             ### Sửa lỗi
             - **Fix Qt xcb plugin error** - Sửa lỗi Qt trên Rocky Linux/RHEL/CentOS
-            - **Fix ONNX Runtime DLL** - Bundle đầy đủ thư viện ONNX Runtime
+            - **Fix ONNX Runtime DLL** - Bundle đầy đủ thư viện ONNX Runtime từ official release
 
             ### Tải về
             - **XoaGhim-Windows.zip** - Giải nén và chạy `XoaGhim.exe`
