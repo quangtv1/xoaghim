@@ -205,6 +205,11 @@ class PDFExporter:
                 if progress_callback:
                     progress_callback(page_num + 1, total_pages)
 
+            # Ensure output directory exists
+            output_dir = os.path.dirname(output_path)
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir, exist_ok=True)
+
             # Save with compression
             out_doc.save(output_path, garbage=4, deflate=True)
             out_doc.close()

@@ -142,18 +142,12 @@ class HybridPolygonOptimizer:
         Returns:
             List[SafeZone]: Danh sách vùng an toàn có thể xóa
         """
-        print(f"[DEBUG ZoneOptimizer] optimize called:")
-        print(f"[DEBUG ZoneOptimizer]   user_zone={user_zone}")
-        print(f"[DEBUG ZoneOptimizer]   protected_regions count={len(protected_regions)}")
-        print(f"[DEBUG ZoneOptimizer]   margin={self.margin}")
-
         # Step 1: Convert user zone to Shapely Polygon
         x1, y1, x2, y2 = user_zone
         user_polygon = box(x1, y1, x2, y2)
         original_area = user_polygon.area
 
         if original_area <= 0:
-            print("[DEBUG ZoneOptimizer]   original_area <= 0, returning []")
             return []
 
         # Step 2: Filter relevant regions (intersection check)
@@ -162,13 +156,9 @@ class HybridPolygonOptimizer:
             region_poly = region.to_shapely()
             if region_poly is not None and user_polygon.intersects(region_poly):
                 relevant_regions.append(region)
-                print(f"[DEBUG ZoneOptimizer]   INTERSECTS: {region.label} bbox={region.bbox}")
-            else:
-                print(f"[DEBUG ZoneOptimizer]   no intersect: {region.label} bbox={region.bbox}")
 
         # No protected regions in zone -> return original zone as safe
         if not relevant_regions:
-            print("[DEBUG ZoneOptimizer]   No relevant regions, returning full zone")
             return [SafeZone(
                 polygon=user_polygon,
                 original_zone=user_zone,
@@ -244,14 +234,6 @@ class HybridPolygonOptimizer:
             )
             safe_zones.append(sz)
 
-            # Debug: log if polygon has holes
-            if sz.has_holes:
-                print(f"[DEBUG ZoneOptimizer]   safe_zone has {len(sz.interior_rings)} hole(s) - protected regions inside")
-
-        print(f"[DEBUG ZoneOptimizer]   Returning {len(safe_zones)} safe zones")
-        for i, sz in enumerate(safe_zones):
-            holes_info = f", holes={len(sz.interior_rings)}" if sz.has_holes else ""
-            print(f"[DEBUG ZoneOptimizer]   safe_zone[{i}]: bbox={sz.bbox}, coverage={sz.coverage:.2f}{holes_info}")
         return safe_zones
 
     def _extract_polygons(self, geometry) -> List['Polygon']:

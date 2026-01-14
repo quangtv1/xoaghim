@@ -9,6 +9,24 @@ import os
 # Add parent to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Fix Qt plugin path for Linux (Rocky/RHEL/CentOS) - must be before PyQt5 import
+if sys.platform.startswith('linux'):
+    try:
+        import PyQt5
+        pyqt5_path = PyQt5.__path__[0]
+        qt5_lib = os.path.join(pyqt5_path, 'Qt5', 'lib')
+        qt5_plugins = os.path.join(pyqt5_path, 'Qt5', 'plugins')
+
+        if os.path.isdir(qt5_lib):
+            current_ld = os.environ.get('LD_LIBRARY_PATH', '')
+            if qt5_lib not in current_ld:
+                os.environ['LD_LIBRARY_PATH'] = f"{qt5_lib}:{current_ld}"
+
+        if os.path.isdir(qt5_plugins):
+            os.environ['QT_PLUGIN_PATH'] = qt5_plugins
+    except Exception:
+        pass  # Silently ignore if PyQt5 path detection fails
+
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont

@@ -24,6 +24,7 @@ class Zone:
     height: float  # % chiều cao (0.0 - 1.0)
     threshold: int = 5
     enabled: bool = True
+    zone_type: str = 'remove'  # 'remove' (xóa) or 'protect' (bảo vệ)
     
     def to_pixels(self, img_width: int, img_height: int) -> Tuple[int, int, int, int]:
         """Chuyển đổi % sang pixels: (x, y, w, h)"""
@@ -147,16 +148,24 @@ class StapleRemover:
                     return None
             return self._remote_detector
 
-        # Sử dụng local detector (YOLO DocLayNet - recommended)
+        # Sử dụng local detector (ONNX - fastest, TensorRT/CUDA optimized)
         if self._layout_detector is None:
             try:
-                from .layout_detector import YOLODocLayNetDetector
-                self._layout_detector = YOLODocLayNetDetector(
+                # Prefer ONNX detector (TensorRT > CUDA > CPU)
+                from .layout_detector import YOLODocLayNetONNXDetector
+                self._layout_detector = YOLODocLayNetONNXDetector(
                     confidence_threshold=self._text_protection.confidence
                 )
-            except ImportError:
-                print("[Processor] Layout detector not available")
-                return None
+            except (ImportError, FileNotFoundError):
+                # Fallback to PyTorch detector
+                try:
+                    from .layout_detector import YOLODocLayNetDetector
+                    self._layout_detector = YOLODocLayNetDetector(
+                        confidence_threshold=self._text_protection.confidence
+                    )
+                except ImportError:
+                    print("[Processor] Layout detector not available")
+                    return None
         return self._layout_detector
 
     @property
@@ -201,7 +210,11 @@ class StapleRemover:
     def is_text_protection_available(self) -> bool:
         """Kiểm tra text protection có sẵn không"""
         try:
-            from .layout_detector import YOLODocLayNetDetector
+            # Check ONNX detector first (preferred)
+            try:
+                from .layout_detector import YOLODocLayNetONNXDetector
+            except ImportError:
+                from .layout_detector import YOLODocLayNetDetector
             from .zone_optimizer import is_shapely_available
             return is_shapely_available()
         except ImportError:
@@ -214,31 +227,24 @@ class StapleRemover:
         Returns:
             List[ProtectedRegion] hoặc [] nếu không khả dụng
         """
-        print(f"[DEBUG] detect_protected_regions: enabled={self._text_protection.enabled}, use_remote={self._text_protection.use_remote}")
-
         if not self._text_protection.enabled:
-            print("[DEBUG] Text protection disabled")
+            print("[Processor] Text protection disabled")
             return []
 
         detector = self.layout_detector
-        print(f"[DEBUG] detector type: {type(detector)}")
-
         if detector is None:
-            print("[DEBUG] detector is None")
+            print("[Processor] Detector is None")
             return []
 
-        is_avail = detector.is_available()
-        print(f"[DEBUG] detector.is_available() = {is_avail}")
-
-        if not is_avail:
-            print("[DEBUG] detector not available")
+        if not detector.is_available():
+            error = getattr(detector, 'get_load_error', lambda: None)()
+            print(f"[Processor] Detector not available: {error}")
             return []
 
         regions = detector.detect(
             image,
             protected_labels=self._text_protection.protected_labels
         )
-        print(f"[DEBUG] Detected {len(regions)} regions")
         return regions
     
     def get_background_color(self, image: np.ndarray) -> Tuple[int, int, int]:
@@ -432,6 +438,9 @@ class StapleRemover:
         2. Tính safe zones bằng Hybrid Polygon
         3. Chỉ xử lý trong safe zones (không chồng lên text)
 
+        Custom protect zones (zone_type='protect') được bỏ qua khi xóa
+        và được thêm vào danh sách protected regions.
+
         Args:
             image: Ảnh cần xử lý
             zones: Danh sách vùng cần xử lý
@@ -443,38 +452,52 @@ class StapleRemover:
         result = image.copy()
         h, w = image.shape[:2]
 
-        print(f"[DEBUG process_image] text_protection.enabled={self._text_protection.enabled}")
-        print(f"[DEBUG process_image] zone_optimizer={self.zone_optimizer}")
+        # Tách zones thành removal zones và protection zones
+        removal_zones = []
+        custom_protect_regions = []
 
-        # Nếu text protection được bật và khả dụng
-        if self._text_protection.enabled and self.zone_optimizer is not None:
+        for zone in zones:
+            if not zone.enabled:
+                continue
+
+            if getattr(zone, 'zone_type', 'remove') == 'protect':
+                # Custom protect zone -> convert to ProtectedRegion
+                from .layout_detector import ProtectedRegion
+                x, y, zw, zh = zone.to_pixels(w, h)
+                custom_protect_regions.append(ProtectedRegion(
+                    bbox=(x, y, x + zw, y + zh),
+                    label='custom_protect',
+                    confidence=1.0
+                ))
+            else:
+                removal_zones.append(zone)
+
+        # Combine AI-detected regions with custom protect regions
+        all_protected = list(protected_regions or []) + custom_protect_regions
+
+        # Nếu text protection được bật và khả dụng (hoặc có custom protect regions)
+        use_optimization = (self._text_protection.enabled and self.zone_optimizer is not None) or custom_protect_regions
+
+        if use_optimization and self.zone_optimizer is not None:
             # Sử dụng regions đã detect hoặc detect mới
-            if protected_regions is None:
-                protected_regions = self.detect_protected_regions(image)
-            print(f"[DEBUG process_image] Using {len(protected_regions)} protected regions")
+            if protected_regions is None and self._text_protection.enabled:
+                detected_regions = self.detect_protected_regions(image)
+                all_protected = detected_regions + custom_protect_regions
 
-            for zone in zones:
-                if not zone.enabled:
-                    continue
-
+            for zone in removal_zones:
                 # Convert zone to bbox (với edge padding cho góc/cạnh)
                 user_bbox = zone.to_bbox_with_edge_padding(w, h, padding=10)
-                print(f"[DEBUG process_image] Zone '{zone.name}' bbox={user_bbox} (with edge padding)")
 
-                # Optimize zone to get safe zones (avoiding text)
-                safe_zones = self.zone_optimizer.optimize(user_bbox, protected_regions)
-                print(f"[DEBUG process_image] Got {len(safe_zones)} safe zones after optimization")
+                # Optimize zone to get safe zones (avoiding protected regions)
+                safe_zones = self.zone_optimizer.optimize(user_bbox, all_protected)
 
                 # Process each safe zone
-                for i, safe_zone in enumerate(safe_zones):
-                    print(f"[DEBUG process_image] Processing safe_zone {i}: bbox={safe_zone.bbox}, coverage={safe_zone.coverage:.2f}")
+                for safe_zone in safe_zones:
                     result = self._process_safe_zone(result, safe_zone, zone)
         else:
-            # Original behavior - no text protection
-            print(f"[DEBUG process_image] Using original behavior (no text protection)")
-            for zone in zones:
-                if zone.enabled:
-                    result = self.process_zone(result, zone)
+            # Original behavior - no protection
+            for zone in removal_zones:
+                result = self.process_zone(result, zone)
 
         return result
 

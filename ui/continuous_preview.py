@@ -169,18 +169,19 @@ class DetectionRunner:
 
         for i, page in enumerate(self._pages):
             if self._cancelled:
-                print("[DEBUG DetectionRunner] Cancelled, stopping detection")
                 break
 
             try:
                 original_idx = self._original_indices[i]
                 regions = self._processor.detect_protected_regions(page)
                 results[original_idx] = regions
-                print(f"[DEBUG DetectionRunner] Page {original_idx}: detected {len(regions)} regions")
+                print(f"[Detection] Page {original_idx}: {len(regions)} regions found")
             except Exception as e:
                 original_idx = self._original_indices[i]
-                print(f"[DEBUG DetectionRunner] Error detecting page {original_idx}: {e}")
                 results[original_idx] = []
+                print(f"[Detection] Error on page {original_idx}: {e}")
+                import traceback
+                traceback.print_exc()
 
         # Call callback with results (if not cancelled)
         if not self._cancelled and self._callback:
@@ -189,25 +190,34 @@ class DetectionRunner:
 
 class ContinuousGraphicsView(QGraphicsView):
     """GraphicsView với nền xám và synchronized scroll"""
-    
+
     zoom_changed = pyqtSignal(float)
     scroll_changed = pyqtSignal(int, int)
-    
+    # rect_drawn: x, y, w, h (as % of page), mode ('remove' or 'protect')
+    rect_drawn = pyqtSignal(float, float, float, float, str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        
+
         # Nền xám
         self.setBackgroundBrush(QBrush(QColor(229, 231, 235)))  # Gray #E5E7EB
         self.setStyleSheet("border: none;")
-        
+
         self.setRenderHint(QPainter.Antialiasing)
         self.setRenderHint(QPainter.SmoothPixmapTransform)
         self.setDragMode(QGraphicsView.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
-        
+
         self._zoom = 1.0
         self._syncing = False
+
+        # Draw mode: None, 'remove', or 'protect'
+        self._draw_mode = None
+        self._drawing = False
+        self._draw_start = None
+        self._draw_rect_item = None
+        self._page_bounds = None  # (x, y, w, h) of current page for coordinate conversion
     
     def wheelEvent(self, event):
         """Zoom với Ctrl+Scroll"""
@@ -244,12 +254,122 @@ class ContinuousGraphicsView(QGraphicsView):
             self.verticalScrollBar().setValue(v)
             self._syncing = False
 
+    def set_draw_mode(self, mode, page_bounds: tuple = None):
+        """Enable/disable draw mode
+
+        Args:
+            mode: None (off), 'remove' (blue), or 'protect' (pink)
+            page_bounds: (x, y, w, h) of current page for coordinate conversion
+        """
+        print(f"[DrawMode] ContinuousGraphicsView.set_draw_mode: mode={mode}, page_bounds={page_bounds}")
+        self._draw_mode = mode
+        self._page_bounds = page_bounds
+        if mode:
+            self.setDragMode(QGraphicsView.NoDrag)
+            self.setCursor(Qt.CrossCursor)
+            self.viewport().setCursor(Qt.CrossCursor)
+            print(f"[DrawMode] Cursor set to CrossCursor")
+        else:
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
+            self.setCursor(Qt.ArrowCursor)
+            self.viewport().setCursor(Qt.ArrowCursor)
+            # Clean up any in-progress drawing
+            if self._draw_rect_item and self._draw_rect_item.scene():
+                self.scene().removeItem(self._draw_rect_item)
+            self._draw_rect_item = None
+            self._drawing = False
+            self._draw_start = None
+
+    def _get_draw_colors(self):
+        """Get pen and brush colors based on draw mode"""
+        if self._draw_mode == 'protect':
+            # Pink/Red for protection
+            pen = QPen(QColor(244, 114, 182), 2)  # Pink #F472B6
+            brush = QBrush(QColor(244, 114, 182, 50))
+        else:
+            # Blue for removal (default)
+            pen = QPen(QColor(59, 130, 246), 2)  # Blue #3B82F6
+            brush = QBrush(QColor(59, 130, 246, 50))
+        return pen, brush
+
+    def mousePressEvent(self, event):
+        """Start drawing if in draw mode"""
+        if self._draw_mode and event.button() == Qt.LeftButton:
+            self._drawing = True
+            self._draw_start = self.mapToScene(event.pos())
+            # Don't create rect yet - wait for actual dragging
+            self._draw_rect_item = None
+        else:
+            # Check if clicking on empty space (no item at click position)
+            if event.button() == Qt.LeftButton:
+                scene_pos = self.mapToScene(event.pos())
+                item = self.scene().itemAt(scene_pos, self.transform()) if self.scene() else None
+                # If no item or only page background, deselect all zones
+                if item is None or isinstance(item, QGraphicsPixmapItem):
+                    # Find parent panel and deselect all zones
+                    parent = self.parent()
+                    while parent:
+                        if hasattr(parent, 'deselect_all_zones'):
+                            parent.deselect_all_zones()
+                            break
+                        parent = parent.parent() if hasattr(parent, 'parent') else None
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        """Update rectangle while drawing"""
+        if self._drawing and self._draw_start:
+            current = self.mapToScene(event.pos())
+            x = min(self._draw_start.x(), current.x())
+            y = min(self._draw_start.y(), current.y())
+            w = abs(current.x() - self._draw_start.x())
+            h = abs(current.y() - self._draw_start.y())
+
+            # Only create rect if dragged enough (> 5 pixels)
+            if w > 5 or h > 5:
+                if not self._draw_rect_item:
+                    # Create rectangle item on first significant drag
+                    pen, brush = self._get_draw_colors()
+                    self._draw_rect_item = QGraphicsRectItem()
+                    self._draw_rect_item.setPen(pen)
+                    self._draw_rect_item.setBrush(brush)
+                    self._draw_rect_item.setZValue(1000)
+                    self.scene().addItem(self._draw_rect_item)
+                self._draw_rect_item.setRect(x, y, w, h)
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """Finish drawing and emit signal"""
+        if self._drawing and event.button() == Qt.LeftButton:
+            self._drawing = False
+            # Only process if rect was actually created (dragged, not just clicked)
+            if self._draw_rect_item and self._page_bounds and self._draw_mode:
+                rect = self._draw_rect_item.rect()
+                # Convert to % coordinates relative to page
+                px, py, pw, ph = self._page_bounds
+                if pw > 0 and ph > 0:
+                    # Clamp to page bounds
+                    x = max(0, (rect.x() - px) / pw)
+                    y = max(0, (rect.y() - py) / ph)
+                    w = min(1 - x, rect.width() / pw)
+                    h = min(1 - y, rect.height() / ph)
+                    # Only emit if reasonable size
+                    if w > 0.01 and h > 0.01:
+                        self.rect_drawn.emit(x, y, w, h, self._draw_mode)
+            # Clean up drawing rect but KEEP draw mode active
+            if self._draw_rect_item and self._draw_rect_item.scene():
+                self.scene().removeItem(self._draw_rect_item)
+            self._draw_rect_item = None
+            self._draw_start = None
+        else:
+            super().mouseReleaseEvent(event)
+
 
 class ContinuousPreviewPanel(QFrame):
     """
     Panel preview liên tục nhiều trang
     """
-    
+
     zone_changed = pyqtSignal(str)  # zone_id
     zone_selected = pyqtSignal(str)  # zone_id
     zone_delete = pyqtSignal(str)  # zone_id - request to delete custom zone
@@ -257,6 +377,8 @@ class ContinuousPreviewPanel(QFrame):
     folder_placeholder_clicked = pyqtSignal()  # When placeholder "Mở thư mục" is clicked
     file_dropped = pyqtSignal(str)  # When file is dropped (file_path)
     close_requested = pyqtSignal()  # When close button is clicked
+    # rect_drawn: x, y, w, h (as % of page), mode ('remove' or 'protect')
+    rect_drawn = pyqtSignal(float, float, float, float, str)
     
     PAGE_SPACING = 20  # Khoảng cách giữa các trang
     
@@ -343,6 +465,7 @@ class ContinuousPreviewPanel(QFrame):
         self.view = ContinuousGraphicsView()
         self.view.setScene(self.scene)
         self.view.setStyleSheet("background-color: #E5E7EB; border: none;")
+        self.view.rect_drawn.connect(self._on_rect_drawn)
         layout.addWidget(self.view)
         
         # Show placeholder only for before panel (show_overlay=True)
@@ -722,6 +845,7 @@ class ContinuousPreviewPanel(QFrame):
         # Connect mouse events
         self.view.mousePressEvent = self._on_view_click
         self.view.mouseMoveEvent = self._on_view_mouse_move
+        self.view.mouseReleaseEvent = self._on_view_release
         self.view.enterEvent = self._on_view_enter
         self.view.leaveEvent = self._on_view_leave
         
@@ -771,23 +895,29 @@ class ContinuousPreviewPanel(QFrame):
                 if self._folder_hover_bg:
                     self._folder_hover_bg.setBrush(QBrush(Qt.transparent))
         else:
-            QGraphicsView.mouseMoveEvent(self.view, event)
-    
+            # Call ContinuousGraphicsView's mouseMoveEvent (for draw mode support)
+            ContinuousGraphicsView.mouseMoveEvent(self.view, event)
+
     def _on_view_click(self, event):
         """Handle click on view when placeholder is shown"""
         if self._has_placeholder:
             # Get click position in scene coordinates
             scene_pos = self.view.mapToScene(event.pos())
-            
+
             # Check which icon was clicked
             if self._placeholder_file_rect and self._placeholder_file_rect.contains(scene_pos):
                 self.placeholder_clicked.emit()
             elif self._placeholder_folder_rect and self._placeholder_folder_rect.contains(scene_pos):
                 self.folder_placeholder_clicked.emit()
         else:
-            # Call parent implementation
-            QGraphicsView.mousePressEvent(self.view, event)
-    
+            # Call ContinuousGraphicsView's mousePressEvent (for draw mode support)
+            ContinuousGraphicsView.mousePressEvent(self.view, event)
+
+    def _on_view_release(self, event):
+        """Handle mouse release - route to ContinuousGraphicsView for draw mode"""
+        # Always call ContinuousGraphicsView's mouseReleaseEvent (for draw mode support)
+        ContinuousGraphicsView.mouseReleaseEvent(self.view, event)
+
     def dragEnterEvent(self, event):
         """Handle drag enter for file drop"""
         if event.mimeData().hasUrls():
@@ -880,19 +1010,20 @@ class ContinuousPreviewPanel(QFrame):
                     zw = zone_def.width * page_rect.width()
                     zh = zone_def.height * page_rect.height()
                 
-                # Create zone item
+                # Create zone item with zone_type for correct color
                 rect = QRectF(zx, zy, zw, zh)
-                zone_item = ZoneItem(f"{zone_def.id}_{page_idx}", rect)
+                zone_type = getattr(zone_def, 'zone_type', 'remove')
+                zone_item = ZoneItem(f"{zone_def.id}_{page_idx}", rect, zone_type=zone_type)
                 zone_item.setPos(page_pos)
                 zone_item.set_bounds(page_rect)
-                
+
                 zone_item.signals.zone_changed.connect(self._on_zone_changed)
                 zone_item.signals.zone_selected.connect(self._on_zone_selected)
                 zone_item.signals.zone_delete.connect(self._on_zone_delete)
-                
+
                 self.scene.addItem(zone_item)
                 self._zones.append(zone_item)
-    
+
     def _recreate_zone_overlays_single(self):
         """Tạo lại overlay zones cho trang hiện tại (single page mode)"""
         # Remove existing zones
@@ -936,16 +1067,17 @@ class ContinuousPreviewPanel(QFrame):
                 zw = zone_def.width * page_rect.width()
                 zh = zone_def.height * page_rect.height()
             
-            # Create zone item (use current page index)
+            # Create zone item with zone_type for correct color
             rect = QRectF(zx, zy, zw, zh)
-            zone_item = ZoneItem(f"{zone_def.id}_{page_idx}", rect)
+            zone_type = getattr(zone_def, 'zone_type', 'remove')
+            zone_item = ZoneItem(f"{zone_def.id}_{page_idx}", rect, zone_type=zone_type)
             zone_item.setPos(page_pos)
             zone_item.set_bounds(page_rect)
-            
+
             zone_item.signals.zone_changed.connect(self._on_zone_changed)
             zone_item.signals.zone_selected.connect(self._on_zone_selected)
             zone_item.signals.zone_delete.connect(self._on_zone_delete)
-            
+
             self.scene.addItem(zone_item)
             self._zones.append(zone_item)
     
@@ -1027,6 +1159,11 @@ class ContinuousPreviewPanel(QFrame):
         for zone in self._zones:
             zone.set_selected(zone.zone_id == zone_id)
         self.zone_selected.emit(zone_id)
+
+    def deselect_all_zones(self):
+        """Deselect all zones - restore z-order"""
+        for zone in self._zones:
+            zone.set_selected(False)
     
     def _on_zone_delete(self, zone_id: str):
         """Handle zone delete request"""
@@ -1082,15 +1219,13 @@ class ContinuousPreviewPanel(QFrame):
 
         # Colors: Red for protected regions (text areas to protect)
         pen = QPen(QColor(220, 38, 38))  # #DC2626 Red
-        pen.setWidth(2)
+        pen.setWidth(1)
         pen.setCosmetic(True)  # Pen width is in screen pixels
         brush = QBrush(QColor(220, 38, 38, 60))  # ~24% opacity
 
         page_item = self._page_items[page_idx]
         page_pos = page_item.pos()
         page_rect = page_item.boundingRect()
-
-        print(f"[DEBUG ContinuousPanel] Drawing {len(regions)} protected regions for page {page_idx} (margin={margin})")
 
         for region in regions:
             x1, y1, x2, y2 = region.bbox
@@ -1107,7 +1242,6 @@ class ContinuousPreviewPanel(QFrame):
             width = x2_expanded - x1_expanded
             height = y2_expanded - y1_expanded
             rect = QRectF(scene_x, scene_y, width, height)
-            print(f"[DEBUG ContinuousPanel] Region bbox=({x1}, {y1}, {x2}, {y2}) + margin={margin} -> ({x1_expanded}, {y1_expanded}, {x2_expanded}, {y2_expanded})")
 
             rect_item = QGraphicsRectItem(rect)
             rect_item.setPen(pen)
@@ -1115,7 +1249,6 @@ class ContinuousPreviewPanel(QFrame):
             rect_item.setZValue(100)  # High z-value to be on top
             self.scene.addItem(rect_item)
             self._protected_region_items[page_idx].append(rect_item)
-            print(f"[DEBUG ContinuousPanel] Added rect_item, scene now has {len(self.scene.items())} items")
 
         # Force view update
         self.view.viewport().update()
@@ -1128,6 +1261,52 @@ class ContinuousPreviewPanel(QFrame):
                 for item in items:
                     self.scene.removeItem(item)
             self._protected_region_items.clear()
+
+    def set_draw_mode(self, mode):
+        """Enable/disable draw mode for drawing custom zones
+
+        Args:
+            mode: None (off), 'remove' (blue), or 'protect' (pink)
+        """
+        print(f"[DrawMode] set_draw_mode called: mode={mode}")
+
+        # If turning off, always allow
+        if mode is None:
+            self.view.set_draw_mode(None, None)
+            return
+
+        # Need pages loaded to enable draw mode
+        if not self._pages or not self._page_items:
+            print(f"[DrawMode] No pages loaded: _pages={len(self._pages) if self._pages else 0}, _page_items={len(self._page_items) if self._page_items else 0}")
+            return
+
+        # Get current page bounds for coordinate conversion
+        page_bounds = None
+        print(f"[DrawMode] view_mode={self._view_mode}, current_page={self._current_page}, page_items={len(self._page_items)}")
+
+        if self._view_mode == 'single' and self._page_items:
+            page_item = self._page_items[0]
+            page_rect = page_item.boundingRect()
+            page_pos = page_item.pos()
+            page_bounds = (page_pos.x(), page_pos.y(), page_rect.width(), page_rect.height())
+        elif self._view_mode == 'continuous' and self._current_page < len(self._page_items):
+            page_item = self._page_items[self._current_page]
+            page_rect = page_item.boundingRect()
+            page_pos = page_item.pos()
+            page_bounds = (page_pos.x(), page_pos.y(), page_rect.width(), page_rect.height())
+
+        print(f"[DrawMode] page_bounds={page_bounds}")
+
+        # Only enable if we have valid page bounds
+        if page_bounds and page_bounds[2] > 0 and page_bounds[3] > 0:
+            print(f"[DrawMode] Enabling draw mode on view")
+            self.view.set_draw_mode(mode, page_bounds)
+        else:
+            print(f"[DrawMode] Invalid page_bounds, not enabling")
+
+    def _on_rect_drawn(self, x: float, y: float, w: float, h: float, mode: str):
+        """Forward rect_drawn signal - keep draw mode active for continuous drawing"""
+        self.rect_drawn.emit(x, y, w, h, mode)
 
 
 class ContinuousPreviewWidget(QWidget):
@@ -1144,6 +1323,8 @@ class ContinuousPreviewWidget(QWidget):
     file_dropped = pyqtSignal(str)  # When file is dropped (file_path)
     close_requested = pyqtSignal()  # When close button is clicked
     page_changed = pyqtSignal(int)  # Emitted when visible page changes (0-based index)
+    # rect_drawn: x, y, w, h (as % of page), mode ('remove' or 'protect')
+    rect_drawn = pyqtSignal(float, float, float, float, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1214,6 +1395,7 @@ class ContinuousPreviewWidget(QWidget):
         self.before_panel.folder_placeholder_clicked.connect(self._on_folder_placeholder_clicked)
         self.before_panel.file_dropped.connect(self._on_file_dropped)
         self.before_panel.close_requested.connect(self._on_close_requested)
+        self.before_panel.rect_drawn.connect(self._on_rect_drawn)
         splitter.addWidget(self.before_panel)
         
         # Panel SAU (chỉ kết quả)
@@ -1380,8 +1562,6 @@ class ContinuousPreviewWidget(QWidget):
         if not self._pages:
             return
 
-        print(f"[DEBUG ContinuousPreview] _do_process_all: text_protection_enabled={self._text_protection_enabled}")
-
         # Check if we need YOLO detection (when text protection enabled and pages not cached)
         pages_to_detect = []
         if self._text_protection_enabled:
@@ -1423,12 +1603,9 @@ class ContinuousPreviewWidget(QWidget):
         # Start timer to check for results
         self._result_check_timer.start()
 
-        print(f"[DEBUG ContinuousPreview] Started background detection for {len(pages_to_detect)} pages")
-
     def _on_detection_complete(self, results: dict):
         """Callback from detection thread - store results for main thread to pick up"""
         self._detection_results = results
-        print(f"[DEBUG ContinuousPreview] Detection complete, {len(results)} pages detected")
 
     def _check_detection_results(self):
         """Check if detection results are ready (called by timer in main thread)"""
@@ -1444,7 +1621,6 @@ class ContinuousPreviewWidget(QWidget):
             for page_idx, regions in results.items():
                 if page_idx < len(self._pages):
                     self._cached_regions[page_idx] = regions
-                    print(f"[DEBUG ContinuousPreview] Cached {len(regions)} regions for page {page_idx}")
 
             self._detection_pending = False
             self._detection_runner = None
@@ -1456,12 +1632,14 @@ class ContinuousPreviewWidget(QWidget):
         """Stop any running detection"""
         self._detection_pending = False
         self._detection_results = None
-        self._result_check_timer.stop()
+        try:
+            self._result_check_timer.stop()
+        except RuntimeError:
+            pass  # Timer already deleted during shutdown
 
         if self._detection_runner is not None:
             self._detection_runner.cancel()
             # Don't wait - let daemon thread die naturally
-            print("[DEBUG ContinuousPreview] Requested detection cancellation")
             self._detection_runner = None
 
     def _process_pages_with_cached_regions(self):
@@ -1491,7 +1669,6 @@ class ContinuousPreviewWidget(QWidget):
                         self._processed_pages[i] = processed
                         # Draw protected regions on before panel
                         self.before_panel.set_protected_regions(i, regions, margin=self._text_protection_margin)
-                        print(f"[DEBUG ContinuousPreview] Page {i}: using {len(regions)} cached regions")
                     else:
                         processed = self._processor.process_image(page, page_zones)
                         self._processed_pages[i] = processed
@@ -1513,7 +1690,6 @@ class ContinuousPreviewWidget(QWidget):
                         self._processed_pages[i] = processed
                         # Draw protected regions on before panel
                         self.before_panel.set_protected_regions(i, regions, margin=self._text_protection_margin)
-                        print(f"[DEBUG ContinuousPreview] Page {i}: using {len(regions)} cached regions")
                     else:
                         processed = self._processor.process_image(page, self._zones)
                         self._processed_pages[i] = processed
@@ -1531,14 +1707,12 @@ class ContinuousPreviewWidget(QWidget):
         if page_idx not in self._cached_regions:
             regions = self._processor.detect_protected_regions(page)
             self._cached_regions[page_idx] = regions
-            print(f"[DEBUG ContinuousPreview] Page {page_idx}: detected and cached {len(regions)} regions")
         return self._cached_regions[page_idx]
 
     def clear_cached_regions(self):
         """Xóa cache khi cần detect lại (thay đổi settings, load PDF mới)"""
         self._cached_regions.clear()
-        print("[DEBUG ContinuousPreview] Cleared cached regions")
-    
+            
     def _get_zones_for_page(self, page_idx: int) -> List[Zone]:
         """Get zones with page-specific coordinates for 'none' mode"""
         from core.processor import Zone
@@ -1843,3 +2017,16 @@ class ContinuousPreviewWidget(QWidget):
         # Loading overlay will be shown automatically in _start_background_detection
         self._processor.set_text_protection(options)
         self._schedule_process()
+
+    def set_draw_mode(self, mode):
+        """Enable/disable draw mode on before panel for drawing custom zones
+
+        Args:
+            mode: None (off), 'remove' (blue), or 'protect' (pink)
+        """
+        print(f"[DrawMode] ContinuousPreviewWidget.set_draw_mode: mode={mode}")
+        self.before_panel.set_draw_mode(mode)
+
+    def _on_rect_drawn(self, x: float, y: float, w: float, h: float, mode: str):
+        """Forward rect_drawn signal from before_panel"""
+        self.rect_drawn.emit(x, y, w, h, mode)

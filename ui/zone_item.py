@@ -44,38 +44,41 @@ class ZoneItem(QGraphicsRectItem):
     """
     Vùng chọn có thể kéo thả
     """
-    
-    def __init__(self, zone_id: str, rect: QRectF, parent=None):
+
+    def __init__(self, zone_id: str, rect: QRectF, zone_type: str = 'remove', parent=None):
         super().__init__(rect, parent)
-        
+
         self.zone_id = zone_id
+        self.zone_type = zone_type  # 'remove' (blue) or 'protect' (pink)
         self.signals = ZoneSignals()
-        
+
         # Appearance
         self._selected = False
-        self._hovered = False
-        
-        self.setAcceptHoverEvents(True)
+
         self.setFlag(QGraphicsItem.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
-        
+
         self.setCursor(Qt.SizeAllCursor)
-        
+
         # Create handles
         self.handles = {}
         for pos in ['tl', 'tr', 'bl', 'br', 't', 'b', 'l', 'r']:
             handle = HandleItem(pos, self)
             self.handles[pos] = handle
-        
+
         # Dragging state
         self._drag_handle = None
         self._drag_start_rect = None
         self._drag_start_pos = None
-        
+
         # Bounds (image size)
         self._bounds = None
-        
+
+        # Z-value for layering (base value, increased when selected)
+        self._base_z_value = 10
+        self.setZValue(self._base_z_value)
+
         self._update_appearance()
         self._update_handles()
     
@@ -86,23 +89,32 @@ class ZoneItem(QGraphicsRectItem):
     def set_selected(self, selected: bool):
         """Set trạng thái chọn"""
         self._selected = selected
+        # Manage z-order: selected zone goes to front
+        if selected:
+            self.setZValue(50)
+        else:
+            self.setZValue(self._base_z_value)
         self._update_appearance()
         self._update_handles()
     
     def _update_appearance(self):
-        """Cập nhật màu sắc - Blue theme"""
-        if self._selected:
-            # Xanh đậm khi được chọn
-            self.setPen(QPen(QColor(0, 82, 204), 3))
-            self.setBrush(QBrush(QColor(0, 104, 255, 100)))
-        elif self._hovered:
-            # Xanh khi hover
-            self.setPen(QPen(QColor(0, 104, 255), 2))
-            self.setBrush(QBrush(QColor(0, 104, 255, 60)))
+        """Cập nhật màu sắc dựa trên zone_type"""
+        # Colors based on zone_type
+        if self.zone_type == 'protect':
+            # Pink for protection zones
+            color_normal = QColor(244, 114, 182)      # #F472B6
+            color_selected = QColor(219, 39, 119)     # #DB2777 (darker pink)
         else:
-            # Xanh nhạt bình thường
-            self.setPen(QPen(QColor(0, 104, 255), 2))
-            self.setBrush(QBrush(QColor(0, 104, 255, 40)))
+            # Blue for removal zones (default)
+            color_normal = QColor(59, 130, 246)       # #3B82F6
+            color_selected = QColor(29, 78, 216)      # #1D4ED8 (darker blue)
+
+        if self._selected:
+            self.setPen(QPen(color_selected, 3))
+            self.setBrush(QBrush(QColor(color_normal.red(), color_normal.green(), color_normal.blue(), 100)))
+        else:
+            self.setPen(QPen(color_normal, 2))
+            self.setBrush(QBrush(QColor(color_normal.red(), color_normal.green(), color_normal.blue(), 40)))
     
     def _update_handles(self):
         """Cập nhật vị trí handles"""
@@ -121,22 +133,13 @@ class ZoneItem(QGraphicsRectItem):
         
         for pos, point in positions.items():
             self.handles[pos].setPos(point)
-            self.handles[pos].setVisible(self._selected or self._hovered)
-    
-    def hoverEnterEvent(self, event):
-        self._hovered = True
-        self._update_appearance()
-        self._update_handles()
-        super().hoverEnterEvent(event)
-    
-    def hoverLeaveEvent(self, event):
-        self._hovered = False
-        self._update_appearance()
-        self._update_handles()
-        super().hoverLeaveEvent(event)
+            self.handles[pos].setVisible(self._selected)
     
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
+            # Emit zone_selected signal first - this triggers set_selected() which handles z-order
+            self.signals.zone_selected.emit(self.zone_id)
+
             # Check if clicking on a handle
             pos = event.pos()
             for handle_pos, handle in self.handles.items():
@@ -146,14 +149,12 @@ class ZoneItem(QGraphicsRectItem):
                     self._drag_start_pos = event.scenePos()
                     event.accept()
                     return
-            
+
             # Otherwise, start moving
             self._drag_handle = None
             self._drag_start_rect = self.rect()
             self._drag_start_pos = event.scenePos()
-            
-            self.signals.zone_selected.emit(self.zone_id)
-        
+
         super().mousePressEvent(event)
     
     def mouseMoveEvent(self, event):
@@ -212,6 +213,7 @@ class ZoneItem(QGraphicsRectItem):
         self._drag_handle = None
         self._drag_start_rect = None
         self._drag_start_pos = None
+        # Don't restore z-value here - let set_selected handle it
         self.signals.zone_changed.emit(self.zone_id)
         super().mouseReleaseEvent(event)
     
@@ -234,7 +236,9 @@ class ZoneItem(QGraphicsRectItem):
             'margin_right': 'cạnh phải',
         }
         
-        if base_id.startswith('custom'):
+        if base_id.startswith('protect'):
+            delete_text = "Xóa vùng bảo vệ"
+        elif base_id.startswith('custom'):
             delete_text = "Xóa vùng tùy biến"
         elif base_id in zone_names:
             delete_text = f"Xóa vùng {zone_names[base_id]}"

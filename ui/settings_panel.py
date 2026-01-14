@@ -47,6 +47,8 @@ class SettingsPanel(QWidget):
     page_filter_changed = pyqtSignal(str)  # 'all', 'odd', 'even'
     output_settings_changed = pyqtSignal(str, str)  # output_dir, filename_pattern
     text_protection_changed = pyqtSignal(object)  # TextProtectionOptions
+    # Draw mode signal: None = off, 'remove' = draw removal zone, 'protect' = draw protection zone
+    draw_mode_changed = pyqtSignal(object)  # str or None
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -160,7 +162,7 @@ class SettingsPanel(QWidget):
         self.zone_selector = ZoneSelectorWidget()
         self.zone_selector.zones_changed.connect(self._on_zone_selector_changed)
         self.zone_selector.zone_clicked.connect(self._on_zone_clicked)
-        self.zone_selector.add_custom_zone.connect(self._on_add_custom_zone)
+        self.zone_selector.draw_mode_changed.connect(self._on_draw_mode_changed)
         self.zone_selector.setStyleSheet("background-color: #FFFFFF; border: none;")
         zone_icons_col.addWidget(self.zone_selector)
         
@@ -554,32 +556,55 @@ class SettingsPanel(QWidget):
         self.width_label.setText(f"{self.width_slider.value()}%")
         self.height_label.setText(f"{self.height_slider.value()}%")
     
-    def _on_add_custom_zone(self):
-        """Thêm vùng tùy biến"""
+    def _on_draw_mode_changed(self, mode):
+        """Forward draw mode signal to MainWindow (mode: 'remove', 'protect', or None)"""
+        print(f"[DrawMode] SettingsPanel._on_draw_mode_changed: mode={mode}")
+        self.draw_mode_changed.emit(mode)
+
+    def add_custom_zone_from_rect(self, x: float, y: float, width: float, height: float, zone_type: str = 'remove'):
+        """Add custom zone from drawn rectangle (coordinates as % 0.0-1.0)
+
+        Args:
+            x, y, width, height: Zone coordinates as percentages (0.0-1.0)
+            zone_type: 'remove' for removal zone, 'protect' for protection zone
+        """
+        print(f"[DrawMode] add_custom_zone_from_rect: x={x:.3f}, y={y:.3f}, w={width:.3f}, h={height:.3f}, type={zone_type}")
         self._custom_zone_counter += 1
-        zone_id = f'custom_{self._custom_zone_counter}'
-        
+
+        if zone_type == 'protect':
+            zone_id = f'protect_{self._custom_zone_counter}'
+            zone_name = f'Bảo vệ {self._custom_zone_counter}'
+        else:
+            zone_id = f'custom_{self._custom_zone_counter}'
+            zone_name = f'Xóa ghim {self._custom_zone_counter}'
+
         self._custom_zones[zone_id] = Zone(
             id=zone_id,
-            name=f'Tùy biến {self._custom_zone_counter}',
-            x=0.3,
-            y=0.3,
-            width=0.15,
-            height=0.15,
+            name=zone_name,
+            x=x,
+            y=y,
+            width=width,
+            height=height,
             threshold=self.threshold_slider.value(),
-            enabled=True
+            enabled=True,
+            zone_type=zone_type  # 'remove' or 'protect'
         )
-        
+
         # Add to selection history
         self._zone_selection_history.append(zone_id)
-        
+
         self._update_zone_combo()
         self._emit_zones()
-        
+
         # Select the new zone
         idx = self.zone_combo.findData(zone_id)
         if idx >= 0:
             self.zone_combo.setCurrentIndex(idx)
+        # Keep draw mode active - user can continue drawing more zones
+
+    def set_draw_mode(self, mode):
+        """Set draw mode state (mode: 'remove', 'protect', or None)"""
+        self.zone_selector.set_draw_mode(mode)
     
     def delete_zone(self, zone_id: str):
         """Xóa vùng (bất kỳ loại nào: góc, cạnh, tùy biến)"""
@@ -590,8 +615,8 @@ class SettingsPanel(QWidget):
         if base_id in self._zone_selection_history:
             self._zone_selection_history.remove(base_id)
         
-        if base_id.startswith('custom'):
-            # Custom zone - remove from custom_zones dict
+        if base_id.startswith('custom') or base_id.startswith('protect'):
+            # Custom/Protect zone - remove from custom_zones dict
             if base_id in self._custom_zones:
                 del self._custom_zones[base_id]
             # Update combo and emit for custom zones

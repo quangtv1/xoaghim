@@ -218,13 +218,9 @@ class PreviewPanel(QFrame):
         Args:
             regions: List of ProtectedRegion objects with bbox (x1, y1, x2, y2)
         """
-        print(f"[DEBUG PreviewPanel] set_protected_regions called with {len(regions)} regions")
-        print(f"[DEBUG PreviewPanel] _show_protected_overlay = {self._show_protected_overlay}")
-
         self.clear_protected_regions()
 
         if not self._show_protected_overlay:
-            print("[DEBUG PreviewPanel] _show_protected_overlay is False, returning early")
             return
 
         # Colors: Red for protected regions (text areas to protect)
@@ -234,18 +230,15 @@ class PreviewPanel(QFrame):
 
         for region in regions:
             x1, y1, x2, y2 = region.bbox
-            print(f"[DEBUG PreviewPanel] Drawing region: bbox=({x1}, {y1}, {x2}, {y2})")
             rect_item = QGraphicsRectItem(QRectF(x1, y1, x2 - x1, y2 - y1))
             rect_item.setPen(pen)
             rect_item.setBrush(brush)
             rect_item.setZValue(100)  # High z-value to be on top
             self.scene.addItem(rect_item)
             self._protected_regions.append(rect_item)
-            print(f"[DEBUG PreviewPanel] Added rect_item to scene, total items: {len(self.scene.items())}")
 
         # Force view update
         self.view.viewport().update()
-        print(f"[DEBUG PreviewPanel] View updated, total protected regions: {len(self._protected_regions)}")
 
     def clear_protected_regions(self):
         """Clear all protected region overlays"""
@@ -392,16 +385,12 @@ class PreviewWidget(QWidget):
         if self._original_image is None:
             return
 
-        print(f"[DEBUG Preview] _do_process: text_protection_enabled={self._text_protection_enabled}")
-
         # Process with text protection if enabled
         if self._text_protection_enabled:
-            print("[DEBUG Preview] Calling process_image_with_regions")
             self._processed_image, self._protected_regions = \
                 self._processor.process_image_with_regions(
                     self._original_image, self._zones
                 )
-            print(f"[DEBUG Preview] Got {len(self._protected_regions)} protected regions")
             # Update protected regions overlay
             self.before_panel.set_protected_regions(self._protected_regions)
         else:
@@ -452,7 +441,6 @@ class PreviewWidget(QWidget):
 
     def set_text_protection(self, options: TextProtectionOptions):
         """Set text protection options"""
-        print(f"[DEBUG Preview] set_text_protection: enabled={options.enabled}, use_remote={options.use_remote}, url={options.remote_url}")
         self._text_protection_enabled = options.enabled
         self._processor.set_text_protection(options)
         self._schedule_process()

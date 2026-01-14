@@ -14,6 +14,7 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QEvent, QObject, QRect,
 from PyQt5.QtGui import QKeySequence, QDragEnterEvent, QDropEvent, QPixmap, QPainter, QPen, QIcon, QColor
 
 import os
+import time
 from pathlib import Path
 from typing import Optional, List
 import numpy as np
@@ -102,10 +103,10 @@ class HoverMenuButton(QPushButton):
 
 class ProcessThread(QThread):
     """Thread xử lý PDF"""
-    
-    progress = pyqtSignal(int, int)
+
+    progress = pyqtSignal(int, int)  # current_page, total_pages
     finished = pyqtSignal(bool, str)
-    
+
     def __init__(self, input_path: str, output_path: str, zones: List[Zone], settings: dict):
         super().__init__()
         self.input_path = input_path
@@ -113,20 +114,25 @@ class ProcessThread(QThread):
         self.zones = zones
         self.settings = settings
         self._cancelled = False
-    
+        self._total_pages = 0
+
     def run(self):
         try:
+            start_time = time.time()
             processor = StapleRemover(protect_red=self.settings.get('protect_red', True))
-            
+
             def process_func(image, page_num):
                 if self._cancelled:
                     return image
+                # Log format: Trang X/Y: full_path
+                print(f"Trang {page_num}/{self._total_pages}: {self.input_path}")
                 return processor.process_image(image, self.zones)
-            
+
             def progress_callback(current, total):
+                self._total_pages = total
                 if not self._cancelled:
                     self.progress.emit(current, total)
-            
+
             success = PDFExporter.export(
                 self.input_path,
                 self.output_path,
@@ -136,17 +142,22 @@ class ProcessThread(QThread):
                 optimize_size=self.settings.get('optimize_size', False),
                 progress_callback=progress_callback
             )
-            
+
+            # Log elapsed time after file completes
+            elapsed = int(time.time() - start_time)
+            h, m, s = elapsed // 3600, (elapsed % 3600) // 60, elapsed % 60
+            print(f">> Thời gian: {h:02d}:{m:02d}:{s:02d}")
+
             if self._cancelled:
                 self.finished.emit(False, "Đã hủy")
             elif success:
                 self.finished.emit(True, self.output_path)
             else:
                 self.finished.emit(False, "Lỗi khi xử lý")
-                
+
         except Exception as e:
             self.finished.emit(False, str(e))
-    
+
     def cancel(self):
         self._cancelled = True
 
@@ -177,37 +188,51 @@ class BatchProcessThread(QThread):
             'input_size': 0,
             'output_size': 0
         }
-        
+
         try:
+            start_time = time.time()
             processor = StapleRemover(protect_red=self.settings.get('protect_red', True))
-            
+
             for i, input_path in enumerate(self.files):
                 if self._cancelled:
                     break
-                
+
                 filename = os.path.basename(input_path)
                 self.progress.emit(i + 1, len(self.files), filename)
-                
+
                 try:
                     # Generate output path
                     output_path = self._get_output_path(input_path)
-                    
+
                     # Create output directory if needed
                     output_dir = os.path.dirname(output_path)
-                    os.makedirs(output_dir, exist_ok=True)
-                    
+                    if output_dir:
+                        os.makedirs(output_dir, exist_ok=True)
+
                     # Get file sizes
                     stats['input_size'] += os.path.getsize(input_path)
-                    
+
+                    # Closure để capture file index và full path cho logging
+                    file_idx = i + 1
+                    total_files = len(self.files)
+                    pdf_path = input_path
+                    zones_list = self.zones
+
+                    # Blank line giữa các file (trừ file đầu)
+                    if i > 0:
+                        print()
+
                     def process_func(image, page_num):
                         if self._cancelled:
                             return image
-                        return processor.process_image(image, self.zones)
-                    
+                        # Log format: STT/Tổng: full_path >> Trang X
+                        print(f"{file_idx}/{total_files}: {pdf_path} >> Trang {page_num}")
+                        return processor.process_image(image, zones_list)
+
                     def page_progress(current, total):
                         if not self._cancelled:
                             self.file_progress.emit(current, total)
-                    
+
                     success = PDFExporter.export(
                         input_path,
                         output_path,
@@ -217,14 +242,19 @@ class BatchProcessThread(QThread):
                         optimize_size=self.settings.get('optimize_size', False),
                         progress_callback=page_progress
                     )
-                    
+
+                    # Log elapsed time after each file
+                    elapsed = int(time.time() - start_time)
+                    h, m, s = elapsed // 3600, (elapsed % 3600) // 60, elapsed % 60
+                    print(f">> Thời gian: {h:02d}:{m:02d}:{s:02d}")
+
                     if success and os.path.exists(output_path):
                         stats['success'] += 1
                         stats['output_size'] += os.path.getsize(output_path)
                     else:
                         stats['failed'] += 1
                         stats['errors'].append(f"{filename}: Lỗi xuất file")
-                        
+
                 except Exception as e:
                     stats['failed'] += 1
                     stats['errors'].append(f"{filename}: {str(e)}")
@@ -258,7 +288,7 @@ class MainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        
+
         self._pdf_handler: Optional[PDFHandler] = None
         self._all_pages: List[np.ndarray] = []
         self._process_thread: Optional[ProcessThread] = None
@@ -270,13 +300,17 @@ class MainWindow(QMainWindow):
         self._batch_files: List[str] = []
         self._last_dir = ""  # Remember last opened folder
         self._user_zoomed = False  # Track if user has manually zoomed
-        
+        self._current_draw_mode = None  # Track current draw mode for cancel logic
+
         self.setWindowTitle("Xóa Vết Ghim PDF")
         self.setMinimumSize(1200, 800)
         self.setAcceptDrops(True)
-        
+
         self._setup_ui()
         self._update_ui_state()
+
+        # Install event filter to cancel draw mode on click outside preview
+        QApplication.instance().installEventFilter(self)
     
     def _setup_ui(self):
         """Thiết lập giao diện"""
@@ -298,6 +332,7 @@ class MainWindow(QMainWindow):
         self.settings_panel.page_filter_changed.connect(self._on_page_filter_changed)
         self.settings_panel.output_settings_changed.connect(self._on_output_settings_changed)
         self.settings_panel.text_protection_changed.connect(self._on_text_protection_changed)
+        self.settings_panel.draw_mode_changed.connect(self._on_draw_mode_changed)
         self.settings_panel.setVisible(True)  # Visible by default
         layout.addWidget(self.settings_panel)
         
@@ -338,6 +373,7 @@ class MainWindow(QMainWindow):
         self.preview.file_dropped.connect(self._on_file_dropped)
         self.preview.close_requested.connect(self._on_close_file)
         self.preview.page_changed.connect(self._on_page_changed_from_scroll)
+        self.preview.rect_drawn.connect(self._on_rect_drawn_from_preview)
         self.preview_splitter.addWidget(self.preview)
         
         # Set initial splitter sizes (file list: 200, preview: stretch)
@@ -644,7 +680,7 @@ class MainWindow(QMainWindow):
         menu_layout.addStretch()
         
         # === Run Button (right side) ===
-        self.run_btn = QPushButton("▶ Run")
+        self.run_btn = QPushButton("▶ Clean")
         self.run_btn.setStyleSheet("""
             QPushButton {
                 background-color: #0043a5;
@@ -1030,16 +1066,16 @@ class MainWindow(QMainWindow):
         self._batch_base_dir = folder_path
         self._batch_files = pdf_files
         
-        # Get output dir and filename pattern from settings
-        settings = self.settings_panel.get_settings()
-        output_dir = settings.get('output_path', '')
-        filename_pattern = settings.get('filename_pattern', '{gốc}_clean.pdf')
-        if not output_dir:
-            output_dir = folder_path  # Same as source by default
+        # Always default output to source folder when opening new batch
+        output_dir = folder_path
         self._batch_output_dir = output_dir
 
-        # Update settings panel output path
+        # Update settings panel output path to source folder
         self.settings_panel.set_output_path(output_dir)
+
+        # Get filename pattern from settings
+        settings = self.settings_panel.get_settings()
+        filename_pattern = settings.get('filename_pattern', '{gốc}_clean.pdf')
 
         # Show batch file list with filename pattern
         self.batch_file_list.set_folder(folder_path, output_dir, pdf_files, filename_pattern)
@@ -1297,6 +1333,16 @@ class MainWindow(QMainWindow):
         """Handle text protection settings change"""
         self.preview.set_text_protection(options)
 
+    def _on_draw_mode_changed(self, mode):
+        """Handle draw mode toggle from settings panel (mode: 'remove', 'protect', or None)"""
+        print(f"[DrawMode] MainWindow._on_draw_mode_changed: mode={mode}")
+        self._current_draw_mode = mode
+        self.preview.set_draw_mode(mode)
+
+    def _on_rect_drawn_from_preview(self, x: float, y: float, w: float, h: float, mode: str):
+        """Handle rectangle drawn on preview - create custom zone"""
+        self.settings_panel.add_custom_zone_from_rect(x, y, w, h, mode)
+
     def _on_output_settings_changed(self, output_dir: str, filename_pattern: str):
         """Handle output settings change - update batch file list"""
         if self._batch_mode:
@@ -1331,41 +1377,29 @@ class MainWindow(QMainWindow):
         """Xử lý single file"""
         if not self._pdf_handler:
             return
-        
+
         settings = self.settings_panel.get_settings()
-        
+
         output_dir = settings.get('output_path', '')
         if not output_dir:
             QMessageBox.warning(self, "Thiếu thông tin", "Vui lòng chọn thư mục đầu ra!")
             return
-        
+
         input_name = Path(self._pdf_handler.pdf_path).stem
         pattern = settings.get('filename_pattern', '{gốc}_clean.pdf')
         output_name = pattern.replace('{gốc}', input_name)
         output_path = os.path.join(output_dir, output_name)
-        
+
         if os.path.exists(output_path):
             if not self._show_overwrite_dialog(output_path):
                 return
-        
+
         zones = self.settings_panel.get_zones()
-        
-        self._process_thread = ProcessThread(
-            self._pdf_handler.pdf_path,
-            output_path,
-            zones,
-            settings
+
+        # Show progress dialog like batch mode
+        self._show_single_progress_dialog(
+            self._pdf_handler.pdf_path, output_path, zones, settings
         )
-        self._process_thread.progress.connect(self._on_process_progress)
-        self._process_thread.finished.connect(self._on_process_finished)
-        
-        self.run_btn.setVisible(False)
-        self.cancel_btn.setVisible(True)
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setValue(0)
-        
-        self._process_thread.start()
-        self.statusBar().showMessage("Đang xử lý...")
     
     def _on_process_batch(self):
         """Xử lý batch files"""
@@ -1432,7 +1466,131 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Lỗi", f"Lỗi khi xử lý:\n{message}")
         
         self._process_thread = None
-    
+
+    def _show_single_progress_dialog(self, input_path: str, output_path: str,
+                                     zones: List[Zone], settings: dict):
+        """Show progress dialog for single file processing"""
+        self._single_dialog = QDialog(self)
+        self._single_dialog.setWindowTitle("Đang xử lý...")
+        self._single_dialog.setMinimumSize(500, 200)
+        self._single_dialog.setModal(True)
+        self._single_dialog.setStyleSheet("""
+            QDialog { background-color: white; }
+            QLabel { font-size: 13px; font-weight: normal; }
+            QProgressBar {
+                border: 1px solid #D1D5DB;
+                border-radius: 4px;
+                text-align: center;
+                height: 24px;
+            }
+            QProgressBar::chunk {
+                background-color: #3B82F6;
+                border-radius: 3px;
+            }
+            QPushButton {
+                padding: 8px 16px; border-radius: 4px; font-size: 13px;
+                min-width: 80px; background-color: #E5E7EB;
+                color: #374151; border: 1px solid #D1D5DB;
+            }
+            QPushButton:hover { background-color: #D1D5DB; }
+        """)
+
+        layout = QVBoxLayout(self._single_dialog)
+        layout.setSpacing(12)
+        layout.setContentsMargins(24, 24, 24, 24)
+
+        # File label
+        filename = os.path.basename(input_path)
+        self._single_file_label = QLabel(f"File: {filename}")
+        layout.addWidget(self._single_file_label)
+
+        # Progress bar
+        self._single_progress = QProgressBar()
+        self._single_progress.setMaximum(100)
+        self._single_progress.setValue(0)
+        layout.addWidget(self._single_progress)
+
+        # Page label
+        self._single_page_label = QLabel("Đang chuẩn bị...")
+        layout.addWidget(self._single_page_label)
+
+        # Timer label
+        self._single_time_label = QLabel("Thời gian: 00:00:00")
+        layout.addWidget(self._single_time_label)
+
+        layout.addStretch()
+
+        # Cancel button
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        cancel_btn = QPushButton("Hủy")
+        cancel_btn.clicked.connect(self._on_single_cancel)
+        btn_layout.addWidget(cancel_btn)
+
+        layout.addLayout(btn_layout)
+
+        # Timer for elapsed time
+        self._single_start_time = time.time()
+        self._single_timer = QTimer()
+        self._single_timer.timeout.connect(self._update_single_timer)
+        self._single_timer.start(1000)
+
+        # Start processing
+        self._process_thread = ProcessThread(input_path, output_path, zones, settings)
+        self._process_thread.progress.connect(self._on_single_progress)
+        self._process_thread.finished.connect(self._on_single_finished)
+
+        self._single_output_path = output_path
+        self._process_thread.start()
+        self._single_dialog.exec_()
+
+    def _update_single_timer(self):
+        """Update elapsed time display"""
+        elapsed = int(time.time() - self._single_start_time)
+        h, m, s = elapsed // 3600, (elapsed % 3600) // 60, elapsed % 60
+        self._single_time_label.setText(f"Thời gian: {h:02d}:{m:02d}:{s:02d}")
+
+    def _on_single_progress(self, current: int, total: int):
+        """Update single file progress"""
+        percent = int(current * 100 / total) if total > 0 else 0
+        self._single_progress.setValue(percent)
+        self._single_page_label.setText(f"Trang: {current}/{total}")
+
+    def _on_single_cancel(self):
+        """Cancel single file processing"""
+        if hasattr(self, '_single_timer'):
+            self._single_timer.stop()
+        if self._process_thread:
+            self._process_thread.cancel()
+        if hasattr(self, '_single_dialog'):
+            self._single_dialog.close()
+
+    def _on_single_finished(self, success: bool, message: str):
+        """Single file processing finished"""
+        # Stop timer and get elapsed time
+        if hasattr(self, '_single_timer'):
+            self._single_timer.stop()
+        elapsed = int(time.time() - self._single_start_time) if hasattr(self, '_single_start_time') else 0
+
+        if hasattr(self, '_single_dialog'):
+            self._single_dialog.close()
+
+        if success:
+            self._result_path = message
+            input_size = os.path.getsize(self._pdf_handler.pdf_path) / (1024 * 1024)
+            output_size = os.path.getsize(message) / (1024 * 1024)
+            self.statusBar().showMessage(
+                f"✅ Hoàn thành! {input_size:.1f}MB → {output_size:.1f}MB"
+            )
+            self._show_completion_dialog(message, input_size, output_size, elapsed)
+        else:
+            self.statusBar().showMessage(f"❌ {message}")
+            if message != "Đã hủy":
+                QMessageBox.critical(self, "Lỗi", f"Lỗi khi xử lý:\n{message}")
+
+        self._process_thread = None
+
     def _on_open_folder(self):
         if hasattr(self, '_result_path') and self._result_path:
             folder = os.path.dirname(self._result_path)
@@ -1448,11 +1606,16 @@ class MainWindow(QMainWindow):
             else:
                 os.system(f'open "{self._result_path}"' if os.uname().sysname == 'Darwin' else f'xdg-open "{self._result_path}"')
     
-    def _show_completion_dialog(self, output_path: str, input_size: float, output_size: float):
+    def _show_completion_dialog(self, output_path: str, input_size: float, output_size: float,
+                                elapsed: int = 0):
         """Show custom completion dialog"""
+        # Format elapsed time
+        h, m, s = elapsed // 3600, (elapsed % 3600) // 60, elapsed % 60
+        time_str = f"{h:02d}:{m:02d}:{s:02d}"
+
         dialog = QDialog(self)
         dialog.setWindowTitle("Hoàn thành")
-        dialog.setMinimumSize(450, 180)
+        dialog.setMinimumSize(450, 200)
         dialog.setStyleSheet("""
             QDialog {
                 background-color: white;
@@ -1474,16 +1637,17 @@ class MainWindow(QMainWindow):
                 background-color: #D1D5DB;
             }
         """)
-        
+
         layout = QVBoxLayout(dialog)
         layout.setSpacing(16)
         layout.setContentsMargins(24, 24, 24, 24)
-        
+
         # Message (Regular font, not bold)
         msg_label = QLabel(
             f"Đã xử lý xong!\n\n"
             f"File đầu ra: {output_path}\n"
-            f"Dung lượng: {input_size:.1f}MB → {output_size:.1f}MB"
+            f"Dung lượng: {input_size:.1f}MB → {output_size:.1f}MB\n"
+            f"Thời gian: {time_str}"
         )
         msg_label.setWordWrap(True)
         layout.addWidget(msg_label)
@@ -1611,12 +1775,12 @@ class MainWindow(QMainWindow):
         
         return dialog.exec_() == QDialog.Accepted
     
-    def _show_batch_progress_dialog(self, files: List[str], output_dir: str, 
+    def _show_batch_progress_dialog(self, files: List[str], output_dir: str,
                                     zones: List[Zone], settings: dict):
         """Show batch processing progress dialog"""
         self._batch_dialog = QDialog(self)
         self._batch_dialog.setWindowTitle("Đang xử lý...")
-        self._batch_dialog.setMinimumSize(500, 200)
+        self._batch_dialog.setMinimumSize(500, 220)
         self._batch_dialog.setModal(True)
         self._batch_dialog.setStyleSheet("""
             QDialog { background-color: white; }
@@ -1638,46 +1802,62 @@ class MainWindow(QMainWindow):
             }
             QPushButton:hover { background-color: #D1D5DB; }
         """)
-        
+
         layout = QVBoxLayout(self._batch_dialog)
-        layout.setSpacing(16)
+        layout.setSpacing(12)
         layout.setContentsMargins(24, 24, 24, 24)
-        
+
         # Current file label
         self._batch_file_label = QLabel("Đang chuẩn bị...")
         layout.addWidget(self._batch_file_label)
-        
+
         # Progress bar
         self._batch_progress = QProgressBar()
         self._batch_progress.setMaximum(len(files))
         self._batch_progress.setValue(0)
         layout.addWidget(self._batch_progress)
-        
+
         # Stats label
         self._batch_stats_label = QLabel(f"0/{len(files)} files")
         layout.addWidget(self._batch_stats_label)
-        
+
+        # Timer label
+        self._batch_time_label = QLabel("Thời gian: 00:00:00")
+        layout.addWidget(self._batch_time_label)
+
         layout.addStretch()
-        
+
         # Cancel button
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
-        
+
         cancel_btn = QPushButton("Hủy")
         cancel_btn.clicked.connect(self._on_batch_cancel)
         btn_layout.addWidget(cancel_btn)
-        
+
         layout.addLayout(btn_layout)
-        
+
+        # Timer for elapsed time
+        self._batch_start_time = time.time()
+        self._batch_timer = QTimer()
+        self._batch_timer.timeout.connect(self._update_batch_timer)
+        self._batch_timer.start(1000)
+
         # Start batch processing
         self._batch_process_thread = BatchProcessThread(
             files, self._batch_base_dir, output_dir, zones, settings
         )
         self._batch_process_thread.progress.connect(self._on_batch_progress)
         self._batch_process_thread.finished.connect(self._on_batch_finished)
-        
+
         self._batch_process_thread.start()
         self._batch_dialog.exec_()
+
+    def _update_batch_timer(self):
+        """Update batch elapsed time display"""
+        elapsed = int(time.time() - self._batch_start_time)
+        h, m, s = elapsed // 3600, (elapsed % 3600) // 60, elapsed % 60
+        self._batch_time_label.setText(f"Thời gian: {h:02d}:{m:02d}:{s:02d}")
     
     def _on_batch_progress(self, current: int, total: int, filename: str):
         """Update batch progress"""
@@ -1687,26 +1867,37 @@ class MainWindow(QMainWindow):
     
     def _on_batch_cancel(self):
         """Cancel batch processing"""
+        if hasattr(self, '_batch_timer'):
+            self._batch_timer.stop()
         if self._batch_process_thread:
             self._batch_process_thread.cancel()
         if hasattr(self, '_batch_dialog'):
             self._batch_dialog.close()
-    
+
     def _on_batch_finished(self, success: bool, stats: dict):
         """Batch processing finished"""
+        # Stop timer and get elapsed time
+        if hasattr(self, '_batch_timer'):
+            self._batch_timer.stop()
+        elapsed = int(time.time() - self._batch_start_time) if hasattr(self, '_batch_start_time') else 0
+
         if hasattr(self, '_batch_dialog'):
             self._batch_dialog.close()
-        
+
         # Show completion dialog
-        self._show_batch_completion_dialog(stats)
-        
+        self._show_batch_completion_dialog(stats, elapsed)
+
         self._batch_process_thread = None
-    
-    def _show_batch_completion_dialog(self, stats: dict):
+
+    def _show_batch_completion_dialog(self, stats: dict, elapsed: int = 0):
         """Show batch completion dialog"""
+        # Format elapsed time
+        h, m, s = elapsed // 3600, (elapsed % 3600) // 60, elapsed % 60
+        time_str = f"{h:02d}:{m:02d}:{s:02d}"
+
         dialog = QDialog(self)
         dialog.setWindowTitle("Hoàn thành")
-        dialog.setMinimumSize(450, 250)
+        dialog.setMinimumSize(450, 280)
         dialog.setStyleSheet("""
             QDialog { background-color: white; }
             QLabel { font-size: 13px; font-weight: normal; }
@@ -1717,15 +1908,15 @@ class MainWindow(QMainWindow):
             }
             QPushButton:hover { background-color: #D1D5DB; }
         """)
-        
+
         layout = QVBoxLayout(dialog)
         layout.setSpacing(16)
         layout.setContentsMargins(24, 24, 24, 24)
-        
+
         # Stats
         input_mb = stats['input_size'] / (1024 * 1024)
         output_mb = stats['output_size'] / (1024 * 1024)
-        
+
         msg = f"""Đã xử lý xong!
 
 Tổng số file: {stats['total']}
@@ -1733,7 +1924,8 @@ Thành công: {stats['success']}
 Lỗi: {stats['failed']}
 
 Thư mục đầu ra: {self._batch_output_dir}
-Dung lượng: {input_mb:.1f}MB → {output_mb:.1f}MB"""
+Dung lượng: {input_mb:.1f}MB → {output_mb:.1f}MB
+Thời gian: {time_str}"""
         
         msg_label = QLabel(msg)
         msg_label.setWordWrap(True)
@@ -1808,6 +2000,36 @@ Dung lượng: {input_mb:.1f}MB → {output_mb:.1f}MB"""
             self._pdf_handler.close()
 
         event.accept()
+
+    def eventFilter(self, obj, event):
+        """Cancel draw mode when clicking outside the preview before_panel"""
+        from PyQt5.QtCore import QEvent
+
+        if event.type() == QEvent.MouseButtonPress and self._current_draw_mode is not None:
+            # Check if click is inside the before_panel of preview
+            click_pos = event.globalPos()
+            before_panel = self.preview.before_panel
+
+            # Get before_panel's global geometry
+            panel_rect = before_panel.rect()
+            panel_global_pos = before_panel.mapToGlobal(panel_rect.topLeft())
+            panel_global_rect = panel_rect.translated(panel_global_pos)
+
+            if not panel_global_rect.contains(click_pos):
+                # Click is outside before_panel - cancel draw mode
+                # But don't cancel if clicking on the custom icon itself
+                custom_icon = self.settings_panel.zone_selector.custom_icon
+                icon_rect = custom_icon.rect()
+                icon_global_pos = custom_icon.mapToGlobal(icon_rect.topLeft())
+                icon_global_rect = icon_rect.translated(icon_global_pos)
+
+                if not icon_global_rect.contains(click_pos):
+                    # Cancel draw mode
+                    self._current_draw_mode = None
+                    self.preview.set_draw_mode(None)
+                    self.settings_panel.set_draw_mode(None)
+
+        return super().eventFilter(obj, event)
 
     def resizeEvent(self, event):
         """Auto fit preview to page width on window resize (unless user manually zoomed)"""

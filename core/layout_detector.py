@@ -592,26 +592,19 @@ class RemoteLayoutDetector:
 
     def is_available(self) -> bool:
         """Check if remote server is available"""
-        print(f"[DEBUG RemoteDetector] is_available called, api_url={self.api_url}")
-
         # Chỉ cache kết quả thành công, luôn retry nếu trước đó thất bại
         if self._available is True:
-            print("[DEBUG RemoteDetector] Returning cached True")
             return True
 
         try:
             import urllib.request
             url = f"{self.api_url}/health"
-            print(f"[DEBUG RemoteDetector] Checking health: {url}")
             req = urllib.request.Request(url, method='GET')
             with urllib.request.urlopen(req, timeout=5) as response:
                 self._available = response.status == 200
-                print(f"[DEBUG RemoteDetector] Health response: {response.status}")
-        except Exception as e:
-            print(f"[DEBUG RemoteDetector] Health check failed: {e}")
+        except Exception:
             self._available = False
 
-        print(f"[DEBUG RemoteDetector] is_available = {self._available}")
         return self._available
 
     def detect(self,
@@ -634,18 +627,13 @@ class RemoteLayoutDetector:
         import urllib.request
         import cv2
 
-        print(f"[DEBUG RemoteDetector] detect called, image shape: {image.shape}")
-
         if protected_labels is None:
             protected_labels = self.protected_labels
-
-        print(f"[DEBUG RemoteDetector] protected_labels: {protected_labels}")
 
         try:
             # Encode image to base64 PNG
             _, buffer = cv2.imencode('.png', image)
             image_base64 = base64.b64encode(buffer).decode('utf-8')
-            print(f"[DEBUG RemoteDetector] Image encoded, size: {len(image_base64)} bytes")
 
             # Build request
             payload = {
@@ -656,7 +644,6 @@ class RemoteLayoutDetector:
 
             data = json.dumps(payload).encode('utf-8')
             url = f"{self.api_url}/detect"
-            print(f"[DEBUG RemoteDetector] Sending request to: {url}")
 
             req = urllib.request.Request(
                 url,
@@ -669,10 +656,7 @@ class RemoteLayoutDetector:
             with urllib.request.urlopen(req, timeout=self.timeout) as response:
                 result = json.loads(response.read().decode('utf-8'))
 
-            print(f"[DEBUG RemoteDetector] Response: success={result.get('success')}, regions={len(result.get('regions', []))}")
-
             if not result.get('success'):
-                print(f"[RemoteDetector] Error: {result.get('error')}")
                 return []
 
             # Convert to ProtectedRegion
@@ -686,15 +670,10 @@ class RemoteLayoutDetector:
                     label=r['label'],
                     confidence=r['confidence']
                 ))
-                print(f"[DEBUG RemoteDetector] Region: {r['label']} @ {bbox}")
 
-            print(f"[DEBUG RemoteDetector] Total regions: {len(regions)}")
             return regions
 
-        except Exception as e:
-            print(f"[RemoteDetector] Request error: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
             return []
 
     def set_confidence_threshold(self, threshold: float):
@@ -1263,28 +1242,53 @@ class YOLODocLayNetONNXDetector:
         """Get ONNX model path."""
         filename = 'yolov12s-doclaynet.onnx'  # Small model (35MB) - good balance of speed/accuracy
         print(f"[ONNX] Looking for model: {filename}")
+        print(f"[ONNX] Current __file__: {__file__}")
 
         # 1. Check PyInstaller bundle
         if hasattr(sys, '_MEIPASS'):
             bundled_path = os.path.join(sys._MEIPASS, 'resources', 'models', filename)
+            print(f"[ONNX] Checking PyInstaller bundle: {bundled_path}")
             if os.path.exists(bundled_path):
                 print(f"[ONNX] Using bundled model: {bundled_path}")
                 return bundled_path
+            else:
+                print(f"[ONNX] Bundle path not found")
 
         # 2. Check relative to source
         source_path = os.path.join(os.path.dirname(__file__), '..', 'resources', 'models', filename)
         source_path = os.path.abspath(source_path)
+        print(f"[ONNX] Checking source path: {source_path}")
         if os.path.exists(source_path):
             print(f"[ONNX] Using source model: {source_path}")
             return source_path
+        else:
+            print(f"[ONNX] Source path not found")
 
         # 3. Check cache
         cache_path = os.path.expanduser(f"~/.cache/yolo-doclaynet/{filename}")
+        print(f"[ONNX] Checking cache path: {cache_path}")
         if os.path.exists(cache_path):
             print(f"[ONNX] Using cached model: {cache_path}")
             return cache_path
+        else:
+            print(f"[ONNX] Cache path not found")
 
-        raise FileNotFoundError(f"ONNX model not found: {filename}")
+        # 4. Try to download from HuggingFace
+        print(f"[ONNX] Model not found locally, attempting download from HuggingFace...")
+        try:
+            from huggingface_hub import hf_hub_download
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+            downloaded_path = hf_hub_download(
+                repo_id="hantian/yolo-doclaynet",
+                filename=filename,
+                local_dir=os.path.dirname(cache_path)
+            )
+            print(f"[ONNX] Model downloaded: {downloaded_path}")
+            return downloaded_path
+        except Exception as e:
+            print(f"[ONNX] Download failed: {e}")
+
+        raise FileNotFoundError(f"ONNX model not found: {filename}. Please ensure model exists at {source_path} or {cache_path}")
 
     def _load_model(self) -> bool:
         """Load ONNX model."""
@@ -1298,12 +1302,34 @@ class YOLODocLayNetONNXDetector:
             model_path = self._get_model_path()
             print(f"[ONNX] Loading model: {model_path}")
 
-            # Create session with CPU provider
-            self.session = ort.InferenceSession(
-                model_path,
-                providers=['CPUExecutionProvider']
-            )
-            print(f"[ONNX] Model loaded successfully")
+            # Auto-select best provider: CUDA > CPU
+            # Note: TensorRT disabled - doesn't support V100 SM 7.0 in some versions
+            available_providers = ort.get_available_providers()
+
+            # Configure session options for GPU optimization
+            sess_options = ort.SessionOptions()
+            sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+
+            # Try CUDA first (most reliable for V100)
+            if 'CUDAExecutionProvider' in available_providers:
+                providers = [
+                    ('CUDAExecutionProvider', {
+                        'device_id': 0,
+                        'arena_extend_strategy': 'kSameAsRequested',
+                        'cudnn_conv_algo_search': 'EXHAUSTIVE',
+                        'do_copy_in_default_stream': True,
+                    }),
+                    'CPUExecutionProvider'
+                ]
+                print(f"[ONNX] Using GPU (CUDA)")
+            else:
+                providers = ['CPUExecutionProvider']
+                print(f"[ONNX] Using CPU (no CUDA available)")
+
+            self.session = ort.InferenceSession(model_path, sess_options, providers=providers)
+            # Log actual provider being used
+            actual_provider = self.session.get_providers()[0]
+            print(f"[ONNX] Model loaded successfully - Provider: {actual_provider}")
             return True
 
         except ImportError as e:
