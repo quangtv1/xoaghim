@@ -2112,16 +2112,33 @@ Thời gian: {time_str}"""
                 os.system(f'open "{folder_path}"' if os.uname().sysname == 'Darwin' else f'xdg-open "{folder_path}"')
     
     def dragEnterEvent(self, event: QDragEnterEvent):
+        """Accept drag if it contains URLs (files or folders)"""
         if event.mimeData().hasUrls():
-            urls = event.mimeData().urls()
-            if any(url.toLocalFile().lower().endswith('.pdf') for url in urls):
-                event.acceptProposedAction()
-    
+            # Accept any URL - we'll check content in dropEvent
+            event.acceptProposedAction()
+
     def dropEvent(self, event: QDropEvent):
+        """Handle dropped files or folders"""
         urls = event.mimeData().urls()
         for url in urls:
             file_path = url.toLocalFile()
-            if file_path.lower().endswith('.pdf'):
+            # Handle Windows path format
+            if not file_path and url.toString().startswith('file:///'):
+                # Windows file:///C:/path format
+                file_path = url.toString()[8:]  # Remove 'file:///'
+
+            if not file_path:
+                continue
+
+            # Normalize path for cross-platform compatibility
+            file_path = os.path.normpath(file_path)
+
+            if os.path.isdir(file_path):
+                # Dropped a folder - load it
+                self._load_folder(file_path)
+                break
+            elif file_path.lower().endswith('.pdf'):
+                # Dropped a PDF file
                 self._load_pdf(file_path)
                 break
     

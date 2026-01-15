@@ -267,18 +267,23 @@ class ContinuousGraphicsView(QGraphicsView):
     def dragEnterEvent(self, event):
         """Handle drag enter for file/folder drop"""
         if event.mimeData().hasUrls():
-            urls = event.mimeData().urls()
-            for url in urls:
-                path = url.toLocalFile()
-                if path.lower().endswith('.pdf') or os.path.isdir(path):
-                    event.acceptProposedAction()
-                    return
-        event.ignore()
+            # Accept any URL - check content in dropEvent
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
     def dragMoveEvent(self, event):
         """Handle drag move"""
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
+
+    def _get_local_path(self, url):
+        """Get local file path from URL, handling Windows format"""
+        path = url.toLocalFile()
+        # Handle Windows file:///C:/path format
+        if not path and url.toString().startswith('file:///'):
+            path = url.toString()[8:]  # Remove 'file:///'
+        return os.path.normpath(path) if path else ''
 
     def dropEvent(self, event):
         """Handle file/folder drop"""
@@ -288,7 +293,9 @@ class ContinuousGraphicsView(QGraphicsView):
             folder_path = None
 
             for url in urls:
-                path = url.toLocalFile()
+                path = self._get_local_path(url)
+                if not path:
+                    continue
                 if os.path.isdir(path):
                     folder_path = path
                 elif path.lower().endswith('.pdf'):
@@ -1011,26 +1018,29 @@ class ContinuousPreviewPanel(QFrame):
     def dragEnterEvent(self, event):
         """Handle drag enter for file/folder drop"""
         if event.mimeData().hasUrls():
-            urls = event.mimeData().urls()
-            for url in urls:
-                path = url.toLocalFile()
-                # Accept PDF files or directories
-                if path.lower().endswith('.pdf') or os.path.isdir(path):
-                    event.acceptProposedAction()
-                    return
-        event.ignore()
-    
+            # Accept any URL - check content in dropEvent
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
     def dragOverEvent(self, event):
         """Handle drag over"""
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
-    
+
     def dropEvent(self, event):
         """Handle file/folder drop"""
         if event.mimeData().hasUrls():
             urls = event.mimeData().urls()
             for url in urls:
                 path = url.toLocalFile()
+                # Handle Windows file:///C:/path format
+                if not path and url.toString().startswith('file:///'):
+                    path = url.toString()[8:]
+                if not path:
+                    continue
+                path = os.path.normpath(path)
+
                 if os.path.isdir(path):
                     # Folder dropped - emit folder signal
                     self.folder_dropped.emit(path)

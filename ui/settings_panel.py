@@ -10,8 +10,8 @@ from PyQt5.QtWidgets import (
     QFileDialog, QCheckBox, QRadioButton, QButtonGroup, QMessageBox,
     QStyledItemDelegate
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QSize
-from PyQt5.QtGui import QColor
+from PyQt5.QtCore import Qt, pyqtSignal, QSize, QPoint
+from PyQt5.QtGui import QColor, QPixmap, QPainter, QPolygon
 
 from typing import List, Dict, Set
 from core.processor import Zone, PRESET_ZONES, TextProtectionOptions
@@ -76,37 +76,53 @@ class SettingsPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 12)
         layout.setSpacing(0)
-        
+
         # Force white background on this widget and all children
         self.setAutoFillBackground(True)
         palette = self.palette()
         palette.setColor(self.backgroundRole(), QColor(255, 255, 255))
         self.setPalette(palette)
-        
+
+        # Create dropdown arrow image (same as bottom bar)
+        import tempfile
+        import os
+        arrow_pixmap = QPixmap(12, 12)
+        arrow_pixmap.fill(Qt.transparent)
+        painter = QPainter(arrow_pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(100, 107, 128))
+        points = [QPoint(2, 3), QPoint(10, 3), QPoint(6, 8)]
+        painter.drawPolygon(QPolygon(points))
+        painter.end()
+        self._arrow_file = os.path.join(tempfile.gettempdir(), "settings_dropdown_arrow.png")
+        arrow_pixmap.save(self._arrow_file)
+        arrow_url = self._arrow_file.replace("\\", "/")
+
         # Global stylesheet for consistent styling - ALL white backgrounds
-        self.setStyleSheet("""
-            SettingsPanel {
+        self.setStyleSheet(f"""
+            SettingsPanel {{
                 background-color: #FFFFFF;
                 border-bottom: 1px solid #D1D5DB;
-            }
-            SettingsPanel QWidget {
+            }}
+            SettingsPanel QWidget {{
                 background-color: #FFFFFF;
-            }
-            QFrame {
+            }}
+            QFrame {{
                 background-color: #FFFFFF;
                 border: none;
-            }
-            QLabel {
+            }}
+            QLabel {{
                 background-color: #FFFFFF;
                 font-size: 12px;
                 color: #374151;
-            }
-            QCheckBox {
+            }}
+            QCheckBox {{
                 background-color: #FFFFFF;
                 font-size: 12px;
                 color: #374151;
-            }
-            QComboBox {
+            }}
+            QComboBox {{
                 font-size: 12px;
                 background-color: white;
                 border: 1px solid #D1D5DB;
@@ -114,45 +130,57 @@ class SettingsPanel(QWidget):
                 padding: 4px 6px;
                 padding-right: 24px;
                 color: #374151;
-            }
-            QComboBox QAbstractItemView {
+            }}
+            QComboBox QAbstractItemView {{
                 background-color: white;
                 color: #374151;
                 outline: none;
-            }
-            QComboBox QAbstractItemView::item {
+            }}
+            QComboBox QAbstractItemView::item {{
                 background-color: white;
                 color: #374151;
                 padding: 10px 8px 10px 18px;
-            }
-            QComboBox QAbstractItemView::item:hover {
+            }}
+            QComboBox QAbstractItemView::item:hover {{
                 background-color: #93C5FD;
-            }
-            QComboBox QAbstractItemView::item:selected {
+            }}
+            QComboBox QAbstractItemView::item:selected {{
                 background-color: #93C5FD;
-            }
-            QLineEdit {
+            }}
+            QComboBox::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: center right;
+                width: 20px;
+                border: none;
+                background: transparent;
+            }}
+            QComboBox::down-arrow {{
+                image: url({arrow_url});
+                width: 10px;
+                height: 10px;
+            }}
+            QLineEdit {{
                 font-size: 12px;
                 background-color: #FFFFFF;
-            }
-            QPushButton {
+            }}
+            QPushButton {{
                 font-size: 12px;
                 background-color: #FFFFFF;
-            }
-            QSlider {
+            }}
+            QSlider {{
                 background-color: #FFFFFF;
-            }
-            QSlider::groove:horizontal {
+            }}
+            QSlider::groove:horizontal {{
                 background: #E5E7EB;
                 height: 4px;
                 border-radius: 2px;
-            }
-            QSlider::handle:horizontal {
+            }}
+            QSlider::handle:horizontal {{
                 background: #0043a5;
                 width: 12px;
                 margin: -4px 0;
                 border-radius: 6px;
-            }
+            }}
         """)
 
         # === 3 COLUMNS LAYOUT ===
