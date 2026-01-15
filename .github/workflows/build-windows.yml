@@ -51,13 +51,13 @@ jobs:
 
       - name: Build executable (onedir)
         run: |
-          pyinstaller XoaGhim-1.1.15.spec --clean
+          pyinstaller XoaGhim-1.1.16.spec --clean
 
       - name: Copy ONNX Runtime DLLs to dist
         run: |
           # Copy official ONNX Runtime DLLs
           $dllPath = "onnxruntime-official\onnxruntime-win-x64-${{ env.ONNX_VERSION }}\lib"
-          Copy-Item "$dllPath\*.dll" -Destination "dist\XoaGhim-1.1.15\" -Force
+          Copy-Item "$dllPath\*.dll" -Destination "dist\XoaGhim-1.1.16\" -Force
 
           # Also copy DLLs from Python onnxruntime package
           $pythonOnnx = python -c "import onnxruntime; import os; print(os.path.dirname(onnxruntime.__file__))"
@@ -65,13 +65,13 @@ jobs:
 
           # Copy all DLLs from onnxruntime capi folder
           if (Test-Path "$pythonOnnx\capi\*.dll") {
-            Copy-Item "$pythonOnnx\capi\*.dll" -Destination "dist\XoaGhim-1.1.15\" -Force
+            Copy-Item "$pythonOnnx\capi\*.dll" -Destination "dist\XoaGhim-1.1.16\" -Force
             Write-Host "Copied DLLs from capi folder"
           }
 
           # List all DLLs in dist for verification
-          Write-Host "`nDLLs in dist\XoaGhim-1.1.15:"
-          Get-ChildItem dist\XoaGhim-1.1.15\*.dll | Select-Object Name, Length
+          Write-Host "`nDLLs in dist\XoaGhim-1.1.16:"
+          Get-ChildItem dist\XoaGhim-1.1.16\*.dll | Select-Object Name, Length
 
       - name: Copy VC++ Runtime DLLs
         run: |
@@ -83,7 +83,7 @@ jobs:
           )
           foreach ($dll in $vcRuntimeDlls) {
             if (Test-Path $dll) {
-              Copy-Item $dll -Destination "dist\XoaGhim-1.1.15\" -Force
+              Copy-Item $dll -Destination "dist\XoaGhim-1.1.16\" -Force
               Write-Host "Copied: $dll"
             }
           }
@@ -91,19 +91,19 @@ jobs:
       - name: Create ZIP archive
         run: |
           cd dist
-          Compress-Archive -Path XoaGhim-1.1.15 -DestinationPath XoaGhim-1.1.15-Windows.zip
+          Compress-Archive -Path XoaGhim-1.1.16 -DestinationPath XoaGhim-1.1.16-Windows.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: XoaGhim-1.1.15-Windows
-          path: dist/XoaGhim-1.1.15-Windows.zip
+          name: XoaGhim-1.1.16-Windows
+          path: dist/XoaGhim-1.1.16-Windows.zip
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: dist/XoaGhim-1.1.15-Windows.zip
+          files: dist/XoaGhim-1.1.16-Windows.zip
           name: "Xóa Ghim PDF ${{ github.ref_name }}"
           body: |
             ## Xóa Vết Ghim PDF ${{ github.ref_name }}
