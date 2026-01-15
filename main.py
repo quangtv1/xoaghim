@@ -191,19 +191,15 @@ def main():
         QProgressBar::chunk {{
             background-color: {PRIMARY_COLOR};
         }}
-        QComboBox, QSpinBox, QLineEdit {{
+        QSpinBox, QLineEdit {{
             padding: 6px 10px;
             border: 1px solid {BORDER_COLOR};
             border-radius: 4px;
             background-color: white;
             color: {TEXT_PRIMARY};
         }}
-        QComboBox:focus, QSpinBox:focus, QLineEdit:focus {{
+        QSpinBox:focus, QLineEdit:focus {{
             border-color: {PRIMARY_COLOR};
-        }}
-        QComboBox::drop-down {{
-            border: none;
-            padding-right: 8px;
         }}
         QPushButton {{
             padding: 6px 14px;

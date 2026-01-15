@@ -2,6 +2,8 @@
 Continuous Preview - Preview liên tục nhiều trang với nền đen
 """
 
+import os
+
 from PyQt5.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
@@ -195,6 +197,10 @@ class ContinuousGraphicsView(QGraphicsView):
     scroll_changed = pyqtSignal(int, int)
     # rect_drawn: x, y, w, h (as % of page), mode ('remove' or 'protect')
     rect_drawn = pyqtSignal(float, float, float, float, str)
+    # Drag & drop signals
+    file_dropped = pyqtSignal(str)
+    folder_dropped = pyqtSignal(str)
+    files_dropped = pyqtSignal(list)  # Multiple PDF files dropped
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -209,6 +215,9 @@ class ContinuousGraphicsView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
 
+        # Enable drag and drop on view
+        self.setAcceptDrops(True)
+
         self._zoom = 1.0
         self._syncing = False
 
@@ -217,7 +226,8 @@ class ContinuousGraphicsView(QGraphicsView):
         self._drawing = False
         self._draw_start = None
         self._draw_rect_item = None
-        self._page_bounds = None  # (x, y, w, h) of current page for coordinate conversion
+        self._page_bounds = None  # (x, y, w, h) of current page (fallback)
+        self._all_page_bounds = []  # List of (x, y, w, h) for all pages
     
     def wheelEvent(self, event):
         """Zoom với Ctrl+Scroll"""
@@ -254,16 +264,63 @@ class ContinuousGraphicsView(QGraphicsView):
             self.verticalScrollBar().setValue(v)
             self._syncing = False
 
-    def set_draw_mode(self, mode, page_bounds: tuple = None):
+    def dragEnterEvent(self, event):
+        """Handle drag enter for file/folder drop"""
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            for url in urls:
+                path = url.toLocalFile()
+                if path.lower().endswith('.pdf') or os.path.isdir(path):
+                    event.acceptProposedAction()
+                    return
+        event.ignore()
+
+    def dragMoveEvent(self, event):
+        """Handle drag move"""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        """Handle file/folder drop"""
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            pdf_files = []
+            folder_path = None
+
+            for url in urls:
+                path = url.toLocalFile()
+                if os.path.isdir(path):
+                    folder_path = path
+                elif path.lower().endswith('.pdf'):
+                    pdf_files.append(path)
+
+            # Priority: folder > multiple files > single file
+            if folder_path:
+                self.folder_dropped.emit(folder_path)
+                event.acceptProposedAction()
+                return
+            elif len(pdf_files) > 1:
+                self.files_dropped.emit(pdf_files)
+                event.acceptProposedAction()
+                return
+            elif len(pdf_files) == 1:
+                self.file_dropped.emit(pdf_files[0])
+                event.acceptProposedAction()
+                return
+        event.ignore()
+
+    def set_draw_mode(self, mode, page_bounds: tuple = None, all_page_bounds: list = None):
         """Enable/disable draw mode
 
         Args:
             mode: None (off), 'remove' (blue), or 'protect' (pink)
-            page_bounds: (x, y, w, h) of current page for coordinate conversion
+            page_bounds: (x, y, w, h) of current page (fallback)
+            all_page_bounds: List of (x, y, w, h) for all pages (for accurate detection)
         """
         print(f"[DrawMode] ContinuousGraphicsView.set_draw_mode: mode={mode}, page_bounds={page_bounds}")
         self._draw_mode = mode
         self._page_bounds = page_bounds
+        self._all_page_bounds = all_page_bounds or []
         if mode:
             self.setDragMode(QGraphicsView.NoDrag)
             self.setCursor(Qt.CrossCursor)
@@ -343,19 +400,25 @@ class ContinuousGraphicsView(QGraphicsView):
         if self._drawing and event.button() == Qt.LeftButton:
             self._drawing = False
             # Only process if rect was actually created (dragged, not just clicked)
-            if self._draw_rect_item and self._page_bounds and self._draw_mode:
+            if self._draw_rect_item and self._draw_mode:
                 rect = self._draw_rect_item.rect()
-                # Convert to % coordinates relative to page
-                px, py, pw, ph = self._page_bounds
-                if pw > 0 and ph > 0:
-                    # Clamp to page bounds
-                    x = max(0, (rect.x() - px) / pw)
-                    y = max(0, (rect.y() - py) / ph)
-                    w = min(1 - x, rect.width() / pw)
-                    h = min(1 - y, rect.height() / ph)
-                    # Only emit if reasonable size
-                    if w > 0.01 and h > 0.01:
-                        self.rect_drawn.emit(x, y, w, h, self._draw_mode)
+
+                # Find which page the rect center is on
+                rect_center_y = rect.y() + rect.height() / 2
+                page_bounds = self._find_page_at_y(rect_center_y)
+
+                if page_bounds:
+                    px, py, pw, ph = page_bounds
+                    if pw > 0 and ph > 0:
+                        # Clamp to page bounds
+                        x = max(0, (rect.x() - px) / pw)
+                        y = max(0, (rect.y() - py) / ph)
+                        w = min(1 - x, rect.width() / pw)
+                        h = min(1 - y, rect.height() / ph)
+                        # Only emit if reasonable size
+                        if w > 0.01 and h > 0.01:
+                            self.rect_drawn.emit(x, y, w, h, self._draw_mode)
+
             # Clean up drawing rect but KEEP draw mode active
             if self._draw_rect_item and self._draw_rect_item.scene():
                 self.scene().removeItem(self._draw_rect_item)
@@ -363,6 +426,17 @@ class ContinuousGraphicsView(QGraphicsView):
             self._draw_start = None
         else:
             super().mouseReleaseEvent(event)
+
+    def _find_page_at_y(self, y: float) -> tuple:
+        """Find page bounds containing the given y coordinate"""
+        # Try all_page_bounds first (for accurate detection in continuous mode)
+        if self._all_page_bounds:
+            for bounds in self._all_page_bounds:
+                px, py, pw, ph = bounds
+                if py <= y <= py + ph:
+                    return bounds
+        # Fallback to single page_bounds
+        return self._page_bounds
 
 
 class ContinuousPreviewPanel(QFrame):
@@ -376,6 +450,8 @@ class ContinuousPreviewPanel(QFrame):
     placeholder_clicked = pyqtSignal()  # When placeholder "Mở file" is clicked
     folder_placeholder_clicked = pyqtSignal()  # When placeholder "Mở thư mục" is clicked
     file_dropped = pyqtSignal(str)  # When file is dropped (file_path)
+    folder_dropped = pyqtSignal(str)  # When folder is dropped (folder_path)
+    files_dropped = pyqtSignal(list)  # When multiple PDF files are dropped
     close_requested = pyqtSignal()  # When close button is clicked
     # rect_drawn: x, y, w, h (as % of page), mode ('remove' or 'protect')
     rect_drawn = pyqtSignal(float, float, float, float, str)
@@ -412,7 +488,7 @@ class ContinuousPreviewPanel(QFrame):
         # Title bar with label and close button
         title_bar = QWidget()
         title_bar.setFixedHeight(32)  # Fixed height to ensure button fits
-        title_bar.setStyleSheet("background-color: #D1D5DB;")
+        title_bar.setStyleSheet("background-color: #F3F4F6; border-bottom: 1px solid #D1D5DB;")
         title_layout = QHBoxLayout(title_bar)
         title_layout.setContentsMargins(8, 0, 4, 0)  # Reduce right margin
         title_layout.setSpacing(4)
@@ -437,14 +513,15 @@ class ContinuousPreviewPanel(QFrame):
             self.close_btn.setCursor(Qt.PointingHandCursor)  # Show hand cursor on button
             self.close_btn.setStyleSheet("""
                 QPushButton {
-                    background-color: #C9CDD4;
+                    background-color: #D1D5DB;
                     border: none;
                     border-radius: 4px;
-                    font-size: 14px;
+                    font-size: 16px;
                     font-weight: bold;
                     color: #4B5563;
                     padding: 0;
                     margin: 0;
+                    padding-bottom: 2px;
                 }
                 QPushButton:hover {
                     color: white;
@@ -466,6 +543,9 @@ class ContinuousPreviewPanel(QFrame):
         self.view.setScene(self.scene)
         self.view.setStyleSheet("background-color: #E5E7EB; border: none;")
         self.view.rect_drawn.connect(self._on_rect_drawn)
+        self.view.file_dropped.connect(self.file_dropped.emit)
+        self.view.folder_dropped.connect(self.folder_dropped.emit)
+        self.view.files_dropped.connect(self.files_dropped.emit)
         layout.addWidget(self.view)
         
         # Show placeholder only for before panel (show_overlay=True)
@@ -513,35 +593,45 @@ class ContinuousPreviewPanel(QFrame):
         return self._current_page
     
     def set_page_filter(self, filter_mode: str):
-        """Set page filter: 'all', 'odd', 'even', 'none'"""
+        """Set page filter: 'all', 'odd', 'even', 'none'
+
+        Filter only affects where NEW zones are added.
+        Existing zones are always displayed (like layers).
+        """
         if filter_mode not in ('all', 'odd', 'even', 'none'):
             return
         if self._page_filter != filter_mode:
-            old_filter = self._page_filter
             self._page_filter = filter_mode
-            
-            # When switching from 'none' to sync mode, reset per-page zones
-            if old_filter == 'none' and filter_mode != 'none':
-                self._per_page_zones.clear()
-            
-            # When switching to 'none', initialize per-page zones from current definitions
-            if filter_mode == 'none' and old_filter != 'none':
-                self._init_per_page_zones()
-            
-            # Recreate zone overlays with new filter
+            # Don't clear per_page_zones - keep existing zones (layers)
+            # Just update display (which always shows all zones)
             if self.show_overlay:
                 if self._view_mode == 'single':
                     self._recreate_zone_overlays_single()
                 else:
                     self._recreate_zone_overlays()
-    
-    def _init_per_page_zones(self):
-        """Initialize per-page zones from zone definitions"""
+
+    def clear_all_zones(self):
+        """Clear all zones from all pages (reset per_page_zones)"""
         self._per_page_zones.clear()
         for page_idx in range(len(self._pages)):
             self._per_page_zones[page_idx] = {}
-            for zdef in self._zone_definitions:
-                self._per_page_zones[page_idx][zdef.id] = (zdef.x, zdef.y, zdef.width, zdef.height)
+        # Recreate overlays (will be empty)
+        if self.show_overlay:
+            if self._view_mode == 'single':
+                self._recreate_zone_overlays_single()
+            else:
+                self._recreate_zone_overlays()
+
+    def _init_per_page_zones(self):
+        """Initialize per-page zones - start EMPTY for 'none' mode (Tự do)
+
+        In 'none' mode, each page starts empty and zones are added individually
+        to the current page when user draws or selects them.
+        """
+        self._per_page_zones.clear()
+        for page_idx in range(len(self._pages)):
+            self._per_page_zones[page_idx] = {}
+        # Don't copy zone_definitions - start empty, user adds zones per page
     
     def _should_apply_to_page(self, page_idx: int) -> bool:
         """Check if zones should be applied to this page based on filter"""
@@ -687,10 +777,10 @@ class ContinuousPreviewPanel(QFrame):
         file_icon_x = placeholder_width / 2 - icon_spacing - icon_width / 2
         icon_y = placeholder_height / 2 - 35
         
-        # Hover background for "Mở file" - add first so it's behind icon
+        # Hover background for "Mở file" - add first so it's behind icon (larger area +80%)
         file_hover_rect = QRectF(
-            file_icon_x - 15, icon_y - 8,
-            icon_width + 30, icon_height + 35
+            file_icon_x - 52, icon_y - 30,
+            icon_width + 105, icon_height + 112
         )
         self._file_hover_bg = self.scene.addRect(file_hover_rect, 
             QPen(Qt.NoPen), QBrush(Qt.transparent))
@@ -736,10 +826,10 @@ class ContinuousPreviewPanel(QFrame):
             icon_y + icon_height + 8
         )
         
-        # Store click area for "Mở file"
+        # Store click area for "Mở file" (larger area +80%)
         self._placeholder_file_rect = QRectF(
-            file_icon_x - 20, icon_y - 10,
-            icon_width + 40, icon_height + file_hint_rect.height() + 30
+            file_icon_x - 52, icon_y - 30,
+            icon_width + 105, icon_height + file_hint_rect.height() + 90
         )
         
         # === RIGHT ICON: Folder (Mở thư mục) - rounded corners, thin line ===
@@ -751,10 +841,10 @@ class ContinuousPreviewPanel(QFrame):
         tab_height = 5
         corner_r = 2  # Small corner radius
         
-        # Hover background for "Mở thư mục" - add first so it's behind icon
+        # Hover background for "Mở thư mục" - add first so it's behind icon (larger area +80%)
         folder_hover_rect = QRectF(
-            folder_icon_x - 10, icon_y - 8,
-            folder_width + 20, icon_height + 35
+            folder_icon_x - 52, icon_y - 30,
+            folder_width + 105, icon_height + 112
         )
         self._folder_hover_bg = self.scene.addRect(folder_hover_rect,
             QPen(Qt.NoPen), QBrush(Qt.transparent))
@@ -819,10 +909,10 @@ class ContinuousPreviewPanel(QFrame):
             icon_y + icon_height + 8  # align with "Mở file" text
         )
         
-        # Store click area for "Mở thư mục"
+        # Store click area for "Mở thư mục" (larger area +80%)
         self._placeholder_folder_rect = QRectF(
-            folder_icon_x - 20, icon_y - 10,
-            folder_width + 40, icon_height + folder_hint_rect.height() + 30
+            folder_icon_x - 52, icon_y - 30,
+            folder_width + 105, icon_height + folder_hint_rect.height() + 90
         )
         
         self.scene.setSceneRect(0, 0, placeholder_width, placeholder_height)
@@ -919,11 +1009,13 @@ class ContinuousPreviewPanel(QFrame):
         ContinuousGraphicsView.mouseReleaseEvent(self.view, event)
 
     def dragEnterEvent(self, event):
-        """Handle drag enter for file drop"""
+        """Handle drag enter for file/folder drop"""
         if event.mimeData().hasUrls():
             urls = event.mimeData().urls()
             for url in urls:
-                if url.toLocalFile().lower().endswith('.pdf'):
+                path = url.toLocalFile()
+                # Accept PDF files or directories
+                if path.lower().endswith('.pdf') or os.path.isdir(path):
                     event.acceptProposedAction()
                     return
         event.ignore()
@@ -934,13 +1026,19 @@ class ContinuousPreviewPanel(QFrame):
             event.acceptProposedAction()
     
     def dropEvent(self, event):
-        """Handle file drop"""
+        """Handle file/folder drop"""
         if event.mimeData().hasUrls():
             urls = event.mimeData().urls()
             for url in urls:
-                file_path = url.toLocalFile()
-                if file_path.lower().endswith('.pdf'):
-                    self.file_dropped.emit(file_path)
+                path = url.toLocalFile()
+                if os.path.isdir(path):
+                    # Folder dropped - emit folder signal
+                    self.folder_dropped.emit(path)
+                    event.acceptProposedAction()
+                    return
+                elif path.lower().endswith('.pdf'):
+                    # PDF file dropped
+                    self.file_dropped.emit(path)
                     event.acceptProposedAction()
                     return
         event.ignore()
@@ -957,63 +1055,110 @@ class ContinuousPreviewPanel(QFrame):
         return QPixmap.fromImage(qimg.copy())
     
     def set_zone_definitions(self, zones: List[Zone]):
-        """Set zone definitions (áp dụng cho tất cả trang)"""
+        """Set zone definitions - add new zones to pages based on current filter
+
+        Filter logic (for ADDING new zones):
+        - 'all': add to ALL pages
+        - 'odd': add to odd pages (1, 3, 5...)
+        - 'even': add to even pages (2, 4, 6...)
+        - 'none' (Tự do): add to current page only
+
+        Display: always show ALL zones in per_page_zones (no filter)
+        """
+        # Get currently displayed zones from per_page_zones (more reliable than _zone_definitions)
+        old_zone_ids = set()
+        for page_zones in self._per_page_zones.values():
+            old_zone_ids.update(page_zones.keys())
+        new_zone_ids = {z.id for z in zones if z.enabled}
+        newly_added = new_zone_ids - old_zone_ids
+        newly_removed = old_zone_ids - new_zone_ids
+
+        # Ensure per_page_zones is initialized for all pages
+        for page_idx in range(len(self._pages)):
+            if page_idx not in self._per_page_zones:
+                self._per_page_zones[page_idx] = {}
+
+        # Add new zones to pages based on filter
+        for zone in zones:
+            if zone.id in newly_added and zone.enabled:
+                zone_data = (zone.x, zone.y, zone.width, zone.height)
+                pages_to_add = self._get_pages_for_filter()
+                for page_idx in pages_to_add:
+                    self._per_page_zones[page_idx][zone.id] = zone_data
+
+        # Remove disabled zones from ALL pages (global removal)
+        for zone_id in newly_removed:
+            for page_idx in self._per_page_zones:
+                if zone_id in self._per_page_zones[page_idx]:
+                    del self._per_page_zones[page_idx][zone_id]
+
         self._zone_definitions = zones
         if self.show_overlay:
             if self._view_mode == 'single':
                 self._recreate_zone_overlays_single()
             else:
                 self._recreate_zone_overlays()
+
+    def _get_pages_for_filter(self) -> List[int]:
+        """Get list of page indices based on current filter"""
+        if not self._pages:
+            return []
+
+        all_pages = list(range(len(self._pages)))
+
+        if self._page_filter == 'all':
+            return all_pages
+        elif self._page_filter == 'odd':
+            return [i for i in all_pages if (i + 1) % 2 == 1]  # 1, 3, 5... (1-based)
+        elif self._page_filter == 'even':
+            return [i for i in all_pages if (i + 1) % 2 == 0]  # 2, 4, 6... (1-based)
+        elif self._page_filter == 'none':
+            return [self._current_page] if self._current_page < len(self._pages) else []
+        return all_pages
     
     def _recreate_zone_overlays(self):
-        """Tạo lại overlay zones cho tất cả trang"""
+        """Tạo lại overlay zones cho tất cả trang
+
+        Display: Always show ALL zones in per_page_zones (no filter)
+        Each page shows its own zones from per_page_zones[page_idx]
+        """
         # Remove existing zones
         for zone in self._zones:
             self.scene.removeItem(zone)
         self._zones.clear()
-        
-        if not self._pages or not self._zone_definitions:
+
+        if not self._pages:
             return
-        
-        # Create zones for each page (respecting page filter)
+
+        # Create zones for each page - show ALL zones (no filter)
         for page_idx, page_item in enumerate(self._page_items):
-            # In 'none' mode, all pages get zones (but independent)
-            # In other modes, check filter
-            if self._page_filter != 'none' and not self._should_apply_to_page(page_idx):
-                continue
-                
             page_rect = page_item.boundingRect()
             page_pos = page_item.pos()
-            
-            for zone_def in self._zone_definitions:
-                if not zone_def.enabled:
-                    continue
-                
-                # Get zone coordinates - from per-page storage or shared definition
-                if self._page_filter == 'none' and page_idx in self._per_page_zones:
-                    zone_coords = self._per_page_zones[page_idx].get(zone_def.id)
-                    if zone_coords:
-                        zx = zone_coords[0] * page_rect.width()
-                        zy = zone_coords[1] * page_rect.height()
-                        zw = zone_coords[2] * page_rect.width()
-                        zh = zone_coords[3] * page_rect.height()
-                    else:
-                        # Fallback to zone_def
-                        zx = zone_def.x * page_rect.width()
-                        zy = zone_def.y * page_rect.height()
-                        zw = zone_def.width * page_rect.width()
-                        zh = zone_def.height * page_rect.height()
-                else:
-                    # Sync mode - use shared definition
-                    zx = zone_def.x * page_rect.width()
-                    zy = zone_def.y * page_rect.height()
-                    zw = zone_def.width * page_rect.width()
-                    zh = zone_def.height * page_rect.height()
-                
+
+            # Get zones for this page from per_page_zones
+            page_zones = self._per_page_zones.get(page_idx, {})
+
+            for zone_id, zone_coords in page_zones.items():
+                # Find zone_def for this zone_id to get zone_type
+                zone_def = None
+                for zd in self._zone_definitions:
+                    if zd.id == zone_id:
+                        zone_def = zd
+                        break
+
+                if zone_def and not zone_def.enabled:
+                    continue  # Skip disabled zones
+
+                # Calculate pixel coordinates
+                zx = zone_coords[0] * page_rect.width()
+                zy = zone_coords[1] * page_rect.height()
+                zw = zone_coords[2] * page_rect.width()
+                zh = zone_coords[3] * page_rect.height()
+
                 # Create zone item with zone_type for correct color
                 rect = QRectF(zx, zy, zw, zh)
-                zone_type = getattr(zone_def, 'zone_type', 'remove')
-                zone_item = ZoneItem(f"{zone_def.id}_{page_idx}", rect, zone_type=zone_type)
+                zone_type = getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove'
+                zone_item = ZoneItem(f"{zone_id}_{page_idx}", rect, zone_type=zone_type)
                 zone_item.setPos(page_pos)
                 zone_item.set_bounds(page_rect)
 
@@ -1025,52 +1170,48 @@ class ContinuousPreviewPanel(QFrame):
                 self._zones.append(zone_item)
 
     def _recreate_zone_overlays_single(self):
-        """Tạo lại overlay zones cho trang hiện tại (single page mode)"""
+        """Tạo lại overlay zones cho trang hiện tại (single page mode)
+
+        Display: Always show ALL zones in per_page_zones for current page (no filter)
+        """
         # Remove existing zones
         for zone in self._zones:
             self.scene.removeItem(zone)
         self._zones.clear()
-        
-        if not self._pages or not self._zone_definitions or not self._page_items:
+
+        if not self._pages or not self._page_items:
             return
-        
-        # In 'none' mode, all pages have zones; otherwise check filter
-        if self._page_filter != 'none' and not self._should_apply_to_page(self._current_page):
-            return
-        
+
         # Create zones for current page only
         page_item = self._page_items[0]  # Only one item in single mode
         page_rect = page_item.boundingRect()
         page_pos = page_item.pos()
         page_idx = self._current_page
-        
-        for zone_def in self._zone_definitions:
-            if not zone_def.enabled:
-                continue
-            
-            # Get zone coordinates - from per-page storage or shared definition
-            if self._page_filter == 'none' and page_idx in self._per_page_zones:
-                zone_coords = self._per_page_zones[page_idx].get(zone_def.id)
-                if zone_coords:
-                    zx = zone_coords[0] * page_rect.width()
-                    zy = zone_coords[1] * page_rect.height()
-                    zw = zone_coords[2] * page_rect.width()
-                    zh = zone_coords[3] * page_rect.height()
-                else:
-                    zx = zone_def.x * page_rect.width()
-                    zy = zone_def.y * page_rect.height()
-                    zw = zone_def.width * page_rect.width()
-                    zh = zone_def.height * page_rect.height()
-            else:
-                zx = zone_def.x * page_rect.width()
-                zy = zone_def.y * page_rect.height()
-                zw = zone_def.width * page_rect.width()
-                zh = zone_def.height * page_rect.height()
-            
+
+        # Get zones for this page from per_page_zones
+        page_zones = self._per_page_zones.get(page_idx, {})
+
+        for zone_id, zone_coords in page_zones.items():
+            # Find zone_def for this zone_id to get zone_type
+            zone_def = None
+            for zd in self._zone_definitions:
+                if zd.id == zone_id:
+                    zone_def = zd
+                    break
+
+            if zone_def and not zone_def.enabled:
+                continue  # Skip disabled zones
+
+            # Calculate pixel coordinates
+            zx = zone_coords[0] * page_rect.width()
+            zy = zone_coords[1] * page_rect.height()
+            zw = zone_coords[2] * page_rect.width()
+            zh = zone_coords[3] * page_rect.height()
+
             # Create zone item with zone_type for correct color
             rect = QRectF(zx, zy, zw, zh)
-            zone_type = getattr(zone_def, 'zone_type', 'remove')
-            zone_item = ZoneItem(f"{zone_def.id}_{page_idx}", rect, zone_type=zone_type)
+            zone_type = getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove'
+            zone_item = ZoneItem(f"{zone_id}_{page_idx}", rect, zone_type=zone_type)
             zone_item.setPos(page_pos)
             zone_item.set_bounds(page_rect)
 
@@ -1155,9 +1296,13 @@ class ContinuousPreviewPanel(QFrame):
                     zone_item.signals.blockSignals(False)
     
     def _on_zone_selected(self, zone_id: str):
-        # Highlight zone
+        # Get base zone id (without page index) to select all instances across pages
+        base_id = zone_id.rsplit('_', 1)[0] if zone_id.count('_') > 1 else zone_id
+
+        # Highlight all zones with same base_id across all pages
         for zone in self._zones:
-            zone.set_selected(zone.zone_id == zone_id)
+            zone_base_id = zone.zone_id.rsplit('_', 1)[0] if zone.zone_id.count('_') > 1 else zone.zone_id
+            zone.set_selected(zone_base_id == base_id)
         self.zone_selected.emit(zone_id)
 
     def deselect_all_zones(self):
@@ -1272,7 +1417,7 @@ class ContinuousPreviewPanel(QFrame):
 
         # If turning off, always allow
         if mode is None:
-            self.view.set_draw_mode(None, None)
+            self.view.set_draw_mode(None, None, None)
             return
 
         # Need pages loaded to enable draw mode
@@ -1280,27 +1425,28 @@ class ContinuousPreviewPanel(QFrame):
             print(f"[DrawMode] No pages loaded: _pages={len(self._pages) if self._pages else 0}, _page_items={len(self._page_items) if self._page_items else 0}")
             return
 
-        # Get current page bounds for coordinate conversion
+        # Get all page bounds for accurate page detection
+        all_page_bounds = []
+        for page_item in self._page_items:
+            page_rect = page_item.boundingRect()
+            page_pos = page_item.pos()
+            all_page_bounds.append((page_pos.x(), page_pos.y(), page_rect.width(), page_rect.height()))
+
+        # Get current page bounds as fallback
         page_bounds = None
         print(f"[DrawMode] view_mode={self._view_mode}, current_page={self._current_page}, page_items={len(self._page_items)}")
 
         if self._view_mode == 'single' and self._page_items:
-            page_item = self._page_items[0]
-            page_rect = page_item.boundingRect()
-            page_pos = page_item.pos()
-            page_bounds = (page_pos.x(), page_pos.y(), page_rect.width(), page_rect.height())
-        elif self._view_mode == 'continuous' and self._current_page < len(self._page_items):
-            page_item = self._page_items[self._current_page]
-            page_rect = page_item.boundingRect()
-            page_pos = page_item.pos()
-            page_bounds = (page_pos.x(), page_pos.y(), page_rect.width(), page_rect.height())
+            page_bounds = all_page_bounds[0] if all_page_bounds else None
+        elif self._view_mode == 'continuous' and self._current_page < len(all_page_bounds):
+            page_bounds = all_page_bounds[self._current_page]
 
-        print(f"[DrawMode] page_bounds={page_bounds}")
+        print(f"[DrawMode] page_bounds={page_bounds}, all_page_bounds count={len(all_page_bounds)}")
 
         # Only enable if we have valid page bounds
         if page_bounds and page_bounds[2] > 0 and page_bounds[3] > 0:
             print(f"[DrawMode] Enabling draw mode on view")
-            self.view.set_draw_mode(mode, page_bounds)
+            self.view.set_draw_mode(mode, page_bounds, all_page_bounds)
         else:
             print(f"[DrawMode] Invalid page_bounds, not enabling")
 
@@ -1321,6 +1467,8 @@ class ContinuousPreviewWidget(QWidget):
     open_file_requested = pyqtSignal()  # When placeholder "Mở file" is clicked
     open_folder_requested = pyqtSignal()  # When placeholder "Mở thư mục" is clicked
     file_dropped = pyqtSignal(str)  # When file is dropped (file_path)
+    folder_dropped = pyqtSignal(str)  # When folder is dropped (folder_path)
+    files_dropped = pyqtSignal(list)  # When multiple PDF files are dropped
     close_requested = pyqtSignal()  # When close button is clicked
     page_changed = pyqtSignal(int)  # Emitted when visible page changes (0-based index)
     # rect_drawn: x, y, w, h (as % of page), mode ('remove' or 'protect')
@@ -1394,6 +1542,8 @@ class ContinuousPreviewWidget(QWidget):
         self.before_panel.placeholder_clicked.connect(self._on_placeholder_clicked)
         self.before_panel.folder_placeholder_clicked.connect(self._on_folder_placeholder_clicked)
         self.before_panel.file_dropped.connect(self._on_file_dropped)
+        self.before_panel.folder_dropped.connect(self._on_folder_dropped)
+        self.before_panel.files_dropped.connect(self._on_files_dropped)
         self.before_panel.close_requested.connect(self._on_close_requested)
         self.before_panel.rect_drawn.connect(self._on_rect_drawn)
         splitter.addWidget(self.before_panel)
@@ -1403,6 +1553,8 @@ class ContinuousPreviewWidget(QWidget):
         self.after_panel.placeholder_clicked.connect(self._on_placeholder_clicked)
         self.after_panel.folder_placeholder_clicked.connect(self._on_folder_placeholder_clicked)
         self.after_panel.file_dropped.connect(self._on_file_dropped)
+        self.after_panel.folder_dropped.connect(self._on_folder_dropped)
+        self.after_panel.files_dropped.connect(self._on_files_dropped)
         splitter.addWidget(self.after_panel)
         
         # Sync zoom/scroll
@@ -1451,7 +1603,15 @@ class ContinuousPreviewWidget(QWidget):
     def _on_file_dropped(self, file_path: str):
         """Handle file dropped - forward to parent"""
         self.file_dropped.emit(file_path)
-    
+
+    def _on_folder_dropped(self, folder_path: str):
+        """Handle folder dropped - forward to parent"""
+        self.folder_dropped.emit(folder_path)
+
+    def _on_files_dropped(self, file_paths: list):
+        """Handle multiple files dropped - forward to parent"""
+        self.files_dropped.emit(file_paths)
+
     def set_file_paths(self, source_path: str, dest_path: str):
         """Update title labels with file paths"""
         self.before_panel.set_title(f"Gốc: {source_path}")
@@ -1498,7 +1658,12 @@ class ContinuousPreviewWidget(QWidget):
         self.before_panel.set_page_filter(filter_mode)
         # Reprocess with new filter
         self._schedule_process()
-    
+
+    def clear_all_zones(self):
+        """Clear all zones from all pages (reset per_page_zones)"""
+        self.before_panel.clear_all_zones()
+        self._schedule_process()
+
     def set_zones(self, zones: List[Zone]):
         """Set danh sách zones"""
         self._zones = zones
@@ -1643,7 +1808,11 @@ class ContinuousPreviewWidget(QWidget):
             self._detection_runner = None
 
     def _process_pages_with_cached_regions(self):
-        """Xử lý tất cả trang với cached regions (không blocking)"""
+        """Xử lý tất cả trang với cached regions (không blocking)
+
+        Each page is processed with its own zones from per_page_zones.
+        Zones are added to pages based on filter when drawn (like layers).
+        """
         if not self._pages:
             self._hide_loading()
             return
@@ -1651,51 +1820,26 @@ class ContinuousPreviewWidget(QWidget):
         # Clear protected regions display before processing
         self.before_panel.clear_protected_regions()
 
-        # Get page filter from before_panel
-        page_filter = self.before_panel._page_filter
-
         for i, page in enumerate(self._pages):
-            # Check if this page should be processed based on filter
-            page_num = i + 1  # 1-based page number
+            # Get zones for this specific page from per_page_zones
+            page_zones = self._get_zones_for_page(i)
 
-            if page_filter == 'none':
-                # Per-page mode: use page-specific zones
-                page_zones = self._get_zones_for_page(i)
-                if page_zones:
-                    if self._text_protection_enabled:
-                        # Use cached regions (already populated)
-                        regions = self._cached_regions.get(i, [])
-                        processed = self._processor.process_image(page, page_zones, protected_regions=regions)
-                        self._processed_pages[i] = processed
-                        # Draw protected regions on before panel
-                        self.before_panel.set_protected_regions(i, regions, margin=self._text_protection_margin)
-                    else:
-                        processed = self._processor.process_image(page, page_zones)
-                        self._processed_pages[i] = processed
+            # Always display protected regions overlay if text protection is enabled
+            if self._text_protection_enabled:
+                regions = self._cached_regions.get(i, [])
+                self.before_panel.set_protected_regions(i, regions, margin=self._text_protection_margin)
+
+            if page_zones:
+                if self._text_protection_enabled:
+                    regions = self._cached_regions.get(i, [])
+                    processed = self._processor.process_image(page, page_zones, protected_regions=regions)
+                    self._processed_pages[i] = processed
                 else:
-                    self._processed_pages[i] = page.copy()
+                    processed = self._processor.process_image(page, page_zones)
+                    self._processed_pages[i] = processed
             else:
-                # Sync mode: check filter and use shared zones
-                should_process = (
-                    page_filter == 'all' or
-                    (page_filter == 'odd' and page_num % 2 == 1) or
-                    (page_filter == 'even' and page_num % 2 == 0)
-                )
-
-                if should_process:
-                    if self._text_protection_enabled:
-                        # Use cached regions (already populated)
-                        regions = self._cached_regions.get(i, [])
-                        processed = self._processor.process_image(page, self._zones, protected_regions=regions)
-                        self._processed_pages[i] = processed
-                        # Draw protected regions on before panel
-                        self.before_panel.set_protected_regions(i, regions, margin=self._text_protection_margin)
-                    else:
-                        processed = self._processor.process_image(page, self._zones)
-                        self._processed_pages[i] = processed
-                else:
-                    # Keep original page if not processed
-                    self._processed_pages[i] = page.copy()
+                # No zones for this page - keep original
+                self._processed_pages[i] = page.copy()
 
         self.after_panel.set_pages(self._processed_pages)
 
@@ -1714,34 +1858,44 @@ class ContinuousPreviewWidget(QWidget):
         self._cached_regions.clear()
             
     def _get_zones_for_page(self, page_idx: int) -> List[Zone]:
-        """Get zones with page-specific coordinates for 'none' mode"""
+        """Get zones for a specific page from per_page_zones
+
+        Returns only zones that exist in per_page_zones[page_idx].
+        Each page has its own set of zones (like layers).
+        """
         from core.processor import Zone
-        
+
         page_zones = []
         per_page_zones = self.before_panel._per_page_zones
-        
-        if page_idx in per_page_zones:
-            for zone in self._zones:
-                zone_coords = per_page_zones[page_idx].get(zone.id)
-                if zone_coords:
-                    # Create zone with page-specific coordinates
-                    page_zone = Zone(
-                        id=zone.id,
-                        name=zone.name,
-                        x=zone_coords[0],
-                        y=zone_coords[1],
-                        width=zone_coords[2],
-                        height=zone_coords[3],
-                        threshold=zone.threshold,
-                        enabled=zone.enabled
-                    )
-                    page_zones.append(page_zone)
-                else:
-                    page_zones.append(zone)
-        else:
-            # Fallback to shared zones
-            page_zones = self._zones
-        
+
+        if page_idx not in per_page_zones:
+            return []
+
+        for zone_id, zone_coords in per_page_zones[page_idx].items():
+            # Find zone_def for this zone_id to get threshold and other properties
+            zone_def = None
+            for z in self._zones:
+                if z.id == zone_id:
+                    zone_def = z
+                    break
+
+            if zone_def and not zone_def.enabled:
+                continue  # Skip disabled zones
+
+            # Create zone with page-specific coordinates
+            page_zone = Zone(
+                id=zone_id,
+                name=zone_def.name if zone_def else zone_id,
+                x=zone_coords[0],
+                y=zone_coords[1],
+                width=zone_coords[2],
+                height=zone_coords[3],
+                threshold=zone_def.threshold if zone_def else 7,
+                enabled=True,
+                zone_type=getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove'
+            )
+            page_zones.append(page_zone)
+
         return page_zones
     
     def _sync_zoom(self, zoom: float):

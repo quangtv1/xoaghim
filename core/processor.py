@@ -25,6 +25,7 @@ class Zone:
     threshold: int = 5
     enabled: bool = True
     zone_type: str = 'remove'  # 'remove' (xóa) or 'protect' (bảo vệ)
+    page_filter: str = 'all'  # 'all', 'odd', 'even', 'none' - filter khi tạo zone
     
     def to_pixels(self, img_width: int, img_height: int) -> Tuple[int, int, int, int]:
         """Chuyển đổi % sang pixels: (x, y, w, h)"""
@@ -428,6 +429,108 @@ class StapleRemover:
 
         return result
 
+    def _process_zone_with_protection(self, image: np.ndarray, zone: Zone,
+                                        protected_regions: List, w: int, h: int) -> np.ndarray:
+        """
+        Xử lý zone với bảo vệ các vùng protected (fallback khi không có zone_optimizer).
+
+        Args:
+            image: Ảnh cần xử lý
+            zone: Zone cần xử lý (removal)
+            protected_regions: Danh sách ProtectedRegion cần bảo vệ
+            w: Chiều rộng ảnh
+            h: Chiều cao ảnh
+
+        Returns:
+            Ảnh đã xử lý
+        """
+        if not zone.enabled:
+            return image
+
+        result = image.copy()
+        is_color = len(image.shape) == 3
+
+        # Lấy tọa độ vùng (với edge padding cho góc/cạnh)
+        zx, zy, zw, zh = zone.to_pixels_with_edge_padding(w, h, padding=10)
+
+        # Đảm bảo không vượt quá biên
+        zx = max(0, min(zx, w - 1))
+        zy = max(0, min(zy, h - 1))
+        zw = min(zw, w - zx)
+        zh = min(zh, h - zy)
+
+        if zw <= 0 or zh <= 0:
+            return result
+
+        # Tạo protection mask từ tất cả protected regions
+        protection_mask = np.zeros((zh, zw), dtype=bool)
+        for region in protected_regions:
+            # Lấy bbox của protected region
+            rx1, ry1, rx2, ry2 = region.bbox
+
+            # Tính intersection với zone
+            ix1 = max(zx, rx1)
+            iy1 = max(zy, ry1)
+            ix2 = min(zx + zw, rx2)
+            iy2 = min(zy + zh, ry2)
+
+            if ix1 < ix2 and iy1 < iy2:
+                # Có intersection - mark các pixel này là protected
+                local_x1 = ix1 - zx
+                local_y1 = iy1 - zy
+                local_x2 = ix2 - zx
+                local_y2 = iy2 - zy
+                protection_mask[local_y1:local_y2, local_x1:local_x2] = True
+
+        # Lấy màu nền
+        bg_color = self.get_background_color(image)
+
+        # Vùng cần xử lý
+        region = image[zy:zy+zh, zx:zx+zw]
+
+        # Chuyển sang grayscale để phân tích
+        if is_color:
+            gray_region = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+            bg_gray = int(0.114 * bg_color[0] + 0.587 * bg_color[1] + 0.299 * bg_color[2])
+        else:
+            gray_region = region.copy()
+            bg_gray = bg_color[0]
+
+        # Tìm pixel tối hơn nền
+        diff = bg_gray - gray_region.astype(np.int16)
+        artifact_mask = diff > zone.threshold
+
+        # Bảo vệ chữ đen (gray < 80)
+        text_mask = gray_region < 80
+        artifact_mask = artifact_mask & ~text_mask
+
+        # Bảo vệ màu đỏ/xanh nếu được bật
+        if self.protect_red and is_color:
+            color_mask = self.is_red_or_blue(region, artifact_mask)
+            artifact_mask = artifact_mask & ~color_mask
+
+        # Loại trừ các vùng protected khỏi artifact_mask
+        artifact_mask = artifact_mask & ~protection_mask
+
+        # Morphological operations
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        artifact_mask = artifact_mask.astype(np.uint8) * 255
+        artifact_mask = cv2.morphologyEx(artifact_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+        artifact_mask = cv2.dilate(artifact_mask, kernel, iterations=3)
+
+        # Giới hạn lại không được xử lý vùng protected sau morphology
+        artifact_mask = (artifact_mask > 0) & ~protection_mask
+
+        # Đổ màu nền
+        if is_color:
+            for c in range(3):
+                channel = result[zy:zy+zh, zx:zx+zw, c]
+                channel[artifact_mask] = bg_color[c]
+        else:
+            result[zy:zy+zh, zx:zx+zw][artifact_mask] = bg_gray
+
+        return result
+
     def process_image(self, image: np.ndarray, zones: List[Zone],
                       protected_regions: Optional[List] = None) -> np.ndarray:
         """
@@ -475,15 +578,13 @@ class StapleRemover:
         # Combine AI-detected regions with custom protect regions
         all_protected = list(protected_regions or []) + custom_protect_regions
 
-        # Nếu text protection được bật và khả dụng (hoặc có custom protect regions)
-        use_optimization = (self._text_protection.enabled and self.zone_optimizer is not None) or custom_protect_regions
+        # Sử dụng regions đã detect hoặc detect mới
+        if protected_regions is None and self._text_protection.enabled:
+            detected_regions = self.detect_protected_regions(image)
+            all_protected = detected_regions + custom_protect_regions
 
-        if use_optimization and self.zone_optimizer is not None:
-            # Sử dụng regions đã detect hoặc detect mới
-            if protected_regions is None and self._text_protection.enabled:
-                detected_regions = self.detect_protected_regions(image)
-                all_protected = detected_regions + custom_protect_regions
-
+        # Nếu có protected regions (AI hoặc custom), cố gắng sử dụng zone_optimizer
+        if all_protected and self.zone_optimizer is not None:
             for zone in removal_zones:
                 # Convert zone to bbox (với edge padding cho góc/cạnh)
                 user_bbox = zone.to_bbox_with_edge_padding(w, h, padding=10)
@@ -494,6 +595,10 @@ class StapleRemover:
                 # Process each safe zone
                 for safe_zone in safe_zones:
                     result = self._process_safe_zone(result, safe_zone, zone)
+        elif all_protected:
+            # Fallback: subtract protected regions from removal zones manually
+            for zone in removal_zones:
+                result = self._process_zone_with_protection(result, zone, all_protected, w, h)
         else:
             # Original behavior - no protection
             for zone in removal_zones:

@@ -13,13 +13,21 @@ from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QSlider, QComboBox, QPushButton, QCheckBox,
     QLineEdit, QGroupBox, QMessageBox, QFrame,
-    QDialogButtonBox
+    QDialogButtonBox, QStyledItemDelegate
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QSize
 from PyQt5.QtGui import QFont
 
 from typing import Set
 from core.processor import TextProtectionOptions
+
+
+class ComboItemDelegate(QStyledItemDelegate):
+    """Custom delegate for larger combobox items"""
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        size.setHeight(24)  # Set item height to 24px
+        return size
 
 
 class TextProtectionDialog(QDialog):
@@ -35,16 +43,44 @@ class TextProtectionDialog(QDialog):
         self._load_options()
 
     def _setup_ui(self):
-        self.setWindowTitle("Cài đặt Bảo vệ văn bản (AI)")
+        self.setWindowTitle("Cài đặt Nhận diện vùng bảo vệ")
         self.setMinimumWidth(400)
         self.setModal(True)
+
+        # Global stylesheet for combobox hover effect (match bottom_bar style)
+        self.setStyleSheet("""
+            QComboBox {
+                background-color: white;
+                border: 1px solid #D1D5DB;
+                border-radius: 4px;
+                padding: 4px 6px;
+                padding-right: 24px;
+                color: #374151;
+            }
+            QComboBox QAbstractItemView {
+                background-color: white;
+                color: #374151;
+                outline: none;
+            }
+            QComboBox QAbstractItemView::item {
+                background-color: white;
+                color: #374151;
+                padding: 10px 8px 10px 18px;
+            }
+            QComboBox QAbstractItemView::item:hover {
+                background-color: #93C5FD;
+            }
+            QComboBox QAbstractItemView::item:selected {
+                background-color: #93C5FD;
+            }
+        """)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(16)
         layout.setContentsMargins(20, 20, 20, 20)
 
         # === Header ===
-        header = QLabel("Bảo vệ văn bản bằng AI")
+        header = QLabel("Nhận diện vùng bảo vệ (tự động)")
         header.setStyleSheet("""
             font-size: 16px;
             font-weight: bold;
@@ -206,13 +242,30 @@ class TextProtectionDialog(QDialog):
         server_layout = QVBoxLayout(server_group)
         server_layout.setSpacing(8)
 
-        # Server mode
+        # Server mode (editable for custom popup styling on macOS)
         mode_row = QHBoxLayout()
         mode_row.addWidget(QLabel("Chế độ:"))
         self.server_mode_combo = QComboBox()
         self.server_mode_combo.addItems(["Local (CPU)", "Remote GPU"])
         self.server_mode_combo.setCurrentIndex(0)  # Default: Local (CPU)
         self.server_mode_combo.setFixedWidth(120)
+        self.server_mode_combo.setEditable(True)
+        self.server_mode_combo.lineEdit().setReadOnly(True)  # Prevent typing
+        self.server_mode_combo.lineEdit().setTextMargins(0, 0, 0, 0)
+        # Use custom delegate for larger item height
+        self.server_mode_combo.setItemDelegate(ComboItemDelegate(self.server_mode_combo))
+        # Apply view stylesheet directly for dropdown items
+        self.server_mode_combo.view().setStyleSheet("""
+            QListView::item {
+                padding: 8px 8px 8px 8px;
+            }
+            QListView::item:hover {
+                background-color: #93C5FD;
+            }
+            QListView::item:selected {
+                background-color: #93C5FD;
+            }
+        """)
         self.server_mode_combo.currentIndexChanged.connect(self._on_server_mode_changed)
         mode_row.addWidget(self.server_mode_combo)
         mode_row.addStretch()

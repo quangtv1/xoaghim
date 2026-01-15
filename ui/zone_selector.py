@@ -32,7 +32,7 @@ class PaperIcon(QWidget):
         self._hover_area: Optional[str] = None  # 'remove' or 'protect' or None
 
         # Size and white background
-        self.setFixedSize(100, 120)
+        self.setFixedSize(80, 100)
         self.setMouseTracking(True)
         self.setAutoFillBackground(True)
         palette = self.palette()
@@ -78,8 +78,9 @@ class PaperIcon(QWidget):
         zone = self.zones.get(zone_id, {})
         pos = zone.get('pos', '')
 
-        size = 18  # Zone size
-        edge_width = 10  # Edge width
+        size = 18  # Zone size (corners)
+        edge_thickness = 10  # Thickness for all edges (width for left/right, height for top/bottom)
+        edge_inset = 10  # Offset from corners for top/bottom edges (smaller = wider)
 
         if pos == 'tl':
             return QRectF(paper.left(), paper.top(), size, size)
@@ -90,13 +91,13 @@ class PaperIcon(QWidget):
         elif pos == 'br':
             return QRectF(paper.right() - size, paper.bottom() - size, size, size)
         elif pos == 'left':
-            return QRectF(paper.left(), paper.top() + size, edge_width, paper.height() - size * 2)
+            return QRectF(paper.left(), paper.top() + size, edge_thickness, paper.height() - size * 2)
         elif pos == 'right':
-            return QRectF(paper.right() - edge_width, paper.top() + size, edge_width, paper.height() - size * 2)
+            return QRectF(paper.right() - edge_thickness, paper.top() + size, edge_thickness, paper.height() - size * 2)
         elif pos == 'top':
-            return QRectF(paper.left() + size, paper.top(), paper.width() - size * 2, edge_width)
+            return QRectF(paper.left() + edge_inset, paper.top(), paper.width() - edge_inset * 2, edge_thickness)
         elif pos == 'bottom':
-            return QRectF(paper.left() + size, paper.bottom() - edge_width, paper.width() - size * 2, edge_width)
+            return QRectF(paper.left() + edge_inset, paper.bottom() - edge_thickness, paper.width() - edge_inset * 2, edge_thickness)
 
         return QRectF()
 
@@ -389,7 +390,8 @@ class ZoneSelectorWidget(QFrame):
     def _setup_ui(self):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(4)
+        layout.setAlignment(Qt.AlignTop)
 
         # Corner selector (no label - label is in settings_panel)
         self.corner_icon = PaperIcon(mode='corner')
@@ -472,3 +474,22 @@ class ZoneSelectorWidget(QFrame):
             self.edge_icon.set_zone_selected(zone_id, selected)
         # Emit signal to notify listeners
         self.zones_changed.emit(self.get_all_selected_zones())
+
+    def reset_all(self):
+        """Reset all zones - deselect all corners and edges"""
+        self.corner_icon.clear_selection()
+        self.edge_icon.clear_selection()
+        self.custom_icon.set_draw_mode(None)
+        self._draw_mode = None
+        self.zones_changed.emit(set())
+
+    def reset_preset(self):
+        """Reset only preset zones (corners and edges)"""
+        self.corner_icon.clear_selection()
+        self.edge_icon.clear_selection()
+        self.zones_changed.emit(set())
+
+    def reset_custom(self):
+        """Reset only custom draw mode"""
+        self.custom_icon.set_draw_mode(None)
+        self._draw_mode = None

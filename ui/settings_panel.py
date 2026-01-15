@@ -7,15 +7,24 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QSlider, QComboBox, QPushButton,
     QFrame, QGridLayout, QLineEdit,
-    QFileDialog, QCheckBox
+    QFileDialog, QCheckBox, QRadioButton, QButtonGroup, QMessageBox,
+    QStyledItemDelegate
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QSize
 from PyQt5.QtGui import QColor
 
 from typing import List, Dict, Set
 from core.processor import Zone, PRESET_ZONES, TextProtectionOptions
 from ui.zone_selector import ZoneSelectorWidget
 from ui.text_protection_dialog import TextProtectionDialog
+
+
+class ComboItemDelegate(QStyledItemDelegate):
+    """Custom delegate for larger combobox items"""
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        size.setHeight(24)  # Set item height to 24px
+        return size
 
 
 # Thêm preset cho margin_top và margin_bottom
@@ -49,6 +58,7 @@ class SettingsPanel(QWidget):
     text_protection_changed = pyqtSignal(object)  # TextProtectionOptions
     # Draw mode signal: None = off, 'remove' = draw removal zone, 'protect' = draw protection zone
     draw_mode_changed = pyqtSignal(object)  # str or None
+    zones_reset = pyqtSignal()  # Emitted when all zones are reset
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -98,7 +108,28 @@ class SettingsPanel(QWidget):
             }
             QComboBox {
                 font-size: 12px;
-                background-color: #FFFFFF;
+                background-color: white;
+                border: 1px solid #D1D5DB;
+                border-radius: 4px;
+                padding: 4px 6px;
+                padding-right: 24px;
+                color: #374151;
+            }
+            QComboBox QAbstractItemView {
+                background-color: white;
+                color: #374151;
+                outline: none;
+            }
+            QComboBox QAbstractItemView::item {
+                background-color: white;
+                color: #374151;
+                padding: 10px 8px 10px 18px;
+            }
+            QComboBox QAbstractItemView::item:hover {
+                background-color: #93C5FD;
+            }
+            QComboBox QAbstractItemView::item:selected {
+                background-color: #93C5FD;
             }
             QLineEdit {
                 font-size: 12px;
@@ -123,7 +154,7 @@ class SettingsPanel(QWidget):
                 border-radius: 6px;
             }
         """)
-        
+
         # === 3 COLUMNS LAYOUT ===
         main_row = QHBoxLayout()
         main_row.setSpacing(24)
@@ -135,21 +166,11 @@ class SettingsPanel(QWidget):
         zone_container = QVBoxLayout(zone_widget)
         zone_container.setContentsMargins(0, 0, 0, 0)
         zone_container.setSpacing(8)
-        
-        zone_title = QLabel("Vùng xử lý")
-        zone_title.setStyleSheet("""
-            font-weight: 600; 
-            color: #374151; 
-            font-size: 12px;
-            padding-bottom: 6px;
-            border-bottom: 1px solid #E5E7EB;
-            background-color: #FFFFFF;
-        """)
-        zone_container.addWidget(zone_title)
-        
+
         # Row with zone selector icons and apply checkboxes
         zone_row = QHBoxLayout()
         zone_row.setSpacing(12)
+        zone_row.setAlignment(Qt.AlignTop)
         
         # Zone icons column with labels
         zone_icons_widget = QWidget()
@@ -157,6 +178,7 @@ class SettingsPanel(QWidget):
         zone_icons_col = QVBoxLayout(zone_icons_widget)
         zone_icons_col.setContentsMargins(0, 0, 0, 0)
         zone_icons_col.setSpacing(4)
+        zone_icons_col.setAlignment(Qt.AlignTop)
         
         # Zone selector
         self.zone_selector = ZoneSelectorWidget()
@@ -171,85 +193,150 @@ class SettingsPanel(QWidget):
         labels_widget.setStyleSheet("background-color: #FFFFFF;")
         labels_row = QHBoxLayout(labels_widget)
         labels_row.setContentsMargins(0, 0, 0, 0)
-        labels_row.setSpacing(12)
-        
+        labels_row.setSpacing(4)
+
         for label_text in ["Góc", "Cạnh", "Tùy biến"]:
             lbl = QLabel(label_text)
             lbl.setAlignment(Qt.AlignCenter)
-            lbl.setFixedWidth(100)
+            lbl.setFixedWidth(80)
             lbl.setStyleSheet("color: #6B7280; font-size: 12px; background-color: #FFFFFF;")
             labels_row.addWidget(lbl)
-        
+
         zone_icons_col.addWidget(labels_widget)
         zone_row.addWidget(zone_icons_widget)
         
-        # Apply checkboxes
+        # Apply radio buttons (choice - only one can be selected)
         apply_widget = QWidget()
         apply_widget.setStyleSheet("background-color: #FFFFFF;")
         apply_layout = QVBoxLayout(apply_widget)
         apply_layout.setContentsMargins(0, 0, 0, 0)
         apply_layout.setSpacing(4)
-        
-        apply_label = QLabel("Áp dụng:")
-        apply_label.setStyleSheet("color: #6B7280; font-size: 12px; background-color: #FFFFFF;")
-        apply_layout.addWidget(apply_label)
-        
-        self.apply_all_cb = QCheckBox("Tất cả các trang")
-        self.apply_all_cb.setChecked(True)
-        self.apply_all_cb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
-        self.apply_all_cb.stateChanged.connect(self._on_apply_all_changed)
-        apply_layout.addWidget(self.apply_all_cb)
-        
-        self.apply_odd_cb = QCheckBox("Các trang lẻ")
-        self.apply_odd_cb.setChecked(False)
-        self.apply_odd_cb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
-        self.apply_odd_cb.stateChanged.connect(self._on_apply_odd_changed)
-        apply_layout.addWidget(self.apply_odd_cb)
-        
-        self.apply_even_cb = QCheckBox("Các trang chẵn")
-        self.apply_even_cb.setChecked(False)
-        self.apply_even_cb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
-        self.apply_even_cb.stateChanged.connect(self._on_apply_even_changed)
-        apply_layout.addWidget(self.apply_even_cb)
-        
+        apply_layout.setAlignment(Qt.AlignTop)
+
+        # Radio button group for exclusive selection
+        self.apply_group = QButtonGroup(self)
+
+        self.apply_all_rb = QRadioButton("Tất cả")
+        self.apply_all_rb.setChecked(True)
+        self.apply_all_rb.setToolTip("Vùng vẽ mới được thêm vào tất cả các trang")
+        self.apply_all_rb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
+        self.apply_group.addButton(self.apply_all_rb, 0)
+        apply_layout.addWidget(self.apply_all_rb)
+
+        self.apply_odd_rb = QRadioButton("Trang lẻ")
+        self.apply_odd_rb.setToolTip("Vùng vẽ mới chỉ thêm vào các trang 1, 3, 5...")
+        self.apply_odd_rb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
+        self.apply_group.addButton(self.apply_odd_rb, 1)
+        apply_layout.addWidget(self.apply_odd_rb)
+
+        self.apply_even_rb = QRadioButton("Trang chẵn")
+        self.apply_even_rb.setToolTip("Vùng vẽ mới chỉ thêm vào các trang 2, 4, 6...")
+        self.apply_even_rb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
+        self.apply_group.addButton(self.apply_even_rb, 2)
+        apply_layout.addWidget(self.apply_even_rb)
+
+        self.apply_free_rb = QRadioButton("Tự do")
+        self.apply_free_rb.setToolTip("Vùng vẽ mới chỉ thêm vào trang đang xem")
+        self.apply_free_rb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
+        self.apply_group.addButton(self.apply_free_rb, 3)
+        apply_layout.addWidget(self.apply_free_rb)
+
+        # Connect button group signal
+        self.apply_group.buttonClicked.connect(self._on_apply_filter_changed)
+
         apply_layout.addStretch()
+
+        # Reset button (aligned with Góc, Cạnh, Tùy biến labels)
+        self.reset_zones_btn = QPushButton("Xóa tất cả")
+        self.reset_zones_btn.setToolTip("Xóa tất cả vùng đã chọn")
+        self.reset_zones_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #FFFFFF;
+                color: #0047AB;
+                border: 1px solid #D1D5DB;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-size: 12px;
+                font-weight: normal;
+            }
+            QPushButton:hover {
+                background-color: #FEE2E2;
+                color: #DC2626;
+                border-color: #FECACA;
+            }
+            QPushButton:pressed {
+                background-color: #FECACA;
+                color: #B91C1C;
+            }
+        """)
+        self.reset_zones_btn.clicked.connect(self._on_reset_zones_clicked)
+        apply_layout.addWidget(self.reset_zones_btn)
+
         zone_row.addWidget(apply_widget)
-        zone_row.addStretch()
-        
-        zone_container.addLayout(zone_row)
-        zone_container.addStretch()
-        main_row.addWidget(zone_widget, stretch=1)  # Smaller width
-        
-        # ========== Column 2: THÔNG SỐ ==========
+
+        # ========== Thông số (side by side in zone_row) ==========
         params_widget = QWidget()
         params_widget.setStyleSheet("background-color: #FFFFFF;")
         params_container = QVBoxLayout(params_widget)
+        params_container.setAlignment(Qt.AlignTop)
         params_container.setContentsMargins(0, 0, 0, 0)
-        params_container.setSpacing(8)
-        
-        params_title = QLabel("Thông số")
-        params_title.setStyleSheet("""
-            font-weight: 600; 
-            color: #374151; 
-            font-size: 12px;
-            padding-bottom: 6px;
-            border-bottom: 1px solid #E5E7EB;
-            background-color: #FFFFFF;
-        """)
-        params_container.addWidget(params_title)
-        
+        params_container.setSpacing(6)
+
         params_layout = QGridLayout()
         params_layout.setSpacing(6)
-        
-        # Chọn zone để chỉnh
+        params_layout.setColumnStretch(1, 1)  # Sliders expand to right edge
+
+        # Chọn zone để chỉnh (editable for custom popup styling on macOS)
         lbl_vung = QLabel("Vùng:")
         lbl_vung.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
         params_layout.addWidget(lbl_vung, 0, 0)
         self.zone_combo = QComboBox()
-        self.zone_combo.setMinimumWidth(120)
+        self.zone_combo.setMinimumWidth(180)
+        self.zone_combo.setEditable(True)
+        self.zone_combo.lineEdit().setReadOnly(True)  # Prevent typing
+        self.zone_combo.lineEdit().setTextMargins(0, 0, 0, 0)
+        # Use custom delegate for larger item height
+        self.zone_combo.setItemDelegate(ComboItemDelegate(self.zone_combo))
+        # Apply view stylesheet directly for dropdown items
+        self.zone_combo.view().setStyleSheet("""
+            QListView::item {
+                padding: 8px 8px 8px 8px;
+            }
+            QListView::item:hover {
+                background-color: #93C5FD;
+            }
+            QListView::item:selected {
+                background-color: #93C5FD;
+            }
+        """)
         self.zone_combo.currentTextChanged.connect(self._on_zone_selected)
         params_layout.addWidget(self.zone_combo, 0, 1, 1, 2)
-        
+
+        # Simple flat slider style
+        slider_style = """
+            QSlider::groove:horizontal {
+                border: 1px solid #D1D5DB;
+                height: 4px;
+                background: #E5E7EB;
+                border-radius: 2px;
+            }
+            QSlider::handle:horizontal {
+                background: #3B82F6;
+                border: none;
+                width: 12px;
+                height: 12px;
+                margin: -4px 0;
+                border-radius: 6px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: #2563EB;
+            }
+            QSlider::sub-page:horizontal {
+                background: #93C5FD;
+                border-radius: 2px;
+            }
+        """
+
         # Kích thước
         lbl_rong = QLabel("Rộng:")
         lbl_rong.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
@@ -257,55 +344,51 @@ class SettingsPanel(QWidget):
         self.width_slider = QSlider(Qt.Horizontal)
         self.width_slider.setRange(1, 50)
         self.width_slider.setValue(12)
+        self.width_slider.setStyleSheet(slider_style)
         self.width_slider.valueChanged.connect(self._on_zone_size_changed)
         params_layout.addWidget(self.width_slider, 1, 1)
         self.width_label = QLabel("12%")
         self.width_label.setFixedWidth(32)
         self.width_label.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
         params_layout.addWidget(self.width_label, 1, 2)
-        
+
         lbl_cao = QLabel("Cao:")
         lbl_cao.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
         params_layout.addWidget(lbl_cao, 2, 0)
         self.height_slider = QSlider(Qt.Horizontal)
         self.height_slider.setRange(1, 50)
         self.height_slider.setValue(12)
+        self.height_slider.setStyleSheet(slider_style)
         self.height_slider.valueChanged.connect(self._on_zone_size_changed)
         params_layout.addWidget(self.height_slider, 2, 1)
         self.height_label = QLabel("12%")
         self.height_label.setFixedWidth(32)
         self.height_label.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
         params_layout.addWidget(self.height_label, 2, 2)
-        
-        # Độ nhạy
-        lbl_nhay = QLabel("Độ nhạy:")
+
+        # Ngưỡng
+        lbl_nhay = QLabel("Ngưỡng:")
         lbl_nhay.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
         params_layout.addWidget(lbl_nhay, 3, 0)
         self.threshold_slider = QSlider(Qt.Horizontal)
         self.threshold_slider.setRange(1, 15)
         self.threshold_slider.setValue(5)
+        self.threshold_slider.setStyleSheet(slider_style)
         self.threshold_slider.valueChanged.connect(self._on_settings_changed)
         params_layout.addWidget(self.threshold_slider, 3, 1)
         self.threshold_label = QLabel("5")
         self.threshold_label.setFixedWidth(32)
         self.threshold_label.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
         params_layout.addWidget(self.threshold_label, 3, 2)
-        
+
         params_container.addLayout(params_layout)
 
-        # Separator
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet("background-color: #E5E7EB; margin: 8px 0;")
-        sep.setFixedHeight(1)
-        params_container.addWidget(sep)
-
-        # Text protection section - simplified with settings button
+        # Text protection section
         protection_row = QHBoxLayout()
         protection_row.setSpacing(8)
 
-        self.text_protection_cb = QCheckBox("Bảo vệ văn bản (AI)")
-        self.text_protection_cb.setChecked(True)  # Mặc định bật
+        self.text_protection_cb = QCheckBox("Nhận diện vùng bảo vệ (tự động)")
+        self.text_protection_cb.setChecked(True)
         self.text_protection_cb.setToolTip(
             "Sử dụng AI để phát hiện và bảo vệ vùng văn bản,\n"
             "bảng biểu khỏi bị xóa nhầm."
@@ -315,14 +398,15 @@ class SettingsPanel(QWidget):
         protection_row.addWidget(self.text_protection_cb)
 
         self.text_protection_settings_btn = QPushButton("⚙")
-        self.text_protection_settings_btn.setFixedSize(24, 24)
+        self.text_protection_settings_btn.setFixedSize(28, 28)
         self.text_protection_settings_btn.setToolTip("Cài đặt bảo vệ văn bản")
         self.text_protection_settings_btn.setStyleSheet("""
             QPushButton {
-                font-size: 14px;
+                font-size: 16px;
                 background-color: #F3F4F6;
                 border: 1px solid #D1D5DB;
                 border-radius: 4px;
+                padding: 0px;
             }
             QPushButton:hover {
                 background-color: #E5E7EB;
@@ -338,70 +422,110 @@ class SettingsPanel(QWidget):
         self._text_protection_options = TextProtectionOptions()
 
         params_container.addStretch()
-        main_row.addWidget(params_widget, stretch=1)
-        
-        # ========== Column 3: ĐẦU RA ==========
+        zone_row.addWidget(params_widget, stretch=1)  # Expand to right edge
+
+        zone_container.addLayout(zone_row)
+        zone_container.addStretch()
+        main_row.addWidget(zone_widget, stretch=2)  # 2/3 width
+
+        # Separator between Vùng xử lý and Đầu ra
+        sep_col = QFrame()
+        sep_col.setFrameShape(QFrame.VLine)
+        sep_col.setStyleSheet("background-color: #E5E7EB;")
+        sep_col.setFixedWidth(1)
+        main_row.addWidget(sep_col)
+
+        # ========== Column 2: ĐẦU RA ==========
         output_widget = QWidget()
         output_widget.setStyleSheet("background-color: #FFFFFF;")
         output_container = QVBoxLayout(output_widget)
         output_container.setContentsMargins(0, 0, 0, 0)
         output_container.setSpacing(8)
-        
-        output_title = QLabel("Đầu ra")
-        output_title.setStyleSheet("""
-            font-weight: 600; 
-            color: #374151; 
-            font-size: 12px;
-            padding-bottom: 6px;
-            border-bottom: 1px solid #E5E7EB;
-            background-color: #FFFFFF;
-        """)
-        output_container.addWidget(output_title)
-        
-        output_layout = QGridLayout()
+
+        output_layout = QVBoxLayout()
         output_layout.setSpacing(6)
-        
-        # DPI (độ phân giải)
-        lbl_dpi = QLabel("Độ phân giải:")
+
+        # Row 0: DPI, JPEG, Nén đen trắng on same line
+        quality_row = QHBoxLayout()
+        quality_row.setSpacing(6)
+
+        # Dropdown item style for all comboboxes
+        dropdown_item_style = """
+            QListView::item {
+                padding: 8px 8px 8px 8px;
+            }
+            QListView::item:hover {
+                background-color: #93C5FD;
+            }
+            QListView::item:selected {
+                background-color: #93C5FD;
+            }
+        """
+
+        lbl_dpi = QLabel("DPI:")
         lbl_dpi.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
-        output_layout.addWidget(lbl_dpi, 0, 0)
+        lbl_dpi.setFixedWidth(55)
+        quality_row.addWidget(lbl_dpi)
         self.quality_combo = QComboBox()
         self.quality_combo.addItems(["300 dpi", "250 dpi", "200 dpi", "100 dpi", "72 dpi"])
-        self.quality_combo.setCurrentIndex(2)  # Default 200 dpi
-        output_layout.addWidget(self.quality_combo, 0, 1, 1, 2)
+        self.quality_combo.setCurrentIndex(0)  # Default 300 dpi
+        self.quality_combo.setMinimumWidth(100)
+        self.quality_combo.setEditable(True)
+        self.quality_combo.lineEdit().setReadOnly(True)  # Prevent typing
+        self.quality_combo.lineEdit().setTextMargins(0, 0, 0, 0)
+        self.quality_combo.setItemDelegate(ComboItemDelegate(self.quality_combo))
+        self.quality_combo.view().setStyleSheet(dropdown_item_style)
+        quality_row.addWidget(self.quality_combo)
 
-        # JPEG Quality (chất lượng nén)
-        lbl_jpeg = QLabel("Nén JPEG:")
+        quality_row.addSpacing(12)
+
+        lbl_jpeg = QLabel("Nén:")
         lbl_jpeg.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
-        output_layout.addWidget(lbl_jpeg, 1, 0)
+        quality_row.addWidget(lbl_jpeg)
         self.jpeg_quality_combo = QComboBox()
-        self.jpeg_quality_combo.addItems(["Gốc (100%)", "90%", "80%", "70%"])
+        self.jpeg_quality_combo.addItems(["100%", "90%", "80%", "70%"])
         self.jpeg_quality_combo.setCurrentIndex(1)  # Default: 90%
-        output_layout.addWidget(self.jpeg_quality_combo, 1, 1, 1, 2)
+        self.jpeg_quality_combo.setMinimumWidth(100)
+        self.jpeg_quality_combo.setEditable(True)
+        self.jpeg_quality_combo.lineEdit().setReadOnly(True)  # Prevent typing
+        self.jpeg_quality_combo.lineEdit().setTextMargins(0, 0, 0, 0)
+        self.jpeg_quality_combo.setItemDelegate(ComboItemDelegate(self.jpeg_quality_combo))
+        self.jpeg_quality_combo.view().setStyleSheet(dropdown_item_style)
+        quality_row.addWidget(self.jpeg_quality_combo)
 
-        # Optimize size checkbox
-        self.optimize_size_cb = QCheckBox("Nén siêu nhẹ (đen trắng)")
+        quality_row.addSpacing(12)
+
+        # Optimize size checkbox (same row)
+        self.optimize_size_cb = QCheckBox("Nén đen trắng")
         self.optimize_size_cb.setChecked(False)  # Default: disabled
         self.optimize_size_cb.setToolTip(
             "Chuyển ảnh thành đen trắng 1-bit với CCITT Group 4.\n"
             "Dung lượng giảm ~90% nhưng mất màu xám/gradient."
         )
         self.optimize_size_cb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
-        output_layout.addWidget(self.optimize_size_cb, 2, 0, 1, 3)
+        quality_row.addWidget(self.optimize_size_cb)
+        quality_row.addStretch()
+
+        output_layout.addLayout(quality_row)
+
+        # Row 2: Thư mục
+        folder_row = QHBoxLayout()
+        folder_row.setSpacing(6)
 
         lbl_tm = QLabel("Thư mục:")
         lbl_tm.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
-        output_layout.addWidget(lbl_tm, 3, 0)
+        lbl_tm.setFixedWidth(55)
+        folder_row.addWidget(lbl_tm)
         self.output_path = QLineEdit()
-        self.output_path.setPlaceholderText("Chọn thư mục...")
-        output_layout.addWidget(self.output_path, 3, 1)
+        self.output_path.setPlaceholderText("Chọn thư mục lưu kết quả...")
+        folder_row.addWidget(self.output_path, 1)  # stretch=1 to expand
 
         self.browse_btn = QPushButton("📁")
-        self.browse_btn.setFixedSize(36, 28)
+        self.browse_btn.setFixedSize(32, 26)
         self.browse_btn.setToolTip("Chọn thư mục đầu ra")
         self.browse_btn.setStyleSheet("""
             QPushButton {
-                font-size: 16px;
+                font-size: 14px;
                 padding: 0px;
                 background-color: #FFFFFF;
                 border: 1px solid #D1D5DB;
@@ -412,13 +536,22 @@ class SettingsPanel(QWidget):
             }
         """)
         self.browse_btn.clicked.connect(self._on_browse_output)
-        output_layout.addWidget(self.browse_btn, 3, 2)
+        folder_row.addWidget(self.browse_btn)
 
-        lbl_tf = QLabel("Tên file:")
+        output_layout.addLayout(folder_row)
+
+        # Row 3: Tên file
+        file_row = QHBoxLayout()
+        file_row.setSpacing(6)
+
+        lbl_tf = QLabel("File đích:")
         lbl_tf.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
-        output_layout.addWidget(lbl_tf, 4, 0)
+        lbl_tf.setFixedWidth(55)
+        file_row.addWidget(lbl_tf)
         self.filename_pattern = QLineEdit("{gốc}_clean.pdf")
-        output_layout.addWidget(self.filename_pattern, 4, 1, 1, 2)
+        file_row.addWidget(self.filename_pattern, 1)  # stretch=1 to expand
+
+        output_layout.addLayout(file_row)
 
         # Connect output settings changes
         self.output_path.textChanged.connect(self._on_output_settings_changed)
@@ -426,7 +559,7 @@ class SettingsPanel(QWidget):
 
         output_container.addLayout(output_layout)
         output_container.addStretch()
-        main_row.addWidget(output_widget, stretch=2)  # Wider width
+        main_row.addWidget(output_widget, stretch=1)  # 1/3 width
         
         layout.addLayout(main_row)
     
@@ -479,9 +612,25 @@ class SettingsPanel(QWidget):
         self._update_zone_combo()
         self._emit_zones()
     
+    def _get_current_filter(self) -> str:
+        """Lấy filter hiện tại: 'all', 'odd', 'even', 'none'"""
+        filter_map = {0: 'all', 1: 'odd', 2: 'even', 3: 'none'}
+        return filter_map.get(self.apply_group.checkedId(), 'all')
+
     def _on_zone_clicked(self, zone_id: str, enabled: bool):
         """Khi click vào zone - cập nhật combo box và lưu lịch sử"""
         if enabled:
+            # Góc/Cạnh chỉ dùng được với filter Tất cả/Lẻ/Chẵn (không dùng với "Không")
+            # Nếu filter đang là "Không" (ID=3), tự động chuyển sang "Tất cả" (ID=0)
+            if zone_id.startswith('corner_') or zone_id.startswith('margin_'):
+                if self.apply_group.checkedId() == 3:  # "Không" filter
+                    self.apply_all_rb.setChecked(True)
+                    self._on_apply_filter_changed(self.apply_all_rb)
+
+            # Lưu filter hiện tại vào zone
+            if zone_id in self._zones:
+                self._zones[zone_id].page_filter = self._get_current_filter()
+
             # Zone được chọn -> thêm vào lịch sử và hiển thị zone này
             # Xóa zone này khỏi lịch sử nếu đã có (để đưa lên đầu)
             if zone_id in self._zone_selection_history:
@@ -587,7 +736,8 @@ class SettingsPanel(QWidget):
             height=height,
             threshold=self.threshold_slider.value(),
             enabled=True,
-            zone_type=zone_type  # 'remove' or 'protect'
+            zone_type=zone_type,  # 'remove' or 'protect'
+            page_filter=self._get_current_filter()
         )
 
         # Add to selection history
@@ -610,11 +760,11 @@ class SettingsPanel(QWidget):
         """Xóa vùng (bất kỳ loại nào: góc, cạnh, tùy biến)"""
         # Get base zone id (without page index)
         base_id = zone_id.rsplit('_', 1)[0] if zone_id.count('_') > 1 else zone_id
-        
+
         # Remove from selection history first
         if base_id in self._zone_selection_history:
             self._zone_selection_history.remove(base_id)
-        
+
         if base_id.startswith('custom') or base_id.startswith('protect'):
             # Custom/Protect zone - remove from custom_zones dict
             if base_id in self._custom_zones:
@@ -711,21 +861,38 @@ class SettingsPanel(QWidget):
         zones = [z for z in self._zones.values() if z.enabled]
         zones.extend([z for z in self._custom_zones.values() if z.enabled])
         return zones
-    
+
+    def get_zone_by_id(self, zone_id: str):
+        """Lấy zone theo ID (bao gồm cả preset và custom)"""
+        # Remove page index suffix if present (e.g., "corner_tl_0" -> "corner_tl")
+        base_id = zone_id.rsplit('_', 1)[0] if zone_id.count('_') > 1 else zone_id
+        if base_id in self._zones:
+            return self._zones[base_id]
+        if base_id in self._custom_zones:
+            return self._custom_zones[base_id]
+        return None
+
+    def set_filter(self, filter_mode: str):
+        """Chuyển filter radio button: 'all', 'odd', 'even', 'none'"""
+        filter_buttons = {
+            'all': self.apply_all_rb,
+            'odd': self.apply_odd_rb,
+            'even': self.apply_even_rb,
+            'none': self.apply_free_rb
+        }
+        if filter_mode in filter_buttons:
+            filter_buttons[filter_mode].setChecked(True)
+            self._on_apply_filter_changed(filter_buttons[filter_mode])
+
     def get_settings(self) -> dict:
         """Lấy settings"""
         dpi_map = {0: 300, 1: 250, 2: 200, 3: 100, 4: 72}
-        jpeg_quality_map = {0: 100, 1: 90, 2: 80, 3: 70}  # Gốc=100, 90%, 80%, 70%
+        jpeg_quality_map = {0: 100, 1: 90, 2: 80, 3: 70}  # 100%, 90%, 80%, 70%
 
-        # Determine apply_pages from checkboxes
-        if self.apply_all_cb.isChecked():
-            apply_pages = 'all'
-        elif self.apply_odd_cb.isChecked():
-            apply_pages = 'odd'
-        elif self.apply_even_cb.isChecked():
-            apply_pages = 'even'
-        else:
-            apply_pages = 'all'
+        # Determine apply_pages from radio buttons
+        checked_id = self.apply_group.checkedId()
+        apply_pages_map = {0: 'all', 1: 'odd', 2: 'even', 3: 'none'}
+        apply_pages = apply_pages_map.get(checked_id, 'all')
 
         return {
             'threshold': self.threshold_slider.value(),
@@ -738,40 +905,165 @@ class SettingsPanel(QWidget):
             'text_protection': self.get_text_protection_options(),
         }
     
-    def _on_apply_all_changed(self, state):
-        """Handle all pages checkbox"""
-        if state:
-            self.apply_odd_cb.setChecked(False)
-            self.apply_even_cb.setChecked(False)
-            self.page_filter_changed.emit('all')
-        else:
-            self._check_emit_none()
-    
-    def _on_apply_odd_changed(self, state):
-        """Handle odd pages checkbox"""
-        if state:
-            self.apply_all_cb.setChecked(False)
-            self.apply_even_cb.setChecked(False)
-            self.page_filter_changed.emit('odd')
-        else:
-            self._check_emit_none()
-    
-    def _on_apply_even_changed(self, state):
-        """Handle even pages checkbox"""
-        if state:
-            self.apply_all_cb.setChecked(False)
-            self.apply_odd_cb.setChecked(False)
-            self.page_filter_changed.emit('even')
-        else:
-            self._check_emit_none()
-    
-    def _check_emit_none(self):
-        """Check if all checkboxes are unchecked and emit 'none'"""
-        if not self.apply_all_cb.isChecked() and \
-           not self.apply_odd_cb.isChecked() and \
-           not self.apply_even_cb.isChecked():
-            self.page_filter_changed.emit('none')
-    
+    def _on_apply_filter_changed(self, button):
+        """Handle radio button selection for page filter"""
+        filter_map = {
+            self.apply_all_rb: 'all',
+            self.apply_odd_rb: 'odd',
+            self.apply_even_rb: 'even',
+            self.apply_free_rb: 'none'
+        }
+        filter_mode = filter_map.get(button, 'all')
+        self.page_filter_changed.emit(filter_mode)
+
+    def _on_reset_zones_clicked(self):
+        """Handle reset zones button - show popup with 3 options"""
+        from PyQt5.QtWidgets import QDialog
+
+        # Check what zones exist
+        # Thủ công = preset (corners, edges) + custom zones
+        has_preset = any(z.enabled for z in self._zones.values())
+        has_custom = bool(self._custom_zones)
+        has_manual = has_preset or has_custom
+        # Tự động = auto detection (text protection)
+        has_auto = self.text_protection_cb.isChecked()
+
+        if not has_manual and not has_auto:
+            return  # Nothing to reset
+
+        # Create custom dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Xóa vùng")
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        # Title label
+        title = QLabel("Chọn loại vùng cần xóa:")
+        title.setStyleSheet("font-size: 13px; font-weight: 500; color: #374151;")
+        layout.addWidget(title)
+
+        # Button style - blue theme
+        btn_style = """
+            QPushButton {
+                background-color: #FFFFFF;
+                color: #374151;
+                border: 1px solid #D1D5DB;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-size: 13px;
+                min-width: 80px;
+            }
+            QPushButton:hover {
+                background-color: #DBEAFE;
+                color: #1D4ED8;
+                border-color: #93C5FD;
+            }
+            QPushButton:pressed {
+                background-color: #BFDBFE;
+                color: #1E40AF;
+            }
+            QPushButton:disabled {
+                background-color: #F9FAFB;
+                color: #9CA3AF;
+                border-color: #E5E7EB;
+            }
+        """
+
+        cancel_style = """
+            QPushButton {
+                background-color: #FFFFFF;
+                color: #6B7280;
+                border: 1px solid #D1D5DB;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-size: 13px;
+                min-width: 60px;
+            }
+            QPushButton:hover {
+                background-color: #F3F4F6;
+                border-color: #9CA3AF;
+            }
+        """
+
+        # Horizontal button row
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        btn_manual = QPushButton("Thủ công")
+        btn_manual.setToolTip("Xóa Góc, Cạnh và Tùy biến")
+        btn_manual.setStyleSheet(btn_style)
+        btn_manual.setEnabled(has_manual)
+        btn_manual.clicked.connect(lambda: (self._reset_manual_zones(), dialog.accept()))
+        btn_row.addWidget(btn_manual)
+
+        btn_auto = QPushButton("Tự động")
+        btn_auto.setToolTip("Tắt nhận diện vùng bảo vệ tự động")
+        btn_auto.setStyleSheet(btn_style)
+        btn_auto.setEnabled(has_auto)
+        btn_auto.clicked.connect(lambda: (self._reset_auto_detection(), dialog.accept()))
+        btn_row.addWidget(btn_auto)
+
+        btn_both = QPushButton("Tất cả")
+        btn_both.setToolTip("Xóa cả thủ công và tự động")
+        btn_both.setStyleSheet(btn_style)
+        btn_both.setEnabled(has_manual or has_auto)
+        btn_both.clicked.connect(lambda: (self._reset_all_zones(), dialog.accept()))
+        btn_row.addWidget(btn_both)
+
+        btn_cancel = QPushButton("Hủy")
+        btn_cancel.setStyleSheet(cancel_style)
+        btn_cancel.clicked.connect(dialog.reject)
+        btn_row.addWidget(btn_cancel)
+
+        layout.addLayout(btn_row)
+        dialog.exec_()
+
+    def _reset_manual_zones(self):
+        """Reset manual zones (thủ công = Góc, Cạnh, Tùy biến)"""
+        # Disable all preset zones (corners, edges)
+        for zone in self._zones.values():
+            zone.enabled = False
+
+        # Clear custom zones
+        self._custom_zones.clear()
+        self._custom_zone_counter = 0
+
+        # Clear selection history
+        self._zone_selection_history.clear()
+        self._selected_zone_id = None
+
+        # Update zone selector UI
+        self.zone_selector.reset_all()
+
+        # Update zone combo
+        self._update_zone_combo()
+
+        # Emit signal to update preview
+        self._emit_zones()
+
+        # Emit signal to clear per_page_zones in preview
+        self.zones_reset.emit()
+
+    def _reset_auto_detection(self):
+        """Reset auto detection (tự động - nhận diện vùng bảo vệ)"""
+        if not self.text_protection_cb.isChecked():
+            return
+
+        # Uncheck the text protection checkbox
+        self.text_protection_cb.setChecked(False)
+        # This will trigger _on_text_protection_checkbox_changed which emits signal
+
+    def _reset_all_zones(self):
+        """Reset all zones (both manual and auto detection)"""
+        # Reset manual zones
+        self._reset_manual_zones()
+
+        # Disable auto detection
+        if self.text_protection_cb.isChecked():
+            self.text_protection_cb.setChecked(False)
+
     def set_output_path(self, path: str):
         self.output_path.setText(path)
     

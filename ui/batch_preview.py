@@ -244,7 +244,7 @@ class FileListPanel(QFrame):
         # Title bar
         title_bar = QWidget()
         title_bar.setFixedHeight(28)
-        title_bar.setStyleSheet("background-color: #D1D5DB;")
+        title_bar.setStyleSheet("background-color: #F3F4F6; border-bottom: 1px solid #D1D5DB;")
         title_layout = QHBoxLayout(title_bar)
         title_layout.setContentsMargins(8, 0, 8, 0)
         

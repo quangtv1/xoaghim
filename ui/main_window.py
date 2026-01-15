@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QFileDialog, QMessageBox, QProgressBar,
     QFrame, QApplication, QSpinBox, QComboBox, QSizePolicy,
     QMenu, QDialog, QRadioButton, QStackedWidget,
-    QGroupBox, QDialogButtonBox, QSplitter
+    QGroupBox, QDialogButtonBox, QSplitter, QStyledItemDelegate
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QEvent, QObject, QRect, QTimer
 from PyQt5.QtGui import QKeySequence, QDragEnterEvent, QDropEvent, QPixmap, QPainter, QPen, QIcon, QColor
@@ -24,6 +24,14 @@ from ui.batch_preview import BatchFileListWidget
 from ui.settings_panel import SettingsPanel
 from core.processor import Zone, StapleRemover
 from core.pdf_handler import PDFHandler, PDFExporter
+
+
+class ComboItemDelegate(QStyledItemDelegate):
+    """Custom delegate for larger combobox items"""
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        size.setHeight(24)  # Set item height to 24px
+        return size
 
 
 class MenuHoverManager(QObject):
@@ -302,7 +310,7 @@ class MainWindow(QMainWindow):
         self._user_zoomed = False  # Track if user has manually zoomed
         self._current_draw_mode = None  # Track current draw mode for cancel logic
 
-        self.setWindowTitle("Xóa Vết Ghim PDF")
+        self.setWindowTitle("Xóa Ghim PDF (5S)")
         self.setMinimumSize(1200, 800)
         self.setAcceptDrops(True)
 
@@ -333,6 +341,7 @@ class MainWindow(QMainWindow):
         self.settings_panel.output_settings_changed.connect(self._on_output_settings_changed)
         self.settings_panel.text_protection_changed.connect(self._on_text_protection_changed)
         self.settings_panel.draw_mode_changed.connect(self._on_draw_mode_changed)
+        self.settings_panel.zones_reset.connect(self._on_zones_reset)
         self.settings_panel.setVisible(True)  # Visible by default
         layout.addWidget(self.settings_panel)
         
@@ -371,6 +380,8 @@ class MainWindow(QMainWindow):
         self.preview.open_file_requested.connect(self._on_open)
         self.preview.open_folder_requested.connect(self._on_open_folder_batch)
         self.preview.file_dropped.connect(self._on_file_dropped)
+        self.preview.folder_dropped.connect(self._on_folder_dropped)
+        self.preview.files_dropped.connect(self._on_files_dropped)
         self.preview.close_requested.connect(self._on_close_file)
         self.preview.page_changed.connect(self._on_page_changed_from_scroll)
         self.preview.rect_drawn.connect(self._on_rect_drawn_from_preview)
@@ -443,51 +454,48 @@ class MainWindow(QMainWindow):
             painter.drawLine(margin + 3, margin + 5, margin + 7, margin + 5)
             
         elif icon_type == "fit_width":
-            # Box with horizontal arrows inside (like the reference image)
-            # No margin - border fills entire icon
-            m = 0
-            iw = size - 1
-            ih = size - 1
-            
-            # Draw rounded rectangle border (fills entire area)
-            painter.drawRoundedRect(m, m, iw, ih, 3, 3)
-            
-            # Center y position
-            cy = ih // 2
-            
-            # Left arrow ← (pointing to left edge)
-            arrow_len = iw // 3
-            painter.drawLine(5, cy, 5 + arrow_len, cy)  # Arrow shaft
-            painter.drawLine(5, cy, 8, cy - 3)  # Arrow head top
-            painter.drawLine(5, cy, 8, cy + 3)  # Arrow head bottom
-            
-            # Right arrow → (pointing to right edge)
-            painter.drawLine(iw - 5 - arrow_len, cy, iw - 5, cy)  # Arrow shaft
-            painter.drawLine(iw - 5, cy, iw - 8, cy - 3)  # Arrow head top
-            painter.drawLine(iw - 5, cy, iw - 8, cy + 3)  # Arrow head bottom
+            # Double-headed horizontal arrow with end bars |←→|
+            cy = size // 2
+            margin_x = 4
+            bar_half = 6
+
+            # Left vertical bar |
+            painter.drawLine(margin_x, cy - bar_half, margin_x, cy + bar_half)
+            # Right vertical bar |
+            painter.drawLine(size - margin_x - 1, cy - bar_half, size - margin_x - 1, cy + bar_half)
+
+            # Horizontal line connecting
+            painter.drawLine(margin_x, cy, size - margin_x - 1, cy)
+
+            # Left arrow head <
+            painter.drawLine(margin_x, cy, margin_x + 4, cy - 3)
+            painter.drawLine(margin_x, cy, margin_x + 4, cy + 3)
+
+            # Right arrow head >
+            painter.drawLine(size - margin_x - 1, cy, size - margin_x - 5, cy - 3)
+            painter.drawLine(size - margin_x - 1, cy, size - margin_x - 5, cy + 3)
 
         elif icon_type == "fit_height":
-            # Box with vertical arrows inside
-            m = 0
-            iw = size - 1
-            ih = size - 1
+            # Double-headed vertical arrow with end bars (rotated version of fit_width)
+            cx = size // 2
+            margin_y = 4
+            bar_half = 6
 
-            # Draw rounded rectangle border
-            painter.drawRoundedRect(m, m, iw, ih, 3, 3)
+            # Top horizontal bar —
+            painter.drawLine(cx - bar_half, margin_y, cx + bar_half, margin_y)
+            # Bottom horizontal bar —
+            painter.drawLine(cx - bar_half, size - margin_y - 1, cx + bar_half, size - margin_y - 1)
 
-            # Center x position
-            cx = iw // 2
+            # Vertical line connecting
+            painter.drawLine(cx, margin_y, cx, size - margin_y - 1)
 
-            # Top arrow ↑ (pointing to top edge)
-            arrow_len = ih // 3
-            painter.drawLine(cx, 5, cx, 5 + arrow_len)  # Arrow shaft
-            painter.drawLine(cx, 5, cx - 3, 8)  # Arrow head left
-            painter.drawLine(cx, 5, cx + 3, 8)  # Arrow head right
+            # Top arrow head ^
+            painter.drawLine(cx, margin_y, cx - 3, margin_y + 4)
+            painter.drawLine(cx, margin_y, cx + 3, margin_y + 4)
 
-            # Bottom arrow ↓ (pointing to bottom edge)
-            painter.drawLine(cx, ih - 5 - arrow_len, cx, ih - 5)  # Arrow shaft
-            painter.drawLine(cx, ih - 5, cx - 3, ih - 8)  # Arrow head left
-            painter.drawLine(cx, ih - 5, cx + 3, ih - 8)  # Arrow head right
+            # Bottom arrow head v
+            painter.drawLine(cx, size - margin_y - 1, cx - 3, size - margin_y - 5)
+            painter.drawLine(cx, size - margin_y - 1, cx + 3, size - margin_y - 5)
 
         elif icon_type == "single_page":
             # Single document
@@ -572,10 +580,10 @@ class MainWindow(QMainWindow):
                 background-color: transparent;
             }
             QPushButton:checked {
-                background-color: #D1D5DB;
+                background-color: #FFFFFF;
             }
             QPushButton:checked:hover {
-                background-color: #D1D5DB;
+                background-color: #FFFFFF;
             }
         """
         
@@ -648,7 +656,14 @@ class MainWindow(QMainWindow):
         fit_width_action = QAction(self._create_line_icon("fit_width"), "Vừa chiều ngang", self)
         fit_width_action.triggered.connect(self._on_fit_width)
         view_menu.addAction(fit_width_action)
-        
+
+        # Vừa chiều cao
+        fit_height_action = QAction(self._create_line_icon("fit_height"), "Vừa chiều cao", self)
+        fit_height_action.triggered.connect(self._on_fit_height)
+        view_menu.addAction(fit_height_action)
+
+        view_menu.addSeparator()
+
         # Xem 1 trang
         single_page_action = QAction(self._create_line_icon("single_page"), "Xem 1 trang", self)
         single_page_action.triggered.connect(self._on_single_page)
@@ -777,7 +792,7 @@ class MainWindow(QMainWindow):
             }}
             QLabel {{
                 color: #374151;
-                font-size: 14px;
+                font-size: 12px;
             }}
             QToolButton {{
                 background-color: transparent;
@@ -785,7 +800,7 @@ class MainWindow(QMainWindow):
                 border-radius: 4px;
                 padding: 4px 10px;
                 color: #374151;
-                font-size: 14px;
+                font-size: 12px;
             }}
             QToolButton:hover {{
                 background-color: #E5E7EB;
@@ -798,7 +813,7 @@ class MainWindow(QMainWindow):
                 border-radius: 4px;
                 padding: 4px 6px;
                 background-color: white;
-                font-size: 14px;
+                font-size: 12px;
             }}
             QComboBox {{
                 border: 1px solid #D1D5DB;
@@ -806,7 +821,24 @@ class MainWindow(QMainWindow):
                 padding: 4px 6px;
                 padding-right: 24px;
                 background-color: white;
-                font-size: 14px;
+                color: #374151;
+                font-size: 12px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: white;
+                color: #374151;
+                outline: none;
+            }}
+            QComboBox QAbstractItemView::item {{
+                background-color: white;
+                color: #374151;
+                padding: 10px 8px 10px 18px;
+            }}
+            QComboBox QAbstractItemView::item:hover {{
+                background-color: #93C5FD;
+            }}
+            QComboBox QAbstractItemView::item:selected {{
+                background-color: #93C5FD;
             }}
             QComboBox::drop-down {{
                 subcontrol-origin: padding;
@@ -865,33 +897,46 @@ class MainWindow(QMainWindow):
         bar_layout.addWidget(self.page_spin)
         
         slash_label = QLabel("/")
-        slash_label.setStyleSheet("color: #6B7280;")
+        slash_label.setStyleSheet("color: #6B7280; background: transparent; border: none;")
         bar_layout.addWidget(slash_label)
-        
+
         self.total_pages_label = QLabel("1")
+        self.total_pages_label.setStyleSheet("background: transparent; border: none;")
         bar_layout.addWidget(self.total_pages_label)
-        
+
         # Separator
         sep1 = QLabel("|")
-        sep1.setStyleSheet("color: #D1D5DB; padding: 0 6px;")
+        sep1.setStyleSheet("color: #D1D5DB; padding: 0 6px; background: transparent; border: none;")
         bar_layout.addWidget(sep1)
         
-        # View mode - wider with dropdown arrow
+        # View mode - with dropdown arrow (editable for custom popup styling on macOS)
         self.view_mode_combo = QComboBox()
-        self.view_mode_combo.addItems(["Cuộn liên tục", "Xem một trang"])
+        self.view_mode_combo.addItems(["Liên tiếp", "Một trang"])
         self.view_mode_combo.setCurrentIndex(0)
-        self.view_mode_combo.setFixedSize(155, btn_height)
+        self.view_mode_combo.setFixedSize(120, btn_height)
+        self.view_mode_combo.setEditable(True)
+        self.view_mode_combo.lineEdit().setReadOnly(True)  # Prevent typing
+        self.view_mode_combo.lineEdit().setTextMargins(0, 0, 0, 0)
+        # Use custom delegate for larger item height
+        self.view_mode_combo.setItemDelegate(ComboItemDelegate(self.view_mode_combo))
+        # Apply view stylesheet directly for dropdown items
+        self.view_mode_combo.view().setStyleSheet("""
+            QListView::item {
+                padding: 8px 8px 8px 8px;
+            }
+            QListView::item:hover {
+                background-color: #93C5FD;
+            }
+            QListView::item:selected {
+                background-color: #93C5FD;
+            }
+        """)
         self.view_mode_combo.currentIndexChanged.connect(self._on_view_mode_changed)
         bar_layout.addWidget(self.view_mode_combo)
         
-        # Fit width - icon button using uploaded image
+        # Fit width - icon button (generated icon for consistency)
         self.zoom_fit_btn = QToolButton()
-        # Load fit_width icon from resources or use generated icon
-        fit_width_path = os.path.join(os.path.dirname(__file__), "..", "resources", "fit_width.png")
-        if os.path.exists(fit_width_path):
-            self.zoom_fit_btn.setIcon(QIcon(fit_width_path))
-        else:
-            self.zoom_fit_btn.setIcon(self._create_line_icon("fit_width", 30))
+        self.zoom_fit_btn.setIcon(self._create_line_icon("fit_width", 30))
         self.zoom_fit_btn.setIconSize(QSize(30, 27))  # Icon fits button
         self.zoom_fit_btn.setToolTip("Vừa chiều rộng trang")
         # Height reduced by 10% (30 -> 27), width kept same (30)
@@ -911,13 +956,9 @@ class MainWindow(QMainWindow):
         self.zoom_fit_btn.clicked.connect(self._on_zoom_fit_width)
         bar_layout.addWidget(self.zoom_fit_btn)
 
-        # Fit height - icon button
+        # Fit height - icon button (generated icon for consistency)
         self.zoom_fit_height_btn = QToolButton()
-        fit_height_path = os.path.join(os.path.dirname(__file__), "..", "resources", "fit_height.png")
-        if os.path.exists(fit_height_path):
-            self.zoom_fit_height_btn.setIcon(QIcon(fit_height_path))
-        else:
-            self.zoom_fit_height_btn.setIcon(self._create_line_icon("fit_height", 30))
+        self.zoom_fit_height_btn.setIcon(self._create_line_icon("fit_height", 30))
         self.zoom_fit_height_btn.setIconSize(QSize(30, 27))
         self.zoom_fit_height_btn.setToolTip("Vừa chiều cao trang")
         self.zoom_fit_height_btn.setFixedSize(30, 27)
@@ -937,7 +978,7 @@ class MainWindow(QMainWindow):
 
         # Separator
         sep2 = QLabel("|")
-        sep2.setStyleSheet("color: #D1D5DB; padding: 0 6px;")
+        sep2.setStyleSheet("color: #D1D5DB; padding: 0 6px; background: transparent; border: none;")
         bar_layout.addWidget(sep2)
         
         # Zoom dropdown - wider
@@ -947,6 +988,21 @@ class MainWindow(QMainWindow):
         self.zoom_combo.setCurrentText("100%")
         self.zoom_combo.setFixedSize(100, btn_height)
         self.zoom_combo.setEditable(True)
+        self.zoom_combo.lineEdit().setTextMargins(0, 0, 0, 0)
+        # Use custom delegate for larger item height
+        self.zoom_combo.setItemDelegate(ComboItemDelegate(self.zoom_combo))
+        # Apply view stylesheet directly for dropdown items
+        self.zoom_combo.view().setStyleSheet("""
+            QListView::item {
+                padding: 8px 8px 8px 8px;
+            }
+            QListView::item:hover {
+                background-color: #93C5FD;
+            }
+            QListView::item:selected {
+                background-color: #93C5FD;
+            }
+        """)
         self.zoom_combo.currentTextChanged.connect(self._on_zoom_combo_changed)
         bar_layout.addWidget(self.zoom_combo)
         
@@ -1034,7 +1090,56 @@ class MainWindow(QMainWindow):
         """Handle file dropped from preview area"""
         if file_path and file_path.lower().endswith('.pdf'):
             self._load_pdf(file_path)
-    
+
+    def _on_folder_dropped(self, folder_path: str):
+        """Handle folder dropped from preview area"""
+        if folder_path and os.path.isdir(folder_path):
+            self._load_folder(folder_path)
+
+    def _on_files_dropped(self, file_paths: list):
+        """Handle multiple PDF files dropped - switch to batch mode"""
+        if not file_paths:
+            return
+        # Filter valid PDF files
+        pdf_files = [f for f in file_paths if f.lower().endswith('.pdf') and os.path.isfile(f)]
+        if not pdf_files:
+            return
+        # Sort files
+        pdf_files.sort()
+        # Find common parent directory
+        common_dir = os.path.commonpath(pdf_files)
+        if os.path.isfile(common_dir):
+            common_dir = os.path.dirname(common_dir)
+        self._load_files_batch(pdf_files, common_dir)
+
+    def _load_files_batch(self, pdf_files: list, base_dir: str):
+        """Load multiple PDF files for batch processing"""
+        # Switch to batch mode
+        self._batch_mode = True
+        self._batch_base_dir = base_dir
+        self._batch_files = pdf_files
+
+        # Always default output to source folder when opening new batch
+        output_dir = base_dir
+        self._batch_output_dir = output_dir
+
+        # Update settings panel output path to source folder
+        self.settings_panel.set_output_path(output_dir)
+
+        # Get filename pattern from settings
+        settings = self.settings_panel.get_settings()
+        filename_pattern = settings.get('filename_pattern', '{gốc}_clean.pdf')
+
+        # Show batch file list with filename pattern
+        self.batch_file_list.set_folder(base_dir, output_dir, pdf_files, filename_pattern)
+        self.batch_file_list.setVisible(True)
+
+        # Update UI
+        self.setWindowTitle(f"Xóa Ghim PDF (5S) - {len(pdf_files)} files")
+
+        # Load first file (will be triggered by file_selected signal)
+        self._update_ui_state()
+
     def _on_open_folder_batch(self):
         """Mở thư mục để xử lý batch"""
         folder_path = QFileDialog.getExistingDirectory(
@@ -1082,7 +1187,7 @@ class MainWindow(QMainWindow):
         self.batch_file_list.setVisible(True)
         
         # Update UI
-        self.setWindowTitle(f"Xóa Vết Ghim PDF - {folder_path} ({len(pdf_files)} files)")
+        self.setWindowTitle(f"Xóa Ghim PDF (5S) - {folder_path} ({len(pdf_files)} files)")
         
         # Load first file (will be triggered by file_selected signal)
         self._update_ui_state()
@@ -1104,7 +1209,7 @@ class MainWindow(QMainWindow):
             # Hide batch file list
             self.batch_file_list.setVisible(False)
             
-            self.setWindowTitle("Xóa Vết Ghim PDF")
+            self.setWindowTitle("Xóa Ghim PDF (5S)")
         
         # Close current file (applies to both modes)
         if self._pdf_handler:
@@ -1352,12 +1457,20 @@ class MainWindow(QMainWindow):
     def _on_page_filter_changed(self, filter_mode: str):
         """Handle page filter change from settings"""
         self.preview.set_page_filter(filter_mode)
-    
+
+    def _on_zones_reset(self):
+        """Handle zones reset from settings - clear all per_page_zones"""
+        self.preview.clear_all_zones()
+
     def _on_zone_changed_from_preview(self, zone_id: str, x: float, y: float, w: float, h: float):
         self.settings_panel.update_zone_from_preview(zone_id, x, y, w, h)
     
     def _on_zone_selected_from_preview(self, zone_id: str):
-        pass
+        """Khi click vào zone trong preview → chuyển filter theo zone"""
+        # Tìm zone và lấy page_filter của nó
+        zone = self.settings_panel.get_zone_by_id(zone_id)
+        if zone and hasattr(zone, 'page_filter'):
+            self.settings_panel.set_filter(zone.page_filter)
     
     def _on_zone_delete_from_preview(self, zone_id: str):
         """Handle zone delete request from preview"""
@@ -1390,6 +1503,17 @@ class MainWindow(QMainWindow):
         output_name = pattern.replace('{gốc}', input_name)
         output_path = os.path.join(output_dir, output_name)
 
+        # Check if destination is same as source (prevent overwriting original)
+        source_path = os.path.normpath(os.path.abspath(self._pdf_handler.pdf_path))
+        dest_path = os.path.normpath(os.path.abspath(output_path))
+        if source_path == dest_path:
+            QMessageBox.warning(
+                self, "Không thể ghi đè file gốc",
+                "File đích trùng với file gốc.\n\n"
+                "Vui lòng chọn thư mục đầu ra khác hoặc đổi tên file đầu ra."
+            )
+            return
+
         if os.path.exists(output_path):
             if not self._show_overwrite_dialog(output_path):
                 return
@@ -1414,17 +1538,36 @@ class MainWindow(QMainWindow):
         if not output_dir:
             output_dir = self._batch_base_dir
         
-        # Check for existing files - use same logic as batch_preview
+        # Check for existing files and same-as-source files
         existing_files = []
+        same_as_source = []
         pattern = settings.get('filename_pattern', '{gốc}_clean.pdf')
         for f in checked_files:
             rel_path = os.path.relpath(f, self._batch_base_dir)
             name, _ = os.path.splitext(rel_path)
             output_name = pattern.replace('{gốc}', name)
             output_path = os.path.join(output_dir, output_name)
-            if os.path.exists(output_path):
+            # Check if destination == source
+            source_abs = os.path.normpath(os.path.abspath(f))
+            dest_abs = os.path.normpath(os.path.abspath(output_path))
+            if source_abs == dest_abs:
+                same_as_source.append(os.path.basename(f))
+            elif os.path.exists(output_path):
                 existing_files.append(output_path)
-        
+
+        # Prevent overwriting source files
+        if same_as_source:
+            file_list = "\n".join(same_as_source[:5])
+            if len(same_as_source) > 5:
+                file_list += f"\n... và {len(same_as_source) - 5} file khác"
+            QMessageBox.warning(
+                self, "Không thể ghi đè file gốc",
+                f"Có {len(same_as_source)} file đích trùng với file gốc:\n\n"
+                f"{file_list}\n\n"
+                "Vui lòng chọn thư mục đầu ra khác hoặc đổi tên file đầu ra."
+            )
+            return
+
         if existing_files:
             if not self._show_batch_overwrite_dialog(len(existing_files)):
                 return
@@ -2049,7 +2192,7 @@ Thời gian: {time_str}"""
     def _show_help(self):
         """Show help dialog"""
         help_text = """
-        <h3>Hướng dẫn sử dụng Xóa Vết Ghim PDF</h3>
+        <h3>Hướng dẫn sử dụng Xóa Ghim PDF (5S)</h3>
         
         <p><b>1. Mở file PDF:</b> Nhấn nút "Mở file" hoặc kéo thả file PDF vào vùng preview.</p>
         
@@ -2073,16 +2216,24 @@ Thời gian: {time_str}"""
         self._user_zoomed = False  # Cho phép auto-fit khi resize
         self.preview.zoom_fit_width()  # Fit trang hiện tại
         self._update_zoom_combo()
-    
+
+    def _on_fit_height(self):
+        """Fit chiều cao trang hiện tại (menu action)"""
+        self._user_zoomed = False  # Cho phép auto-fit khi resize
+        self.preview.zoom_fit_height()  # Fit trang hiện tại
+        self._update_zoom_combo()
+
     def _on_single_page(self):
         """Switch to single page view mode"""
-        # TODO: Implement single page mode
-        QMessageBox.information(self, "Thông báo", "Chế độ xem 1 trang sẽ được cập nhật trong phiên bản sau.")
-    
+        self.view_mode_combo.setCurrentIndex(1)  # Sync combo box
+        self.preview.set_view_mode('single')
+        current_page = self.page_spin.value() - 1  # 0-based
+        self.preview.set_current_page(current_page)
+
     def _on_continuous_scroll(self):
         """Switch to continuous scroll mode"""
-        # Already in continuous mode by default
-        QMessageBox.information(self, "Thông báo", "Đang ở chế độ cuộn liên tục.")
+        self.view_mode_combo.setCurrentIndex(0)  # Sync combo box
+        self.preview.set_view_mode('continuous')
     
     def _get_device_info(self):
         """
