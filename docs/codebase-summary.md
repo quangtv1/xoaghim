@@ -3,163 +3,154 @@
 ## Tổng Quan
 
 **Tên ứng dụng:** Xóa Vết Ghim PDF
-**Phiên bản:** 1.0.0
+**Phiên bản:** 1.1.16
 **Tổ chức:** HUCE
 **Mục đích:** Ứng dụng desktop để xóa vết ghim (staple marks) từ tài liệu PDF scan
 
-## Mô Tả Chi Tiết
+## Tính Năng Chi Tiết
 
-Đây là ứng dụng desktop được xây dựng bằng Python và PyQt5, cho phép người dùng:
+### 1. Xử lý file
+- Xử lý đơn file hoặc batch (nhiều file)
+- Drag & drop hỗ trợ cả macOS và Windows
+- Lọc trang: tất cả/lẻ/chẵn
 
-1. **Mở và xem file PDF** - Hỗ trợ xem liên tục hoặc từng trang
-2. **Chọn vùng cần xử lý** - Các góc, cạnh hoặc vùng tùy chỉnh
-3. **Xóa vết ghim tự động** - Sử dụng thuật toán xử lý ảnh OpenCV
-4. **Xuất file PDF đã xử lý** - Với chất lượng có thể tùy chỉnh
+### 2. Chọn vùng xử lý
+- **Preset zones:** 4 góc, 4 cạnh của trang
+- **Custom Zone Draw Mode:** Vẽ vùng xử lý tùy chỉnh trực tiếp trên preview
+- **Multi-page zone selection:** Áp dụng vùng cho nhiều trang cùng lúc
+- **Reset zones popup:** 3 tùy chọn
+  - Thủ công (preset + custom zones)
+  - Tự động (text protection)
+  - Tất cả
 
-### Tính Năng Chính
+### 3. Bảo vệ nội dung
+- Bảo vệ dấu/chữ ký (màu đỏ/xanh)
+- **AI Layout Detection:**
+  - Model YOLO DocLayNet (ONNX Runtime)
+  - Tự động nhận diện: text, table, figure, caption, list, title, header, footer...
+  - Loại trừ vùng bảo vệ khỏi xử lý
 
-- **Xử lý đơn file** - Mở và xử lý từng file PDF riêng lẻ
-- **Xử lý hàng loạt (Batch)** - Xử lý nhiều file PDF trong thư mục
-- **Preview song song** - Hiển thị ảnh gốc và kết quả cạnh nhau
-- **Chọn vùng trực quan** - Kéo thả vùng xử lý trên preview
-- **Bảo vệ màu đỏ/xanh** - Giữ nguyên dấu và chữ ký
-- **Lọc trang** - Áp dụng cho tất cả/trang lẻ/trang chẵn
+### 4. Preview và xuất file
+- Preview song song: Gốc | Đích (realtime)
+- Sync scroll/zoom giữa 2 panel
+- Chế độ xem: liên tiếp hoặc từng trang
+- Xuất PDF: DPI 72-300, nén JPEG
 
 ## Cấu Trúc Dự Án
 
 ```
 xoaghim/
-├── main.py                 # Entry point, setup UI theme
-├── requirements.txt        # Dependencies
-├── run.bat                 # Windows launcher
-├── run.sh                  # Unix launcher
+├── main.py                    # Entry point, UI theme setup
+├── requirements.txt           # Dependencies
+├── XoaGhim-1.1.16.spec        # PyInstaller spec (Windows)
 ├── core/
-│   ├── __init__.py
-│   ├── processor.py        # Thuật toán xóa vết ghim (StapleRemover)
-│   └── pdf_handler.py      # Đọc/ghi file PDF (PDFHandler, PDFExporter)
+│   ├── processor.py           # Thuật toán xóa vết ghim (StapleRemover)
+│   ├── pdf_handler.py         # Đọc/ghi PDF (PDFHandler, PDFExporter)
+│   ├── layout_detector.py     # AI layout detection (ONNX)
+│   └── zone_optimizer.py      # Zone optimization utilities
 ├── ui/
-│   ├── __init__.py
-│   ├── main_window.py      # Cửa sổ chính, menu, xử lý logic
-│   ├── continuous_preview.py  # Widget preview liên tục nhiều trang
-│   ├── settings_panel.py   # Panel cài đặt vùng xử lý và đầu ra
-│   ├── zone_selector.py    # Widget chọn vùng (góc/cạnh/tùy biến)
-│   ├── zone_item.py        # Graphics item cho vùng kéo thả
-│   ├── batch_preview.py    # Widget hiển thị danh sách file batch
-│   └── preview_widget.py   # Widget preview cơ bản
+│   ├── main_window.py         # Cửa sổ chính, menu, drag & drop
+│   ├── continuous_preview.py  # Preview liên tục với zones overlay
+│   ├── settings_panel.py      # Panel cài đặt 3 cột
+│   ├── zone_selector.py       # Widget chọn vùng (góc/cạnh/tùy biến)
+│   ├── zone_item.py           # Graphics item cho vùng kéo thả
+│   ├── batch_preview.py       # Danh sách file batch
+│   ├── preview_widget.py      # Preview widget cơ bản
+│   └── text_protection_dialog.py  # Dialog cài đặt text protection
 ├── resources/
-│   ├── __init__.py
-│   └── fit_width.png       # Icon fit width
-├── models/
-│   └── __init__.py
-├── utils/
-│   └── __init__.py
-└── docs/
-    └── codebase-summary.md # Tài liệu này
+│   └── models/
+│       └── yolov12s-doclaynet.onnx  # AI model
+├── tests/
+│   ├── test_layout_detector.py
+│   └── test_zone_optimizer.py
+└── .github/
+    └── workflows/
+        └── build-windows.yml  # GitHub Actions build
 ```
 
-## Công Nghệ Sử Dụng
+## Tech Stack
 
-### Dependencies (requirements.txt)
-
-| Package | Phiên bản | Mục đích |
-|---------|-----------|----------|
-| PyQt5 | >= 5.15.0 | GUI framework |
-| PyMuPDF (fitz) | >= 1.20.0 | Đọc/ghi PDF |
-| opencv-python | >= 4.5.0 | Xử lý ảnh |
-| numpy | >= 1.20.0 | Xử lý mảng số |
-
-### Tech Stack
-
-- **Language:** Python 3
-- **GUI Framework:** PyQt5 (Fusion style, custom Blue theme)
-- **PDF Processing:** PyMuPDF (fitz)
-- **Image Processing:** OpenCV (cv2), NumPy
-- **Architecture:** Desktop standalone app
+| Component | Technology | Version |
+|-----------|------------|---------|
+| Language | Python | 3.8+ |
+| GUI Framework | PyQt5 | >= 5.15.0 |
+| PDF Processing | PyMuPDF (fitz) | >= 1.20.0 |
+| Image Processing | OpenCV | >= 4.5.0 |
+| AI Inference | ONNX Runtime | >= 1.22.0 |
+| Geometry | Shapely | >= 2.0.0 |
+| Arrays | NumPy | >= 1.20.0 |
 
 ## Module Chi Tiết
 
-### 1. Core Layer
+### Core Layer
 
 #### `core/processor.py`
-- **Zone (dataclass):** Định nghĩa vùng xử lý với tọa độ %, threshold
-- **StapleRemover:** Class chính xử lý xóa vết ghim
-  - `get_background_color()` - Lấy màu nền từ vùng giữa-phải
-  - `is_red_or_blue()` - Phát hiện pixel đỏ/xanh để bảo vệ
-  - `process_zone()` - Xử lý một vùng cụ thể
+- **Zone (dataclass):** Vùng xử lý với tọa độ %, threshold
+- **StapleRemover:** Class xử lý xóa vết ghim
+  - `get_background_color()` - Lấy màu nền
+  - `is_red_or_blue()` - Phát hiện pixel đỏ/xanh
+  - `process_zone()` - Xử lý một vùng
   - `process_image()` - Xử lý ảnh với nhiều vùng
-- **PRESET_ZONES:** Các vùng preset (4 góc, 2 viền trái/phải)
+- **PRESET_ZONES:** 4 góc, 4 cạnh
 
-**Thuật toán xử lý:**
-1. Lấy màu nền từ vùng an toàn (giữa-phải trang)
-2. Chuyển vùng cần xử lý sang grayscale
+**Thuật toán:**
+1. Lấy màu nền từ vùng an toàn
+2. Chuyển vùng sang grayscale
 3. Tìm pixel tối hơn nền theo threshold
 4. Loại trừ vùng chữ đen (gray < 80)
-5. Loại trừ pixel màu đỏ/xanh (bảo vệ dấu, chữ ký)
-6. Áp dụng morphological operations (close + dilate)
+5. Loại trừ pixel đỏ/xanh (bảo vệ dấu)
+6. Áp dụng morphological operations
 7. Đổ màu nền lên vùng artifact
 
-#### `core/pdf_handler.py`
-- **PDFHandler:** Đọc file PDF, render trang thành numpy array
-  - `render_page()` - Render trang với DPI tùy chọn
-  - Page cache để tối ưu hiệu suất
-- **PDFExporter:** Xuất PDF đã xử lý
-  - `export()` - Xuất với JPEG compression
+#### `core/layout_detector.py`
+- **LayoutDetector:** AI-powered layout detection
+  - Model: YOLO DocLayNet (ONNX)
+  - 11 categories: text, title, list, table, figure...
+  - Lazy loading để tối ưu memory
+- **ProtectedRegion (dataclass):** Vùng được bảo vệ
 
-### 2. UI Layer
+#### `core/pdf_handler.py`
+- **PDFHandler:** Đọc PDF, render trang
+- **PDFExporter:** Xuất PDF với compression
+
+### UI Layer
 
 #### `ui/main_window.py`
 - **MainWindow:** Cửa sổ chính
-  - Menu ribbon-style (Tệp tin, Xem, Chỉnh sửa, Cài đặt)
-  - Bottom bar với điều khiển trang và zoom
-  - Drag & drop support
+  - Menu ribbon-style
+  - Bottom bar (trang, zoom)
+  - Drag & drop (macOS + Windows)
 - **ProcessThread:** Thread xử lý single file
 - **BatchProcessThread:** Thread xử lý batch
-- **HoverMenuButton:** Button menu với hover behavior
 
 #### `ui/continuous_preview.py`
-- **ContinuousPreviewWidget:** Widget preview song song (Gốc | Đích)
-- **ContinuousPreviewPanel:** Panel preview với zones overlay
-- **ContinuousGraphicsView:** GraphicsView với sync scroll/zoom
+- **ContinuousPreviewWidget:** Preview song song
+- **ContinuousPreviewPanel:** Panel với zones overlay
+- **ContinuousGraphicsView:** View với sync scroll/zoom
+- Custom zone drawing mode
 
 #### `ui/settings_panel.py`
 - **SettingsPanel:** Panel cài đặt 3 cột
   - Cột 1: Chọn vùng (ZoneSelectorWidget)
   - Cột 2: Thông số (rộng, cao, độ nhạy)
   - Cột 3: Đầu ra (DPI, thư mục, tên file)
+- "Xóa tất cả" popup với 3 options
+- Text protection checkbox
 
 #### `ui/zone_selector.py`
-- **PaperIcon:** Icon trang giấy với zones có thể click
-- **ZoneSelectorWidget:** Widget tổng hợp (Góc | Cạnh | Tùy biến)
+- **PaperIcon:** Icon trang giấy với zones
+- **ZoneSelectorWidget:** Widget tổng hợp
+- DPI-aware rendering (cosmetic pen)
 
-### 3. Resources
-
-- `resources/fit_width.png` - Icon cho nút fit width
-
-## Luồng Xử Lý Chính
-
-```
-User mở file PDF
-      ↓
-PDFHandler render các trang → numpy arrays
-      ↓
-MainWindow hiển thị trên ContinuousPreviewWidget
-      ↓
-User chọn vùng xử lý (zones)
-      ↓
-User nhấn "Run"
-      ↓
-ProcessThread xử lý từng trang:
-  → StapleRemover.process_image(image, zones)
-      ↓
-PDFExporter.export() → File PDF output
-      ↓
-Hiển thị dialog hoàn thành
-```
+#### `ui/zone_item.py`
+- **ZoneItem:** Graphics item kéo thả trên preview
+- Resize handles
+- Multi-page selection support
 
 ## Cài Đặt Mặc Định
 
-| Cài đặt | Giá trị mặc định |
-|---------|------------------|
+| Cài đặt | Giá trị |
+|---------|---------|
 | DPI xuất | 250 |
 | Vùng mặc định | Góc trên trái (12% x 12%) |
 | Threshold | 5 |
@@ -167,20 +158,34 @@ Hiển thị dialog hoàn thành
 | Bảo vệ màu đỏ/xanh | Có |
 | Max preview pages | 20 |
 
-## Điểm Đáng Chú Ý
+## Build & Release
 
-1. **High DPI Support** - Hỗ trợ màn hình độ phân giải cao
-2. **Debounced Processing** - Delay 300ms trước khi xử lý lại preview
-3. **Page Cache** - Cache tối đa 10 trang để tối ưu bộ nhớ
-4. **Per-page Zones** - Hỗ trợ vùng độc lập cho từng trang (chế độ 'none')
-5. **Sync Scroll/Zoom** - Đồng bộ cuộn và zoom giữa 2 panel preview
+### Windows Build
+```bash
+# Tạo tag để trigger GitHub Actions
+git tag v1.1.16
+git push origin v1.1.16
+```
 
-## Hạn Chế / Cần Cải Thiện
+GitHub Actions sẽ:
+1. Build với PyInstaller (onedir mode)
+2. Bundle ONNX Runtime DLLs
+3. Bundle VC++ Runtime DLLs
+4. Upload artifact và tạo release
 
-1. Chế độ xem một trang chưa hoàn thiện (hiển thị "sẽ cập nhật")
-2. Chưa có GPU acceleration (OpenCV CPU only)
-3. Chưa có undo/redo
-4. Chưa có preset profiles cho các loại tài liệu khác nhau
+### Output
+- `XoaGhim-1.1.16-Windows.zip`
+- Chứa: exe, DLLs, resources/models
+
+## Changelog v1.1.16
+
+- Fix zone icon border dày trên Windows high DPI
+- Fix Windows drag & drop (file:///C:/path format)
+- Dropdown arrow icon cho DPI và Nén comboboxes
+- "Xóa tất cả" popup với 3 tùy chọn (Thủ công/Tự động/Tất cả)
+- Custom Zone Draw Mode
+- AI Layout Detection với ONNX Runtime
+- Multi-page zone selection
 
 ---
-*Cập nhật: 2026-01-10*
+*Cập nhật: 2026-01-15*
