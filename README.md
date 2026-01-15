@@ -2,7 +2,7 @@
 
 Ứng dụng desktop để xóa vết ghim (staple marks) từ tài liệu PDF scan.
 
-**Phiên bản:** 1.1.16 | **Tổ chức:** HUCE
+**Phiên bản:** 1.1.17 | **Tổ chức:** HUCE
 
 ## Tính năng chính
 
@@ -16,6 +16,8 @@
 - **Preset zones** - 4 góc, 4 cạnh của trang
 - **Custom Zone Draw Mode** - Vẽ vùng xử lý tùy chỉnh trực tiếp trên preview
 - **Multi-page zone selection** - Áp dụng vùng cho nhiều trang cùng lúc
+- **Zone config persistence** - Lưu cấu hình vùng qua các lần mở file/app
+- **2-click zone reset** - Click bỏ chọn → chọn lại = reset về kích thước mặc định
 - **Reset zones** - Popup "Xóa tất cả" với 3 tùy chọn:
   - Thủ công (preset + custom zones)
   - Tự động (text protection)
@@ -60,8 +62,8 @@ python main.py
 
 ### Tải bản build sẵn
 
-- **Windows:** [XoaGhim-1.1.16-Windows.zip](https://github.com/quangtv1/xoaghim/releases/latest)
-  - Giải nén và chạy `XoaGhim-1.1.16.exe`
+- **Windows:** [XoaGhim-1.1.17-Windows.zip](https://github.com/quangtv1/xoaghim/releases/latest)
+  - Giải nén và chạy `XoaGhim-1.1.17.exe`
 
 ## Sử dụng
 
@@ -85,7 +87,8 @@ xoaghim/
 │   ├── processor.py           # Thuật toán xóa vết ghim
 │   ├── pdf_handler.py         # Đọc/ghi file PDF
 │   ├── layout_detector.py     # AI layout detection (ONNX)
-│   └── zone_optimizer.py      # Zone optimization
+│   ├── zone_optimizer.py      # Zone optimization
+│   └── config_manager.py      # Zone config persistence
 ├── ui/
 │   ├── main_window.py         # Cửa sổ chính
 │   ├── continuous_preview.py  # Preview liên tục

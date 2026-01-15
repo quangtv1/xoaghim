@@ -3,7 +3,7 @@
 ## Tổng Quan
 
 **Tên ứng dụng:** Xóa Vết Ghim PDF
-**Phiên bản:** 1.1.16
+**Phiên bản:** 1.1.17
 **Tổ chức:** HUCE
 **Mục đích:** Ứng dụng desktop để xóa vết ghim (staple marks) từ tài liệu PDF scan
 
@@ -18,6 +18,10 @@
 - **Preset zones:** 4 góc, 4 cạnh của trang
 - **Custom Zone Draw Mode:** Vẽ vùng xử lý tùy chỉnh trực tiếp trên preview
 - **Multi-page zone selection:** Áp dụng vùng cho nhiều trang cùng lúc
+- **Zone config persistence:** Lưu cấu hình vùng (enabled, sizes, threshold, filter) qua:
+  - Đổi file/thư mục
+  - Tắt/mở app
+- **2-click zone reset:** Click bỏ chọn → click chọn lại = reset về kích thước mặc định
 - **Reset zones popup:** 3 tùy chọn
   - Thủ công (preset + custom zones)
   - Tự động (text protection)
@@ -47,7 +51,8 @@ xoaghim/
 │   ├── processor.py           # Thuật toán xóa vết ghim (StapleRemover)
 │   ├── pdf_handler.py         # Đọc/ghi PDF (PDFHandler, PDFExporter)
 │   ├── layout_detector.py     # AI layout detection (ONNX)
-│   └── zone_optimizer.py      # Zone optimization utilities
+│   ├── zone_optimizer.py      # Zone optimization utilities
+│   └── config_manager.py      # Zone config persistence (JSON)
 ├── ui/
 │   ├── main_window.py         # Cửa sổ chính, menu, drag & drop
 │   ├── continuous_preview.py  # Preview liên tục với zones overlay
@@ -176,6 +181,15 @@ GitHub Actions sẽ:
 ### Output
 - `XoaGhim-1.1.16-Windows.zip`
 - Chứa: exe, DLLs, resources/models
+
+## Changelog v1.1.17
+
+- **Zone config persistence:** Lưu cấu hình vùng vào JSON
+  - macOS: `~/Library/Application Support/XoaGhim/config.json`
+  - Windows: `%APPDATA%/XoaGhim/config.json`
+  - Linux: `~/.config/XoaGhim/config.json`
+- **2-click zone reset:** Click bỏ chọn → click chọn lại = reset về size mặc định
+- File mới: `core/config_manager.py`
 
 ## Changelog v1.1.16
 
