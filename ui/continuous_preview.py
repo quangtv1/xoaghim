@@ -673,6 +673,9 @@ class ContinuousPreviewPanel(QFrame):
         """Set danh sách ảnh các trang"""
         self._pages = pages
         self._current_page = 0  # Reset to first page
+        # Clear per_page_zones when loading new file
+        # This ensures zones will be re-added by set_zone_definitions
+        self._per_page_zones.clear()
         self._rebuild_scene()
     
     def _rebuild_scene(self):
@@ -1088,6 +1091,9 @@ class ContinuousPreviewPanel(QFrame):
             if page_idx not in self._per_page_zones:
                 self._per_page_zones[page_idx] = {}
 
+        # Build zone data map for comparison
+        zone_data_map = {z.id: (z.x, z.y, z.width, z.height) for z in zones if z.enabled}
+
         # Add new zones to pages based on filter
         for zone in zones:
             if zone.id in newly_added and zone.enabled:
@@ -1095,6 +1101,19 @@ class ContinuousPreviewPanel(QFrame):
                 pages_to_add = self._get_pages_for_filter()
                 for page_idx in pages_to_add:
                     self._per_page_zones[page_idx][zone.id] = zone_data
+
+        # Update existing zones if their data changed (for reset functionality)
+        # Only update zones that exist and have different values
+        existing_zones = new_zone_ids & old_zone_ids
+        for zone_id in existing_zones:
+            new_data = zone_data_map.get(zone_id)
+            if new_data:
+                pages_to_update = self._get_pages_for_filter()
+                for page_idx in pages_to_update:
+                    if page_idx in self._per_page_zones and zone_id in self._per_page_zones[page_idx]:
+                        old_data = self._per_page_zones[page_idx][zone_id]
+                        if old_data != new_data:
+                            self._per_page_zones[page_idx][zone_id] = new_data
 
         # Remove disabled zones from ALL pages (global removal)
         for zone_id in newly_removed:

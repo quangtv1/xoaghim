@@ -1114,10 +1114,16 @@ class MainWindow(QMainWindow):
 
     def _load_files_batch(self, pdf_files: list, base_dir: str):
         """Load multiple PDF files for batch processing"""
+        # Check if this is a NEW folder (different from current)
+        is_new_folder = self._batch_base_dir != base_dir
+
         # Switch to batch mode
         self._batch_mode = True
         self._batch_base_dir = base_dir
         self._batch_files = pdf_files
+
+        # Zones persist across folders (saved in config)
+        # No longer reset zones when opening new folder
 
         # Always default output to source folder when opening new batch
         output_dir = base_dir
@@ -1157,20 +1163,26 @@ class MainWindow(QMainWindow):
             for file in files:
                 if file.lower().endswith('.pdf'):
                     pdf_files.append(os.path.join(root, file))
-        
+
         if not pdf_files:
-            QMessageBox.warning(self, "Không tìm thấy file", 
+            QMessageBox.warning(self, "Không tìm thấy file",
                               "Không tìm thấy file PDF trong thư mục đã chọn.")
             return
-        
+
         # Sort files
         pdf_files.sort()
-        
+
+        # Check if this is a NEW folder (different from current)
+        is_new_folder = self._batch_base_dir != folder_path
+
         # Switch to batch mode
         self._batch_mode = True
         self._batch_base_dir = folder_path
         self._batch_files = pdf_files
-        
+
+        # Zones persist across folders (saved in config)
+        # No longer reset zones when opening new folder
+
         # Always default output to source folder when opening new batch
         output_dir = folder_path
         self._batch_output_dir = output_dir
@@ -1235,25 +1247,25 @@ class MainWindow(QMainWindow):
         try:
             self.statusBar().showMessage("Đang tải PDF...")
             QApplication.processEvents()
-            
+
             if self._pdf_handler:
                 self._pdf_handler.close()
-            
+
             self._pdf_handler = PDFHandler(file_path)
             self._current_file_path = file_path
-            
+
             # Load pages
             num_pages = min(self._pdf_handler.page_count, self.MAX_PREVIEW_PAGES)
             self._all_pages = []
-            
+
             for i in range(num_pages):
                 self.statusBar().showMessage(f"Đang tải trang {i+1}/{num_pages}...")
                 QApplication.processEvents()
-                
+
                 img = self._pdf_handler.render_page(i, dpi=120)
                 if img is not None:
                     self._all_pages.append(img)
-            
+
             # Update page navigation
             self.page_spin.setMaximum(self._pdf_handler.page_count)
             self.page_spin.setValue(1)
@@ -1269,8 +1281,14 @@ class MainWindow(QMainWindow):
                 output_name = pattern.replace('{gốc}', source_path.stem)
                 dest_path = Path(output_dir) / output_name
             else:
-                # Single file mode: set output path to file's parent
-                output_dir = str(source_path.parent)
+                # Single file mode: check if folder changed
+                file_folder = str(source_path.parent)
+                # Zones persist across folders (saved in config)
+                # No longer reset zones when opening file from different folder
+                # Update current folder
+                self._batch_base_dir = file_folder
+                # Set output path to file's parent
+                output_dir = file_folder
                 self.settings_panel.set_output_path(output_dir)
                 dest_path = source_path.parent / f"{source_path.stem}_clean{source_path.suffix}"
 

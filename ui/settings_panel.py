@@ -15,6 +15,7 @@ from PyQt5.QtGui import QColor, QPixmap, QPainter, QPolygon
 
 from typing import List, Dict, Set
 from core.processor import Zone, PRESET_ZONES, TextProtectionOptions
+from core.config_manager import get_config_manager
 from ui.zone_selector import ZoneSelectorWidget
 from ui.text_protection_dialog import TextProtectionDialog
 
@@ -71,7 +72,84 @@ class SettingsPanel(QWidget):
         
         self._setup_ui()
         self._init_preset_zones()
-    
+        self._load_saved_config()
+
+    def _load_saved_config(self):
+        """Load saved zone configuration from config file"""
+        config = get_config_manager().get_zone_config()
+        if not config:
+            return  # No saved config, use defaults
+
+        # Restore enabled zones
+        enabled_zones = config.get('enabled_zones', [])
+        for zone_id in self._zones:
+            self._zones[zone_id].enabled = (zone_id in enabled_zones)
+
+        # Restore zone sizes
+        zone_sizes = config.get('zone_sizes', {})
+        for zone_id, size in zone_sizes.items():
+            if zone_id in self._zones:
+                self._zones[zone_id].width = size.get('width', self._zones[zone_id].width)
+                self._zones[zone_id].height = size.get('height', self._zones[zone_id].height)
+
+        # Restore threshold
+        threshold = config.get('threshold', 5)
+        self.threshold_slider.setValue(threshold)
+
+        # Restore filter mode
+        filter_mode = config.get('filter_mode', 'all')
+        filter_map = {
+            'all': self.apply_all_rb,
+            'odd': self.apply_odd_rb,
+            'even': self.apply_even_rb,
+            'none': self.apply_free_rb
+        }
+        if filter_mode in filter_map:
+            filter_map[filter_mode].setChecked(True)
+
+        # Restore text protection
+        text_protection = config.get('text_protection', True)
+        self.text_protection_cb.setChecked(text_protection)
+
+        # Update zone selector UI to match
+        self.zone_selector.blockSignals(True)
+        self.zone_selector.reset_all()
+        for zone_id in enabled_zones:
+            if zone_id.startswith('corner_'):
+                self.zone_selector.corner_icon.set_zone_selected(zone_id, True)
+            elif zone_id.startswith('margin_'):
+                self.zone_selector.edge_icon.set_zone_selected(zone_id, True)
+        self.zone_selector.blockSignals(False)
+
+        # Update zone combo
+        self._update_zone_combo()
+
+        # Update selection history
+        self._zone_selection_history = enabled_zones.copy()
+        if enabled_zones:
+            self._selected_zone_id = enabled_zones[-1]
+
+    def _save_zone_config(self):
+        """Save current zone configuration to config file"""
+        enabled_zones = [z.id for z in self._zones.values() if z.enabled]
+
+        zone_sizes = {}
+        for zone_id, zone in self._zones.items():
+            zone_sizes[zone_id] = {
+                'width': zone.width,
+                'height': zone.height
+            }
+
+        config = {
+            'enabled_zones': enabled_zones,
+            'zone_sizes': zone_sizes,
+            'threshold': self.threshold_slider.value(),
+            'filter_mode': self._get_current_filter(),
+            'text_protection': self.text_protection_cb.isChecked(),
+        }
+
+        get_config_manager().save_zone_config(config)
+
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 12)
@@ -636,9 +714,10 @@ class SettingsPanel(QWidget):
         # Update zone states
         for zone_id in self._zones:
             self._zones[zone_id].enabled = (zone_id in selected_zones)
-        
+
         self._update_zone_combo()
         self._emit_zones()
+        self._save_zone_config()  # Save config when zones change
     
     def _get_current_filter(self) -> str:
         """Lấy filter hiện tại: 'all', 'odd', 'even', 'none'"""
@@ -654,6 +733,17 @@ class SettingsPanel(QWidget):
                 if self.apply_group.checkedId() == 3:  # "Không" filter
                     self.apply_all_rb.setChecked(True)
                     self._on_apply_filter_changed(self.apply_all_rb)
+
+            # Reset zone size to default when re-selecting
+            if zone_id in self._zones and zone_id in EXTENDED_PRESET_ZONES:
+                default_zone = EXTENDED_PRESET_ZONES[zone_id]
+                self._zones[zone_id].width = default_zone.width
+                self._zones[zone_id].height = default_zone.height
+                self._zones[zone_id].x = default_zone.x
+                self._zones[zone_id].y = default_zone.y
+                # Emit zones to update preview with reset values
+                # (zones_changed was already emitted with old values)
+                self._emit_zones()
 
             # Lưu filter hiện tại vào zone
             if zone_id in self._zones:
@@ -718,16 +808,17 @@ class SettingsPanel(QWidget):
         """Khi thay đổi kích thước zone"""
         if not self._selected_zone_id:
             return
-        
+
         zone = self._zones.get(self._selected_zone_id) or self._custom_zones.get(self._selected_zone_id)
         if not zone:
             return
-        
+
         zone.width = self.width_slider.value() / 100.0
         zone.height = self.height_slider.value() / 100.0
-        
+
         self._update_size_labels()
         self._emit_zones()
+        self._save_zone_config()  # Save config when size changes
     
     def _update_size_labels(self):
         self.width_label.setText(f"{self.width_slider.value()}%")
@@ -822,17 +913,18 @@ class SettingsPanel(QWidget):
     def _on_settings_changed(self):
         """Khi thay đổi settings"""
         self.threshold_label.setText(str(self.threshold_slider.value()))
-        
+
         # Update threshold cho tất cả zones
         threshold = self.threshold_slider.value()
         for zone in self._zones.values():
             zone.threshold = threshold
         for zone in self._custom_zones.values():
             zone.threshold = threshold
-        
+
         settings = self.get_settings()
         self.settings_changed.emit(settings)
         self._emit_zones()
+        self._save_zone_config()  # Save config when threshold changes
     
     def _on_browse_output(self):
         """Chọn thư mục đầu ra"""
@@ -855,6 +947,7 @@ class SettingsPanel(QWidget):
 
         # Emit signal with current options
         self.text_protection_changed.emit(self._text_protection_options)
+        self._save_zone_config()  # Save config when text protection changes
 
     def _open_text_protection_dialog(self):
         """Open text protection settings dialog"""
@@ -943,6 +1036,7 @@ class SettingsPanel(QWidget):
         }
         filter_mode = filter_map.get(button, 'all')
         self.page_filter_changed.emit(filter_mode)
+        self._save_zone_config()  # Save config when filter changes
 
     def _on_reset_zones_clicked(self):
         """Handle reset zones button - show popup with 3 options"""
@@ -1091,6 +1185,50 @@ class SettingsPanel(QWidget):
         # Disable auto detection
         if self.text_protection_cb.isChecked():
             self.text_protection_cb.setChecked(False)
+
+    def reset_to_default_zones(self):
+        """Reset zones to default state:
+        - Corner TL enabled
+        - Filter: Tất cả (all)
+        - Text protection enabled
+        Called when opening a NEW folder
+        """
+        # Disable all preset zones
+        for zone in self._zones.values():
+            zone.enabled = False
+
+        # Enable only corner_tl (default)
+        self._zones['corner_tl'].enabled = True
+
+        # Clear custom zones
+        self._custom_zones.clear()
+        self._custom_zone_counter = 0
+
+        # Clear selection history and set corner_tl
+        self._zone_selection_history.clear()
+        self._zone_selection_history.append('corner_tl')
+        self._selected_zone_id = 'corner_tl'
+
+        # Block signals to prevent reset_all() from triggering _on_zone_selector_changed
+        self.zone_selector.blockSignals(True)
+        self.zone_selector.reset_all()
+        self.zone_selector.corner_icon.set_zone_selected('corner_tl', True)
+        self.zone_selector.blockSignals(False)
+
+        # Reset filter to "Tất cả" (all)
+        self.apply_all_rb.setChecked(True)
+        self._on_apply_filter_changed(self.apply_all_rb)
+
+        # Enable text protection (auto detection) by default
+        if not self.text_protection_cb.isChecked():
+            self.text_protection_cb.setChecked(True)
+
+        # Update zone combo
+        self._update_zone_combo()
+
+        # Don't emit zones_reset or _emit_zones here
+        # Zones will be set by _load_pdf() after pages are loaded
+        # This avoids the issue where zones are set before preview has pages
 
     def set_output_path(self, path: str):
         self.output_path.setText(path)
