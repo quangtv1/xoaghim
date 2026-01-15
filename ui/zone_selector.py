@@ -123,6 +123,8 @@ class PaperIcon(QWidget):
         paper = self._get_paper_rect()
 
         # Vẽ trang giấy xếp chồng (shadow papers)
+        shadow_pen = QPen(QColor(180, 180, 180), 1)
+        shadow_pen.setCosmetic(True)  # Không scale theo DPI
         for i in range(2, 0, -1):
             offset = i * 3
             shadow_rect = QRectF(
@@ -131,12 +133,14 @@ class PaperIcon(QWidget):
                 paper.width(),
                 paper.height()
             )
-            painter.setPen(QPen(QColor(180, 180, 180), 1))
+            painter.setPen(shadow_pen)
             painter.setBrush(QBrush(QColor(240, 240, 240)))
             painter.drawRect(shadow_rect)
 
         # Vẽ trang giấy chính
-        painter.setPen(QPen(QColor(100, 100, 100), 1))
+        main_pen = QPen(QColor(100, 100, 100), 1)
+        main_pen.setCosmetic(True)  # Không scale theo DPI
+        painter.setPen(main_pen)
         painter.setBrush(QBrush(QColor(255, 255, 255)))
         painter.drawRect(paper)
 
@@ -179,7 +183,9 @@ class PaperIcon(QWidget):
                 fill_color = QColor(209, 213, 219, 100)  # Xám nhạt
                 border_color = QColor(156, 163, 175)
 
-            painter.setPen(QPen(border_color, 1))
+            pen = QPen(border_color, 1)
+            pen.setCosmetic(True)  # Không scale theo DPI
+            painter.setPen(pen)
             painter.setBrush(QBrush(fill_color))
             painter.drawRect(zone_rect)
 
