@@ -25,7 +25,7 @@ jobs:
         run: |
           # Extract version from tag (remove 'v' prefix)
           $version = "${{ github.ref_name }}" -replace '^v', ''
-          if (-not $version) { $version = "1.1.18" }  # Default for workflow_dispatch
+          if (-not $version) { $version = "1.1.19" }  # Default for workflow_dispatch
           echo "VERSION=$version" >> $env:GITHUB_OUTPUT
           echo "Version: $version"
 
@@ -122,15 +122,14 @@ jobs:
             ## Xóa Vết Ghim PDF ${{ github.ref_name }}
 
             ### Tính năng mới
-            - **Compact Settings Toolbar** - Thu gọn thanh công cụ thành icon-only view
-            - **Batch Processing** - Xử lý nhiều file PDF cùng lúc
-            - **Ctrl+Enter Shortcut** - Phím tắt nhanh cho nút Clean
-            - **AI Detect Button** - Nút nhận diện vùng bảo vệ tự động
+            - **Dual Settings Modes** - Chi tiết (Detail) và Compact (icon-only)
+            - **Toggle Button** - Nút V trên menu bar để chuyển đổi giữa 2 chế độ
+            - **Window State Persistence** - Lưu kích thước cửa sổ và sidebar
 
             ### Cải tiến
-            - Icon vẽ bằng QPainter với 20+ kiểu icon
-            - State sync giữa compact toolbar và settings panel
-            - Cải thiện UX với icon cân giữa trong toolbar
+            - Nút "Chỉnh sửa" để mở/đóng thanh công cụ
+            - Tự động restore kích thước khi mở lại app
+            - Cập nhật tài liệu dự án đầy đủ
 
             ### Tải về
             - **XoaGhim-Windows.zip** - Giải nén và chạy `XoaGhim.exe`
