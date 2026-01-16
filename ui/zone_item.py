@@ -110,10 +110,10 @@ class ZoneItem(QGraphicsRectItem):
             color_selected = QColor(29, 78, 216)      # #1D4ED8 (darker blue)
 
         if self._selected:
-            self.setPen(QPen(color_selected, 3))
+            self.setPen(QPen(color_selected, 1))
             self.setBrush(QBrush(QColor(color_normal.red(), color_normal.green(), color_normal.blue(), 100)))
         else:
-            self.setPen(QPen(color_normal, 2))
+            self.setPen(QPen(color_normal, 1))
             self.setBrush(QBrush(QColor(color_normal.red(), color_normal.green(), color_normal.blue(), 40)))
     
     def _update_handles(self):

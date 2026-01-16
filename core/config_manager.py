@@ -86,6 +86,21 @@ class ConfigManager:
         self._config['zones'] = zone_config
         self._save()
 
+    def get_ui_config(self) -> Dict[str, Any]:
+        """Get UI state configuration (toolbar collapsed, etc.)"""
+        return self._config.get('ui', {})
+
+    def save_ui_config(self, ui_config: Dict[str, Any]):
+        """Save UI state configuration
+
+        ui_config format:
+        {
+            'toolbar_collapsed': True/False,  # Settings toolbar collapsed state
+        }
+        """
+        self._config['ui'] = ui_config
+        self._save()
+
     def get(self, key: str, default: Any = None) -> Any:
         """Get a config value"""
         return self._config.get(key, default)

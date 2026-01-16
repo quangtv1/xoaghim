@@ -348,11 +348,11 @@ class ContinuousGraphicsView(QGraphicsView):
         """Get pen and brush colors based on draw mode"""
         if self._draw_mode == 'protect':
             # Pink/Red for protection
-            pen = QPen(QColor(244, 114, 182), 2)  # Pink #F472B6
+            pen = QPen(QColor(244, 114, 182), 1)  # Pink #F472B6
             brush = QBrush(QColor(244, 114, 182, 50))
         else:
             # Blue for removal (default)
-            pen = QPen(QColor(59, 130, 246), 2)  # Blue #3B82F6
+            pen = QPen(QColor(59, 130, 246), 1)  # Blue #3B82F6
             brush = QBrush(QColor(59, 130, 246, 50))
         return pen, brush
 
@@ -462,6 +462,9 @@ class ContinuousPreviewPanel(QFrame):
     close_requested = pyqtSignal()  # When close button is clicked
     # rect_drawn: x, y, w, h (as % of page), mode ('remove' or 'protect')
     rect_drawn = pyqtSignal(float, float, float, float, str)
+    # Batch mode navigation signals
+    prev_file_requested = pyqtSignal()  # Navigate to previous file
+    next_file_requested = pyqtSignal()  # Navigate to next file
     
     PAGE_SPACING = 20  # Khoảng cách giữa các trang
     
@@ -477,8 +480,10 @@ class ContinuousPreviewPanel(QFrame):
         self._has_placeholder = False  # Track if placeholder is shown
         self._placeholder_file_rect = None  # Click area for "Mở file"
         self._placeholder_folder_rect = None  # Click area for "Mở thư mục"
-        self._file_hover_bg = None  # Hover background for file icon
-        self._folder_hover_bg = None  # Hover background for folder icon
+        self._file_icon_normal = []  # Normal file icon items (gray outline)
+        self._file_icon_hover = []  # Hover file icon items (blue filled)
+        self._folder_icon_normal = []  # Normal folder icon items (gray outline)
+        self._folder_icon_hover = []  # Hover folder icon items (blue filled)
         self._view_mode = 'continuous'  # 'continuous' or 'single'
         self._current_page = 0  # Current page index (0-based) for single page mode
         self._page_filter = 'all'  # 'all', 'odd', 'even', 'none'
@@ -497,9 +502,81 @@ class ContinuousPreviewPanel(QFrame):
         title_bar.setFixedHeight(32)  # Fixed height to ensure button fits
         title_bar.setStyleSheet("background-color: #F3F4F6; border-bottom: 1px solid #D1D5DB;")
         title_layout = QHBoxLayout(title_bar)
-        title_layout.setContentsMargins(8, 0, 4, 0)  # Reduce right margin
+        title_layout.setContentsMargins(4, 0, 4, 0)  # Tight left margin for nav buttons
         title_layout.setSpacing(4)
         
+        # Navigation buttons (only for before panel, hidden by default)
+        self.prev_btn = None
+        self.next_btn = None
+        self.file_counter_label = None
+        self._batch_mode = False
+
+        if show_overlay:
+            # Prev button [<]
+            self.prev_btn = QPushButton("<")
+            self.prev_btn.setFixedSize(22, 22)
+            self.prev_btn.setCursor(Qt.PointingHandCursor)
+            self.prev_btn.setToolTip("File trước")
+            self.prev_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #D1D5DB;
+                    border: none;
+                    border-radius: 4px;
+                    font-size: 12px;
+                    font-weight: bold;
+                    color: #4B5563;
+                }
+                QPushButton:hover {
+                    background-color: #9CA3AF;
+                }
+                QPushButton:disabled {
+                    background-color: #E5E7EB;
+                    color: #9CA3AF;
+                }
+            """)
+            self.prev_btn.clicked.connect(self.prev_file_requested.emit)
+            self.prev_btn.setVisible(False)
+            title_layout.addWidget(self.prev_btn)
+
+            # Next button [>]
+            self.next_btn = QPushButton(">")
+            self.next_btn.setFixedSize(22, 22)
+            self.next_btn.setCursor(Qt.PointingHandCursor)
+            self.next_btn.setToolTip("File tiếp theo")
+            self.next_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #D1D5DB;
+                    border: none;
+                    border-radius: 4px;
+                    font-size: 12px;
+                    font-weight: bold;
+                    color: #4B5563;
+                }
+                QPushButton:hover {
+                    background-color: #9CA3AF;
+                }
+                QPushButton:disabled {
+                    background-color: #E5E7EB;
+                    color: #9CA3AF;
+                }
+            """)
+            self.next_btn.clicked.connect(self.next_file_requested.emit)
+            self.next_btn.setVisible(False)
+            title_layout.addWidget(self.next_btn)
+
+            # File counter label (X/Y)
+            self.file_counter_label = QLabel()
+            self.file_counter_label.setStyleSheet("""
+                QLabel {
+                    font-size: 11px;
+                    color: #6B7280;
+                    background-color: transparent;
+                    margin-left: 4px;
+                }
+            """)
+            self.file_counter_label.setVisible(False)
+            title_layout.addWidget(self.file_counter_label)
+
         # Title label
         self.title_label = QLabel(title)
         self.title_label.setStyleSheet("""
@@ -511,7 +588,7 @@ class ContinuousPreviewPanel(QFrame):
             }
         """)
         title_layout.addWidget(self.title_label, stretch=1)
-        
+
         # Close button (X) - only for before panel (show_overlay=True)
         self.close_btn = None
         if show_overlay:
@@ -575,7 +652,28 @@ class ContinuousPreviewPanel(QFrame):
     def _on_close_clicked(self):
         """Handle close button click"""
         self.close_requested.emit()
-    
+
+    def set_batch_mode(self, enabled: bool, current: int = 0, total: int = 0):
+        """Show/hide navigation buttons for batch mode"""
+        self._batch_mode = enabled
+        if self.prev_btn:
+            self.prev_btn.setVisible(enabled)
+        if self.next_btn:
+            self.next_btn.setVisible(enabled)
+        if self.file_counter_label:
+            self.file_counter_label.setVisible(enabled)
+        if enabled:
+            self.set_file_index(current, total)
+
+    def set_file_index(self, current: int, total: int):
+        """Update file counter and button states. current is 0-based."""
+        if self.file_counter_label:
+            self.file_counter_label.setText(f"({current + 1}/{total})")
+        if self.prev_btn:
+            self.prev_btn.setEnabled(current > 0)
+        if self.next_btn:
+            self.next_btn.setEnabled(current < total - 1)
+
     def set_view_mode(self, mode: str):
         """Set view mode: 'continuous' or 'single'"""
         if mode not in ('continuous', 'single'):
@@ -687,8 +785,10 @@ class ContinuousPreviewPanel(QFrame):
         self._has_placeholder = False
         self._placeholder_file_rect = None
         self._placeholder_folder_rect = None
-        self._file_hover_bg = None
-        self._folder_hover_bg = None
+        self._file_icon_normal = []
+        self._file_icon_hover = []
+        self._folder_icon_normal = []
+        self._folder_icon_hover = []
         # Clear protected regions
         if hasattr(self, '_protected_region_items'):
             self._protected_region_items.clear()
@@ -782,131 +882,145 @@ class ContinuousPreviewPanel(QFrame):
         icon_spacing = 80
         
         # === LEFT ICON: PDF Document (Mở file) ===
-        icon_width = 24
-        icon_height = 30
+        icon_width = 36
+        icon_height = 45
         file_icon_x = placeholder_width / 2 - icon_spacing - icon_width / 2
         icon_y = placeholder_height / 2 - 35
-        
-        # Hover background for "Mở file" - add first so it's behind icon (larger area +80%)
-        file_hover_rect = QRectF(
-            file_icon_x - 52, icon_y - 30,
-            icon_width + 105, icon_height + 112
-        )
-        self._file_hover_bg = self.scene.addRect(file_hover_rect, 
-            QPen(Qt.NoPen), QBrush(Qt.transparent))
-        self._file_hover_bg.setZValue(-1)
-        
-        pen = QPen(QColor(140, 140, 140))
-        pen.setWidth(1)
-        pen.setCapStyle(Qt.SquareCap)
-        pen.setJoinStyle(Qt.MiterJoin)
-        
-        # Document outline (with folded corner)
-        corner_size = 7
-        self.scene.addLine(file_icon_x, icon_y, file_icon_x, icon_y + icon_height, pen)
-        self.scene.addLine(file_icon_x, icon_y + icon_height, file_icon_x + icon_width, icon_y + icon_height, pen)
-        self.scene.addLine(file_icon_x + icon_width, icon_y + icon_height, file_icon_x + icon_width, icon_y + corner_size, pen)
-        self.scene.addLine(file_icon_x, icon_y, file_icon_x + icon_width - corner_size, icon_y, pen)
-        self.scene.addLine(file_icon_x + icon_width - corner_size, icon_y, file_icon_x + icon_width, icon_y + corner_size, pen)
-        self.scene.addLine(file_icon_x + icon_width - corner_size, icon_y, file_icon_x + icon_width - corner_size, icon_y + corner_size, pen)
-        self.scene.addLine(file_icon_x + icon_width - corner_size, icon_y + corner_size, file_icon_x + icon_width, icon_y + corner_size, pen)
-        
-        # "PDF" text inside document
-        pdf_text = self.scene.addText("PDF")
-        pdf_font = pdf_text.font()
-        pdf_font.setPixelSize(8)
+        corner_size = 10
+        cobalt_blue = QColor(0, 71, 171)
+        gray = QColor(140, 140, 140)
+
+        # Create PDF document path (for both normal and hover icons)
+        def create_pdf_path():
+            path = QPainterPath()
+            path.moveTo(file_icon_x, icon_y)
+            path.lineTo(file_icon_x, icon_y + icon_height)
+            path.lineTo(file_icon_x + icon_width, icon_y + icon_height)
+            path.lineTo(file_icon_x + icon_width, icon_y + corner_size)
+            path.lineTo(file_icon_x + icon_width - corner_size, icon_y)
+            path.closeSubpath()
+            # Folded corner
+            path.moveTo(file_icon_x + icon_width - corner_size, icon_y)
+            path.lineTo(file_icon_x + icon_width - corner_size, icon_y + corner_size)
+            path.lineTo(file_icon_x + icon_width, icon_y + corner_size)
+            return path
+
+        # Normal icon (gray outline, no fill)
+        self._file_icon_normal = []
+        gray_pen = QPen(gray, 1)
+        pdf_path = create_pdf_path()
+        normal_path_item = self.scene.addPath(pdf_path, gray_pen, QBrush(Qt.transparent))
+        self._file_icon_normal.append(normal_path_item)
+
+        # Normal PDF text
+        pdf_text_normal = self.scene.addText("PDF")
+        pdf_font = pdf_text_normal.font()
+        pdf_font.setPixelSize(11)
         pdf_font.setBold(True)
-        pdf_text.setFont(pdf_font)
-        pdf_text.setDefaultTextColor(QColor(140, 140, 140))
-        pdf_rect = pdf_text.boundingRect()
-        pdf_text.setPos(
+        pdf_text_normal.setFont(pdf_font)
+        pdf_text_normal.setDefaultTextColor(gray)
+        pdf_rect = pdf_text_normal.boundingRect()
+        pdf_text_normal.setPos(
             file_icon_x + (icon_width - pdf_rect.width()) / 2,
             icon_y + (icon_height - pdf_rect.height()) / 2 + 2
         )
-        
+        self._file_icon_normal.append(pdf_text_normal)
+
+        # Hover icon (blue filled)
+        self._file_icon_hover = []
+        hover_path_item = self.scene.addPath(pdf_path, QPen(Qt.NoPen), QBrush(cobalt_blue))
+        hover_path_item.setVisible(False)
+        self._file_icon_hover.append(hover_path_item)
+
+        # Hover PDF text (white)
+        pdf_text_hover = self.scene.addText("PDF")
+        pdf_text_hover.setFont(pdf_font)
+        pdf_text_hover.setDefaultTextColor(QColor(255, 255, 255))
+        pdf_text_hover.setPos(
+            file_icon_x + (icon_width - pdf_rect.width()) / 2,
+            icon_y + (icon_height - pdf_rect.height()) / 2 + 2
+        )
+        pdf_text_hover.setVisible(False)
+        self._file_icon_hover.append(pdf_text_hover)
+
         # "Mở file" text
         file_hint = self.scene.addText("Mở file")
         file_hint_font = file_hint.font()
         file_hint_font.setPixelSize(13)
         file_hint.setFont(file_hint_font)
-        file_hint.setDefaultTextColor(QColor(140, 140, 140))
+        file_hint.setDefaultTextColor(gray)
         file_hint_rect = file_hint.boundingRect()
         file_hint.setPos(
             file_icon_x + (icon_width - file_hint_rect.width()) / 2,
             icon_y + icon_height + 8
         )
-        
-        # Store click area for "Mở file" (larger area +80%)
+        self._file_hint_text = file_hint
+
+        # Store click area for "Mở file" (larger area)
         self._placeholder_file_rect = QRectF(
             file_icon_x - 52, icon_y - 30,
             icon_width + 105, icon_height + file_hint_rect.height() + 90
         )
         
         # === RIGHT ICON: Folder (Mở thư mục) - rounded corners, thin line ===
-        folder_icon_x = placeholder_width / 2 + icon_spacing - 12
-        folder_width = 28
-        folder_height = 20
-        folder_y = icon_y + 5
-        tab_width = 10
-        tab_height = 5
-        corner_r = 2  # Small corner radius
-        
-        # Hover background for "Mở thư mục" - add first so it's behind icon (larger area +80%)
-        folder_hover_rect = QRectF(
-            folder_icon_x - 52, icon_y - 30,
-            folder_width + 105, icon_height + 112
-        )
-        self._folder_hover_bg = self.scene.addRect(folder_hover_rect,
-            QPen(Qt.NoPen), QBrush(Qt.transparent))
-        self._folder_hover_bg.setZValue(-1)
-        
-        # Pen for folder - thin line
-        folder_pen = QPen(QColor(140, 140, 140))
-        folder_pen.setWidth(1)
-        folder_pen.setCapStyle(Qt.RoundCap)
-        folder_pen.setJoinStyle(Qt.RoundJoin)
-        
-        # Draw folder using QPainterPath for rounded corners
-        path = QPainterPath()
-        
-        # Start from bottom-left (after corner)
-        path.moveTo(folder_icon_x + corner_r, folder_y + folder_height)
-        
-        # Bottom edge
-        path.lineTo(folder_icon_x + folder_width - corner_r, folder_y + folder_height)
-        # Bottom-right corner
-        path.quadTo(folder_icon_x + folder_width, folder_y + folder_height,
-                   folder_icon_x + folder_width, folder_y + folder_height - corner_r)
-        
-        # Right edge
-        path.lineTo(folder_icon_x + folder_width, folder_y + tab_height + corner_r)
-        # Top-right corner
-        path.quadTo(folder_icon_x + folder_width, folder_y + tab_height,
-                   folder_icon_x + folder_width - corner_r, folder_y + tab_height)
-        
-        # Top edge (after tab)
-        path.lineTo(folder_icon_x + tab_width + 3, folder_y + tab_height)
-        
-        # Tab diagonal
-        path.lineTo(folder_icon_x + tab_width, folder_y + corner_r)
-        # Tab top-right corner
-        path.quadTo(folder_icon_x + tab_width, folder_y,
-                   folder_icon_x + tab_width - corner_r, folder_y)
-        
-        # Tab top edge
-        path.lineTo(folder_icon_x + corner_r, folder_y)
-        # Top-left corner
-        path.quadTo(folder_icon_x, folder_y,
-                   folder_icon_x, folder_y + corner_r)
-        
-        # Left edge
-        path.lineTo(folder_icon_x, folder_y + folder_height - corner_r)
-        # Bottom-left corner
-        path.quadTo(folder_icon_x, folder_y + folder_height,
-                   folder_icon_x + corner_r, folder_y + folder_height)
-        
-        self.scene.addPath(path, folder_pen)
-        
+        folder_icon_x = placeholder_width / 2 + icon_spacing - 18
+        folder_width = 42
+        folder_height = 30
+        folder_y = icon_y + 8
+        tab_width = 15
+        tab_height = 7
+        corner_r = 3  # Small corner radius
+
+        # Create folder path (reusable for both normal and hover)
+        def create_folder_path():
+            path = QPainterPath()
+            # Start from bottom-left (after corner)
+            path.moveTo(folder_icon_x + corner_r, folder_y + folder_height)
+            # Bottom edge
+            path.lineTo(folder_icon_x + folder_width - corner_r, folder_y + folder_height)
+            # Bottom-right corner
+            path.quadTo(folder_icon_x + folder_width, folder_y + folder_height,
+                       folder_icon_x + folder_width, folder_y + folder_height - corner_r)
+            # Right edge
+            path.lineTo(folder_icon_x + folder_width, folder_y + tab_height + corner_r)
+            # Top-right corner
+            path.quadTo(folder_icon_x + folder_width, folder_y + tab_height,
+                       folder_icon_x + folder_width - corner_r, folder_y + tab_height)
+            # Top edge (after tab)
+            path.lineTo(folder_icon_x + tab_width + 3, folder_y + tab_height)
+            # Tab diagonal
+            path.lineTo(folder_icon_x + tab_width, folder_y + corner_r)
+            # Tab top-right corner
+            path.quadTo(folder_icon_x + tab_width, folder_y,
+                       folder_icon_x + tab_width - corner_r, folder_y)
+            # Tab top edge
+            path.lineTo(folder_icon_x + corner_r, folder_y)
+            # Top-left corner
+            path.quadTo(folder_icon_x, folder_y,
+                       folder_icon_x, folder_y + corner_r)
+            # Left edge
+            path.lineTo(folder_icon_x, folder_y + folder_height - corner_r)
+            # Bottom-left corner
+            path.quadTo(folder_icon_x, folder_y + folder_height,
+                       folder_icon_x + corner_r, folder_y + folder_height)
+            return path
+
+        folder_path = create_folder_path()
+
+        # Normal folder icon (gray outline, no fill)
+        self._folder_icon_normal = []
+        gray_pen = QPen(gray, 1)
+        gray_pen.setCapStyle(Qt.RoundCap)
+        gray_pen.setJoinStyle(Qt.RoundJoin)
+        normal_folder_item = self.scene.addPath(folder_path, gray_pen, QBrush(Qt.transparent))
+        self._folder_icon_normal.append(normal_folder_item)
+
+        # Hover folder icon (blue filled)
+        self._folder_icon_hover = []
+        hover_folder_item = self.scene.addPath(folder_path, QPen(Qt.NoPen), QBrush(cobalt_blue))
+        hover_folder_item.setVisible(False)
+        self._folder_icon_hover.append(hover_folder_item)
+
         # "Mở thư mục" text
         folder_hint = self.scene.addText("Mở thư mục")
         folder_hint_font = folder_hint.font()
@@ -918,6 +1032,7 @@ class ContinuousPreviewPanel(QFrame):
             folder_icon_x + (folder_width - folder_hint_rect.width()) / 2,
             icon_y + icon_height + 8  # align with "Mở file" text
         )
+        self._folder_hint_text = folder_hint
         
         # Store click area for "Mở thư mục" (larger area +80%)
         self._placeholder_folder_rect = QRectF(
@@ -959,12 +1074,23 @@ class ContinuousPreviewPanel(QFrame):
             self.view.viewport().setCursor(Qt.CrossCursor)
     
     def _on_view_leave(self, event):
-        """Handle mouse leave to reset hover backgrounds"""
+        """Handle mouse leave to reset hover - show normal icons, hide hover icons"""
         if self._has_placeholder:
-            if self._file_hover_bg:
-                self._file_hover_bg.setBrush(QBrush(Qt.transparent))
-            if self._folder_hover_bg:
-                self._folder_hover_bg.setBrush(QBrush(Qt.transparent))
+            gray = QColor(140, 140, 140)
+            # Reset file icon - show normal, hide hover
+            for item in getattr(self, '_file_icon_normal', []):
+                item.setVisible(True)
+            for item in getattr(self, '_file_icon_hover', []):
+                item.setVisible(False)
+            if hasattr(self, '_file_hint_text'):
+                self._file_hint_text.setDefaultTextColor(gray)
+            # Reset folder icon - show normal, hide hover
+            for item in getattr(self, '_folder_icon_normal', []):
+                item.setVisible(True)
+            for item in getattr(self, '_folder_icon_hover', []):
+                item.setVisible(False)
+            if hasattr(self, '_folder_hint_text'):
+                self._folder_hint_text.setDefaultTextColor(gray)
     
     def _on_view_mouse_move(self, event):
         """Handle mouse move to update cursor and hover effects on placeholder"""
@@ -972,28 +1098,54 @@ class ContinuousPreviewPanel(QFrame):
             # Always show cross cursor when placeholder is visible
             self.view.setCursor(Qt.CrossCursor)
             self.view.viewport().setCursor(Qt.CrossCursor)
-            
+
             # Get mouse position in scene coordinates
             scene_pos = self.view.mapToScene(event.pos())
-            
-            # Hover color (blue like Run button)
-            hover_color = QColor(37, 99, 235, 40)  # #2563EB with alpha
-            
-            # Check hover on file icon
-            if self._placeholder_file_rect and self._placeholder_file_rect.contains(scene_pos):
-                if self._file_hover_bg:
-                    self._file_hover_bg.setBrush(QBrush(hover_color))
+
+            # Colors
+            cobalt_blue = QColor(0, 71, 171)  # Cobalt blue
+            gray = QColor(140, 140, 140)
+
+            # Check hover on file icon - toggle visibility of normal/hover icons
+            file_hover = self._placeholder_file_rect and self._placeholder_file_rect.contains(scene_pos)
+            if file_hover:
+                # Show hover icon, hide normal icon
+                for item in self._file_icon_normal:
+                    item.setVisible(False)
+                for item in self._file_icon_hover:
+                    item.setVisible(True)
+                if hasattr(self, '_file_hint_text'):
+                    self._file_hint_text.setDefaultTextColor(cobalt_blue)
             else:
-                if self._file_hover_bg:
-                    self._file_hover_bg.setBrush(QBrush(Qt.transparent))
-            
-            # Check hover on folder icon
-            if self._placeholder_folder_rect and self._placeholder_folder_rect.contains(scene_pos):
-                if self._folder_hover_bg:
-                    self._folder_hover_bg.setBrush(QBrush(hover_color))
+                # Show normal icon, hide hover icon
+                for item in self._file_icon_normal:
+                    item.setVisible(True)
+                for item in self._file_icon_hover:
+                    item.setVisible(False)
+                if hasattr(self, '_file_hint_text'):
+                    self._file_hint_text.setDefaultTextColor(gray)
+
+            # Check hover on folder icon - toggle visibility of normal/hover icons
+            folder_hover = self._placeholder_folder_rect and self._placeholder_folder_rect.contains(scene_pos)
+            if folder_hover:
+                # Show hover icon, hide normal icon
+                for item in self._folder_icon_normal:
+                    item.setVisible(False)
+                for item in self._folder_icon_hover:
+                    item.setVisible(True)
+                if hasattr(self, '_folder_hint_text'):
+                    self._folder_hint_text.setDefaultTextColor(cobalt_blue)
             else:
-                if self._folder_hover_bg:
-                    self._folder_hover_bg.setBrush(QBrush(Qt.transparent))
+                # Show normal icon, hide hover icon
+                for item in self._folder_icon_normal:
+                    item.setVisible(True)
+                for item in self._folder_icon_hover:
+                    item.setVisible(False)
+                if hasattr(self, '_folder_hint_text'):
+                    self._folder_hint_text.setDefaultTextColor(gray)
+
+            # Force scene update
+            self.scene.update()
         else:
             # Call ContinuousGraphicsView's mouseMoveEvent (for draw mode support)
             ContinuousGraphicsView.mouseMoveEvent(self.view, event)
@@ -1502,6 +1654,9 @@ class ContinuousPreviewWidget(QWidget):
     page_changed = pyqtSignal(int)  # Emitted when visible page changes (0-based index)
     # rect_drawn: x, y, w, h (as % of page), mode ('remove' or 'protect')
     rect_drawn = pyqtSignal(float, float, float, float, str)
+    # Batch mode navigation signals
+    prev_file_requested = pyqtSignal()  # Navigate to previous file
+    next_file_requested = pyqtSignal()  # Navigate to next file
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1575,6 +1730,9 @@ class ContinuousPreviewWidget(QWidget):
         self.before_panel.files_dropped.connect(self._on_files_dropped)
         self.before_panel.close_requested.connect(self._on_close_requested)
         self.before_panel.rect_drawn.connect(self._on_rect_drawn)
+        # Batch mode navigation signals
+        self.before_panel.prev_file_requested.connect(self.prev_file_requested.emit)
+        self.before_panel.next_file_requested.connect(self.next_file_requested.emit)
         splitter.addWidget(self.before_panel)
         
         # Panel SAU (chỉ kết quả)
@@ -1628,7 +1786,15 @@ class ContinuousPreviewWidget(QWidget):
     def _on_close_requested(self):
         """Handle close button click - forward to parent"""
         self.close_requested.emit()
-    
+
+    def set_batch_mode(self, enabled: bool, current: int = 0, total: int = 0):
+        """Enable/disable batch mode navigation in before_panel"""
+        self.before_panel.set_batch_mode(enabled, current, total)
+
+    def set_file_index(self, current: int, total: int):
+        """Update file counter and navigation button states"""
+        self.before_panel.set_file_index(current, total)
+
     def _on_file_dropped(self, file_path: str):
         """Handle file dropped - forward to parent"""
         self.file_dropped.emit(file_path)
@@ -1749,7 +1915,7 @@ class ContinuousPreviewWidget(QWidget):
     
     def _schedule_process(self):
         """Schedule processing với debounce"""
-        self._process_timer.start(300)
+        self._process_timer.start(150)  # Reduced from 300ms for faster response
     
     def _do_process_all(self):
         """Xử lý tất cả các trang"""
@@ -1871,6 +2037,10 @@ class ContinuousPreviewWidget(QWidget):
                 self._processed_pages[i] = page.copy()
 
         self.after_panel.set_pages(self._processed_pages)
+
+        # Force UI refresh on Windows (Mac does this automatically)
+        from PyQt5.QtWidgets import QApplication
+        QApplication.processEvents()
 
         # Hide loading overlay after processing complete
         self._hide_loading()

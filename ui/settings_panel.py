@@ -8,9 +8,9 @@ from PyQt5.QtWidgets import (
     QSlider, QComboBox, QPushButton,
     QFrame, QGridLayout, QLineEdit,
     QFileDialog, QCheckBox, QRadioButton, QButtonGroup, QMessageBox,
-    QStyledItemDelegate
+    QStyledItemDelegate, QSizePolicy
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QSize, QPoint
+from PyQt5.QtCore import Qt, pyqtSignal, QSize, QPoint, QPropertyAnimation, QEasingCurve
 from PyQt5.QtGui import QColor, QPixmap, QPainter, QPolygon
 
 from typing import List, Dict, Set
@@ -18,6 +18,8 @@ from core.processor import Zone, PRESET_ZONES, TextProtectionOptions
 from core.config_manager import get_config_manager
 from ui.zone_selector import ZoneSelectorWidget
 from ui.text_protection_dialog import TextProtectionDialog
+from ui.compact_settings_toolbar import CompactSettingsToolbar
+from ui.compact_toolbar_icons import CompactIconButton
 
 
 class ComboItemDelegate(QStyledItemDelegate):
@@ -63,16 +65,20 @@ class SettingsPanel(QWidget):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        
+
         self._zones: Dict[str, Zone] = {}
         self._custom_zones: Dict[str, Zone] = {}
         self._custom_zone_counter = 0
         self._selected_zone_id = None
         self._zone_selection_history: List[str] = []  # Track order of zone selections
-        
+        self._collapsed = False
+        self._current_draw_mode = None  # Track current draw mode
+
         self._setup_ui()
+        self._setup_compact_toolbar()
         self._init_preset_zones()
         self._load_saved_config()
+        self._load_collapsed_state()
 
     def _load_saved_config(self):
         """Load saved zone configuration from config file"""
@@ -353,7 +359,7 @@ class SettingsPanel(QWidget):
         apply_layout.addStretch()
 
         # Reset button (aligned with Góc, Cạnh, Tùy biến labels)
-        self.reset_zones_btn = QPushButton("Xóa tất cả")
+        self.reset_zones_btn = QPushButton("Xóa vùng chọn")
         self.reset_zones_btn.setToolTip("Xóa tất cả vùng đã chọn")
         self.reset_zones_btn.setStyleSheet("""
             QPushButton {
@@ -666,8 +672,19 @@ class SettingsPanel(QWidget):
         output_container.addLayout(output_layout)
         output_container.addStretch()
         main_row.addWidget(output_widget, stretch=1)  # 1/3 width
-        
-        layout.addLayout(main_row)
+
+        # Store reference to main content for collapse/expand
+        self.main_content = QWidget()
+        main_content_layout = QVBoxLayout(self.main_content)
+        main_content_layout.setContentsMargins(0, 0, 0, 0)
+        main_content_layout.setSpacing(0)
+
+        # Move main_row into main_content widget
+        temp_widget = QWidget()
+        temp_widget.setLayout(main_row)
+        main_content_layout.addWidget(temp_widget)
+
+        layout.addWidget(self.main_content)
     
     def _init_preset_zones(self):
         """Khởi tạo preset zones"""
@@ -687,7 +704,123 @@ class SettingsPanel(QWidget):
         self._zones['corner_tl'].enabled = True
         self._zone_selection_history.append('corner_tl')  # Add to history
         self._update_zone_combo()
-    
+
+    def _setup_compact_toolbar(self):
+        """Create and connect compact toolbar"""
+        self.compact_toolbar = CompactSettingsToolbar()
+        self.compact_toolbar.setVisible(False)
+
+        # Insert at top of main layout
+        self.layout().insertWidget(0, self.compact_toolbar)
+
+        # Connect signals from compact toolbar
+        self.compact_toolbar.zone_toggled.connect(self._on_compact_zone_toggled)
+        self.compact_toolbar.filter_changed.connect(self._on_compact_filter_changed)
+        self.compact_toolbar.draw_mode_changed.connect(self._on_compact_draw_mode_changed)
+        self.compact_toolbar.clear_zones.connect(self._on_reset_zones_clicked)
+        self.compact_toolbar.ai_detect_toggled.connect(self._on_compact_ai_detect_toggled)
+
+    def _on_compact_zone_toggled(self, zone_id: str, enabled: bool):
+        """Handle zone toggle from compact toolbar"""
+        if zone_id in self._zones:
+            self._zones[zone_id].enabled = enabled
+
+            # Sync with zone selector widget
+            self.zone_selector.blockSignals(True)
+            if zone_id.startswith('corner_'):
+                self.zone_selector.corner_icon.set_zone_selected(zone_id, enabled)
+            elif zone_id.startswith('margin_'):
+                self.zone_selector.edge_icon.set_zone_selected(zone_id, enabled)
+            self.zone_selector.blockSignals(False)
+
+            self._update_zone_combo()
+            self._emit_zones()
+            self._save_zone_config()
+
+    def _on_compact_filter_changed(self, filter_mode: str):
+        """Handle filter change from compact toolbar"""
+        filter_map = {'all': self.apply_all_rb, 'odd': self.apply_odd_rb,
+                      'even': self.apply_even_rb, 'none': self.apply_free_rb}
+        if filter_mode in filter_map:
+            filter_map[filter_mode].setChecked(True)
+            self._on_apply_filter_changed(filter_map[filter_mode])
+
+    def _on_compact_draw_mode_changed(self, mode):
+        """Handle draw mode change from compact toolbar"""
+        self._current_draw_mode = mode
+        # Sync with zone selector draw buttons
+        self.zone_selector.set_draw_mode(mode)
+        self.draw_mode_changed.emit(mode)
+
+    def _on_compact_ai_detect_toggled(self, enabled: bool):
+        """Handle AI detect toggle from compact toolbar"""
+        self.text_protection_cb.setChecked(enabled)
+
+    def _toggle_collapse(self):
+        """Toggle between collapsed and expanded state"""
+        self._collapsed = not self._collapsed
+        self._animate_collapse()
+        self._save_collapsed_state()
+
+    def _animate_collapse(self):
+        """Animate height transition"""
+        if self._collapsed:
+            # Sync state to compact toolbar before showing
+            self._sync_to_compact_toolbar()
+            # Hide expanded, show compact
+            self.main_content.setVisible(False)
+            self.compact_toolbar.setVisible(True)
+            # Reduce top margin for compact mode
+            self.layout().setContentsMargins(12, 2, 12, 2)
+        else:
+            # Show expanded, hide compact
+            self.compact_toolbar.setVisible(False)
+            self.main_content.setVisible(True)
+            # Restore normal margins
+            self.layout().setContentsMargins(12, 8, 12, 12)
+
+        # Animation for smooth transition
+        self.animation = QPropertyAnimation(self, b"maximumHeight")
+        self.animation.setDuration(200)
+        self.animation.setEasingCurve(QEasingCurve.OutCubic)
+
+        if self._collapsed:
+            self.animation.setEndValue(46)  # Compact height
+        else:
+            self.animation.setEndValue(16777215)  # Max height (no limit)
+
+        self.animation.start()
+
+    def _sync_to_compact_toolbar(self):
+        """Sync current state to compact toolbar"""
+        enabled_zones = [z.id for z in self._zones.values() if z.enabled]
+        filter_mode = self._get_current_filter()
+        ai_detect = self.text_protection_cb.isChecked()
+        self.compact_toolbar.sync_from_settings(
+            enabled_zones, filter_mode, self._current_draw_mode, ai_detect
+        )
+
+    def _load_collapsed_state(self):
+        """Load collapsed state from config"""
+        ui_config = get_config_manager().get_ui_config()
+        self._collapsed = ui_config.get('toolbar_collapsed', False)
+        if self._collapsed:
+            self._sync_to_compact_toolbar()
+            self.main_content.setVisible(False)
+            self.compact_toolbar.setVisible(True)
+            # Set margins for compact mode (same as _animate_collapse)
+            self.layout().setContentsMargins(12, 2, 12, 2)
+            self.setMaximumHeight(46)
+            # Force layout update
+            self.compact_toolbar.updateGeometry()
+            self.updateGeometry()
+
+    def _save_collapsed_state(self):
+        """Save collapsed state to config"""
+        ui_config = get_config_manager().get_ui_config()
+        ui_config['toolbar_collapsed'] = self._collapsed
+        get_config_manager().save_ui_config(ui_config)
+
     def _update_zone_combo(self):
         """Cập nhật combo box zones"""
         self.zone_combo.blockSignals(True)

@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QFileDialog, QMessageBox, QProgressBar,
     QFrame, QApplication, QSpinBox, QComboBox, QSizePolicy,
     QMenu, QDialog, QRadioButton, QStackedWidget,
-    QGroupBox, QDialogButtonBox, QSplitter, QStyledItemDelegate
+    QGroupBox, QDialogButtonBox, QSplitter, QStyledItemDelegate, QShortcut
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QEvent, QObject, QRect, QTimer
 from PyQt5.QtGui import QKeySequence, QDragEnterEvent, QDropEvent, QPixmap, QPainter, QPen, QIcon, QColor
@@ -20,7 +20,7 @@ from typing import Optional, List
 import numpy as np
 
 from ui.continuous_preview import ContinuousPreviewWidget
-from ui.batch_preview import BatchFileListWidget
+from ui.batch_sidebar import BatchSidebar
 from ui.settings_panel import SettingsPanel
 from core.processor import Zone, StapleRemover
 from core.pdf_handler import PDFHandler, PDFExporter
@@ -352,26 +352,34 @@ class MainWindow(QMainWindow):
         preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_layout.setSpacing(0)
         
-        # Vertical splitter for batch file list and preview
-        self.preview_splitter = QSplitter(Qt.Vertical)
+        # Horizontal splitter for sidebar and preview
+        self.preview_splitter = QSplitter(Qt.Horizontal)
         self.preview_splitter.setStyleSheet("""
             QSplitter::handle {
                 background-color: #D1D5DB;
-                height: 4px;
+                width: 4px;
             }
             QSplitter::handle:hover {
                 background-color: #9CA3AF;
             }
         """)
-        
-        # Batch file list (hidden by default)
-        self.batch_file_list = BatchFileListWidget()
-        self.batch_file_list.file_selected.connect(self._on_batch_file_selected)
-        self.batch_file_list.close_requested.connect(self._on_close_file)
-        self.batch_file_list.setVisible(False)
-        self.batch_file_list.setMinimumHeight(100)
-        self.preview_splitter.addWidget(self.batch_file_list)
-        
+
+        # Batch sidebar (left, hidden by default)
+        self.batch_sidebar = BatchSidebar()
+        self.batch_sidebar.file_selected.connect(self._on_sidebar_file_selected)
+        self.batch_sidebar.selection_changed.connect(self._on_sidebar_selection_changed)
+        self.batch_sidebar.close_requested.connect(self._on_close_file)
+        self.batch_sidebar.collapsed_changed.connect(self._on_sidebar_collapsed_changed)
+        self.batch_sidebar.setVisible(False)
+        self.preview_splitter.addWidget(self.batch_sidebar)
+        # Prevent splitter from collapsing sidebar completely
+        self.preview_splitter.setCollapsible(0, False)
+        self.preview_splitter.splitterMoved.connect(self._on_splitter_moved)
+
+        # Batch state variables
+        self._batch_files: List[str] = []
+        self._batch_current_index: int = 0
+
         # Preview widget (same for single and batch modes)
         self.preview = ContinuousPreviewWidget()
         self.preview.zone_changed.connect(self._on_zone_changed_from_preview)
@@ -385,10 +393,13 @@ class MainWindow(QMainWindow):
         self.preview.close_requested.connect(self._on_close_file)
         self.preview.page_changed.connect(self._on_page_changed_from_scroll)
         self.preview.rect_drawn.connect(self._on_rect_drawn_from_preview)
+        # Batch navigation signals
+        self.preview.prev_file_requested.connect(self._on_prev_file)
+        self.preview.next_file_requested.connect(self._on_next_file)
         self.preview_splitter.addWidget(self.preview)
-        
-        # Set initial splitter sizes (file list: 200, preview: stretch)
-        self.preview_splitter.setSizes([200, 600])
+
+        # Set initial splitter sizes (sidebar: 250, preview: stretch)
+        self.preview_splitter.setSizes([200, 800])
         
         preview_layout.addWidget(self.preview_splitter)
         
@@ -690,10 +701,31 @@ class MainWindow(QMainWindow):
         self.settings_menu_btn.setStyleSheet(dropdown_btn_style)
         self.settings_menu_btn.clicked.connect(self._show_settings_dialog)
         menu_layout.addWidget(self.settings_menu_btn)
-        
+
         # Spacer
         menu_layout.addStretch()
-        
+
+        # === Collapse Settings Toolbar Button (before Clean button) ===
+        self.collapse_settings_btn = QPushButton()
+        self.collapse_settings_btn.setFixedSize(20, 20)
+        self.collapse_settings_btn.setToolTip("Thu gọn thanh công cụ")
+        self.collapse_settings_btn.setCursor(Qt.PointingHandCursor)
+        self._settings_collapsed = False  # Track collapsed state
+        self._update_collapse_button_icon()
+        self.collapse_settings_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                border: none;
+            }
+            QPushButton:hover {
+                background-color: rgba(0, 0, 0, 0.05);
+                border-radius: 4px;
+            }
+        """)
+        self.collapse_settings_btn.clicked.connect(self._on_collapse_settings_clicked)
+        menu_layout.addWidget(self.collapse_settings_btn)
+        menu_layout.addSpacing(12)  # Spacing before Clean button
+
         # === Run Button (right side) ===
         self.run_btn = QPushButton("▶ Clean")
         self.run_btn.setStyleSheet("""
@@ -717,7 +749,11 @@ class MainWindow(QMainWindow):
         self.run_btn.clicked.connect(self._on_process)
         self.run_btn.setEnabled(False)
         menu_layout.addWidget(self.run_btn)
-        
+
+        # Keyboard shortcut Ctrl+Enter for Clean button
+        self.clean_shortcut = QShortcut(QKeySequence("Ctrl+Return"), self)
+        self.clean_shortcut.activated.connect(self._on_clean_shortcut)
+
         # Cancel button (hidden by default)
         self.cancel_btn = QPushButton("Dừng")
         self.cancel_btn.setStyleSheet("""
@@ -758,7 +794,10 @@ class MainWindow(QMainWindow):
         
         # Add to main window (above central widget)
         self.setMenuWidget(menu_widget)
-    
+
+        # Sync collapse state from settings panel
+        self._sync_collapse_state_from_settings()
+
     def _setup_bottom_bar(self, parent_layout):
         """Bottom bar - centered controls"""
         # Create dropdown arrow image
@@ -1042,11 +1081,68 @@ class MainWindow(QMainWindow):
         """Toggle settings panel visibility"""
         visible = not self.settings_panel.isVisible()
         self.settings_panel.setVisible(visible)
-        
+
         # Sync menu button state
         if hasattr(self, 'config_menu_btn'):
             self.config_menu_btn.setChecked(visible)
-    
+
+        # Show/hide collapse button based on settings panel visibility
+        if hasattr(self, 'collapse_settings_btn'):
+            self.collapse_settings_btn.setVisible(visible)
+
+    def _on_collapse_settings_clicked(self):
+        """Handle collapse/expand settings toolbar"""
+        self._settings_collapsed = not self._settings_collapsed
+        self._update_collapse_button_icon()
+
+        # Toggle settings panel collapse state
+        if hasattr(self, 'settings_panel'):
+            self.settings_panel._toggle_collapse()
+
+    def _update_collapse_button_icon(self):
+        """Update collapse button icon based on state - simple chevron"""
+        from PyQt5.QtGui import QIcon, QPixmap, QPainter, QPen, QPainterPath
+        from PyQt5.QtCore import Qt
+
+        size = 20
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        color = QColor(107, 114, 128)  # Gray
+        cx, cy = size // 2, size // 2
+
+        # Simple chevron icon (smaller)
+        painter.setPen(QPen(color, 1.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        path = QPainterPath()
+
+        if self._settings_collapsed:
+            # Down chevron (expand)
+            path.moveTo(cx - 4, cy - 2)
+            path.lineTo(cx, cy + 2)
+            path.lineTo(cx + 4, cy - 2)
+            self.collapse_settings_btn.setToolTip("Mở rộng thanh công cụ")
+        else:
+            # Up chevron (collapse)
+            path.moveTo(cx - 4, cy + 2)
+            path.lineTo(cx, cy - 2)
+            path.lineTo(cx + 4, cy + 2)
+            self.collapse_settings_btn.setToolTip("Thu gọn thanh công cụ")
+
+        painter.drawPath(path)
+        painter.end()
+
+        self.collapse_settings_btn.setIcon(QIcon(pixmap))
+        self.collapse_settings_btn.setIconSize(QSize(size, size))
+
+    def _sync_collapse_state_from_settings(self):
+        """Sync collapse state from settings panel"""
+        if hasattr(self, 'settings_panel'):
+            self._settings_collapsed = self.settings_panel._collapsed
+            self._update_collapse_button_icon()
+
     def _set_bottom_bar_visible(self, visible: bool):
         """Show/hide bottom bar controls"""
         if hasattr(self, 'bottom_bar'):
@@ -1058,7 +1154,7 @@ class MainWindow(QMainWindow):
         
         if self._batch_mode:
             # Batch mode - enable run if there are checked files
-            has_checked = bool(self.batch_file_list.get_checked_files())
+            has_checked = bool(self.batch_sidebar.get_checked_files())
             self.run_btn.setEnabled(has_checked)
         else:
             # Single file mode
@@ -1136,9 +1232,13 @@ class MainWindow(QMainWindow):
         settings = self.settings_panel.get_settings()
         filename_pattern = settings.get('filename_pattern', '{gốc}_clean.pdf')
 
-        # Show batch file list with filename pattern
-        self.batch_file_list.set_folder(base_dir, output_dir, pdf_files, filename_pattern)
-        self.batch_file_list.setVisible(True)
+        # Show batch sidebar with file list
+        self._batch_current_index = 0
+        self.batch_sidebar.set_files(pdf_files, base_dir)
+        self.batch_sidebar.setVisible(True)
+
+        # Enable batch mode in preview
+        self.preview.set_batch_mode(True, 0, len(pdf_files))
 
         # Update UI
         self.setWindowTitle(f"Xóa Ghim PDF (5S) - {len(pdf_files)} files")
@@ -1194,13 +1294,17 @@ class MainWindow(QMainWindow):
         settings = self.settings_panel.get_settings()
         filename_pattern = settings.get('filename_pattern', '{gốc}_clean.pdf')
 
-        # Show batch file list with filename pattern
-        self.batch_file_list.set_folder(folder_path, output_dir, pdf_files, filename_pattern)
-        self.batch_file_list.setVisible(True)
-        
+        # Show batch sidebar with file list
+        self._batch_current_index = 0
+        self.batch_sidebar.set_files(pdf_files, folder_path)
+        self.batch_sidebar.setVisible(True)
+
+        # Enable batch mode in preview
+        self.preview.set_batch_mode(True, 0, len(pdf_files))
+
         # Update UI
         self.setWindowTitle(f"Xóa Ghim PDF (5S) - {folder_path} ({len(pdf_files)} files)")
-        
+
         # Load first file (will be triggered by file_selected signal)
         self._update_ui_state()
     
@@ -1208,7 +1312,55 @@ class MainWindow(QMainWindow):
         """When file selected in batch mode file list"""
         # Load the selected file using the same method as single mode
         self._load_pdf(file_path)
-    
+
+    def _on_sidebar_file_selected(self, file_path: str, original_idx: int):
+        """Handle file selection from sidebar"""
+        self._batch_current_index = original_idx
+        self._load_pdf(file_path)
+        self.preview.set_file_index(original_idx, len(self._batch_files))
+
+    def _on_sidebar_selection_changed(self, checked_files: List[str]):
+        """Handle checkbox selection change in sidebar"""
+        self._update_ui_state()
+
+    def _on_sidebar_collapsed_changed(self, collapsed: bool):
+        """Handle sidebar collapse/expand"""
+        if collapsed:
+            # Set splitter to collapsed width (40px)
+            self.preview_splitter.setSizes([40, self.preview_splitter.width() - 40])
+        else:
+            # Restore to default expanded width
+            self.preview_splitter.setSizes([200, self.preview_splitter.width() - 200])
+
+    def _on_splitter_moved(self, pos: int, index: int):
+        """Handle splitter drag - enforce minimum sidebar width"""
+        if not self.batch_sidebar.isVisible():
+            return
+        sizes = self.preview_splitter.sizes()
+        sidebar_width = sizes[0]
+        min_width = BatchSidebar.COLLAPSED_WIDTH if self.batch_sidebar.is_collapsed() else BatchSidebar.MIN_WIDTH
+        if sidebar_width < min_width:
+            # Force minimum width
+            self.preview_splitter.setSizes([min_width, self.preview_splitter.width() - min_width])
+
+    def _on_prev_file(self):
+        """Navigate to previous file in batch mode"""
+        if self._batch_current_index > 0:
+            self._batch_current_index -= 1
+            file_path = self._batch_files[self._batch_current_index]
+            self.batch_sidebar.select_by_original_index(self._batch_current_index)
+            self._load_pdf(file_path)
+            self.preview.set_file_index(self._batch_current_index, len(self._batch_files))
+
+    def _on_next_file(self):
+        """Navigate to next file in batch mode"""
+        if self._batch_current_index < len(self._batch_files) - 1:
+            self._batch_current_index += 1
+            file_path = self._batch_files[self._batch_current_index]
+            self.batch_sidebar.select_by_original_index(self._batch_current_index)
+            self._load_pdf(file_path)
+            self.preview.set_file_index(self._batch_current_index, len(self._batch_files))
+
     def _on_close_file(self):
         """Close currently opened file or folder"""
         if self._batch_mode:
@@ -1217,10 +1369,12 @@ class MainWindow(QMainWindow):
             self._batch_base_dir = ""
             self._batch_output_dir = ""
             self._batch_files = []
-            
-            # Hide batch file list
-            self.batch_file_list.setVisible(False)
-            
+            self._batch_current_index = 0
+
+            # Hide sidebar and disable batch mode in preview
+            self.batch_sidebar.setVisible(False)
+            self.preview.set_batch_mode(False)
+
             self.setWindowTitle("Xóa Ghim PDF (5S)")
         
         # Close current file (applies to both modes)
@@ -1467,10 +1621,10 @@ class MainWindow(QMainWindow):
         self.settings_panel.add_custom_zone_from_rect(x, y, w, h, mode)
 
     def _on_output_settings_changed(self, output_dir: str, filename_pattern: str):
-        """Handle output settings change - update batch file list"""
+        """Handle output settings change"""
         if self._batch_mode:
             self._batch_output_dir = output_dir if output_dir else self._batch_base_dir
-            self.batch_file_list.update_output_settings(output_dir, filename_pattern)
+            # Output settings stored for use during processing (sidebar shows source files only)
 
     def _on_page_filter_changed(self, filter_mode: str):
         """Handle page filter change from settings"""
@@ -1497,6 +1651,11 @@ class MainWindow(QMainWindow):
         zones = self.settings_panel.get_zones()
         self.preview.set_zones(zones)
     
+    def _on_clean_shortcut(self):
+        """Handle Ctrl+Enter shortcut - only trigger if button is enabled"""
+        if self.run_btn.isEnabled() and self.run_btn.isVisible():
+            self._on_process()
+
     def _on_process(self):
         """Bắt đầu xử lý"""
         if self._batch_mode:
@@ -1545,7 +1704,7 @@ class MainWindow(QMainWindow):
     
     def _on_process_batch(self):
         """Xử lý batch files"""
-        checked_files = self.batch_file_list.get_checked_files()
+        checked_files = self.batch_sidebar.get_checked_files()
         if not checked_files:
             QMessageBox.warning(self, "Thiếu thông tin", "Vui lòng chọn ít nhất một file để xử lý!")
             return

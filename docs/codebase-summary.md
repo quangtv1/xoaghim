@@ -61,13 +61,18 @@ xoaghim/
 │   ├── zone_item.py           # Graphics item cho vùng kéo thả
 │   ├── batch_preview.py       # Danh sách file batch
 │   ├── preview_widget.py      # Preview widget cơ bản
-│   └── text_protection_dialog.py  # Dialog cài đặt text protection
+│   ├── text_protection_dialog.py  # Dialog cài đặt text protection
+│   ├── compact_toolbar_icons.py    # QPainter-based icon buttons for compact toolbar
+│   └── compact_settings_toolbar.py # Compact icon-only settings toolbar widget
 ├── resources/
 │   └── models/
 │       └── yolov12s-doclaynet.onnx  # AI model
 ├── tests/
 │   ├── test_layout_detector.py
-│   └── test_zone_optimizer.py
+│   ├── test_zone_optimizer.py
+│   ├── test_processor.py
+│   ├── test_geometry.py
+│   └── test_compact_toolbar.py    # 31 tests for compact toolbar widgets
 └── .github/
     └── workflows/
         └── build-windows.yml  # GitHub Actions build
@@ -152,6 +157,37 @@ xoaghim/
 - Resize handles
 - Multi-page selection support
 
+#### `ui/compact_toolbar_icons.py`
+- **CompactIconButton:** Reusable QPainter-based icon button
+  - Supports 20+ icon types: corners, edges, draw modes, filters, actions
+  - Checkable and selected state management
+  - Color states: normal (gray), hover (blue), selected/protect (blue/pink)
+  - Fixed 38x38px size with rounded background option
+  - Tooltip support and cursor feedback
+- **CompactIconSeparator:** Vertical divider between button groups
+  - Fixed 8x38px size
+  - Light gray color (#D1D5DB)
+
+#### `ui/compact_settings_toolbar.py`
+- **CompactSettingsToolbar:** Icon-only toolbar for collapsed settings panel
+  - Signals: `zone_toggled`, `filter_changed`, `draw_mode_changed`, `clear_zones`, `ai_detect_toggled`
+  - Zone buttons: 4 corners + 4 edges (8 buttons total)
+  - Draw mode buttons: Remove (-) and Protect (+) in exclusive group
+  - Filter buttons: All, Odd, Even, Current Page in exclusive group
+  - Action buttons: Clear zones, AI detect
+  - State synchronization methods: `set_zone_state()`, `set_filter_state()`, `set_draw_mode_state()`, `set_ai_detect_state()`
+  - Full sync from settings: `sync_from_settings(enabled_zones, filter_mode, draw_mode, ai_detect)`
+  - White background (42px height), organized button groups with separators
+
+## Keyboard Shortcuts
+
+| Phím tắt | Chức năng | Vị trí |
+|----------|----------|--------|
+| Ctrl+O | Mở file | Menu Tệp tin |
+| Ctrl+Enter | Xử lý (Clean button) | Main window |
+| Ctrl+Plus | Phóng to preview | Bottom bar |
+| Ctrl+Minus | Thu nhỏ preview | Bottom bar |
+
 ## Cài Đặt Mặc Định
 
 | Cài đặt | Giá trị |
@@ -182,6 +218,70 @@ GitHub Actions sẽ:
 - `XoaGhim-1.1.16-Windows.zip`
 - Chứa: exe, DLLs, resources/models
 
+## Changelog v1.1.18 (Compact Toolbar)
+
+### Compact Settings Toolbar
+- **Collapsible toolbar** - Icon-only toolbar when settings panel is collapsed
+  - Chevron button to toggle collapse/expand state
+  - Synchronized state between main panel and toolbar
+  - Initial load fix for icon centering with proper alignment
+- **Zone toggle buttons** - 8 icon buttons for quick zone control
+  - 4 corners: Top-left, Top-right, Bottom-left, Bottom-right
+  - 4 edges: Top, Bottom, Left, Right
+- **Draw mode buttons** - Custom draw zone controls
+  - Minus (-) icon for remove zone
+  - Plus (+) icon for protect zone
+  - Exclusive selection (only one active at a time)
+- **Filter buttons** - Page filter quick access
+  - "All" (two overlapping pages icon)
+  - "Odd" (page with "1" label)
+  - "Even" (page with "2" label)
+  - "Current page" (page with "*" label)
+  - Exclusive selection group
+- **Action buttons**
+  - Trash icon for clear all zones
+  - AI text icon for auto-detect protect zones
+- **Visual design**
+  - Gray base color (#6B7280)
+  - Blue hover/selected state (#3B82F6)
+  - Pink color for protect mode (#EC4899)
+  - Light blue background for selected state (#DBEAFE)
+  - 38x38px icon buttons with consistent sizing
+  - Vertical separators between button groups
+  - 42px fixed height toolbar with white background
+- **QPainter-based icons** - Custom drawn icons for visual consistency
+
+### Files created
+- `ui/compact_toolbar_icons.py` (326 lines) - CompactIconButton and CompactIconSeparator classes
+  - Custom paint engine for 20+ icon types
+  - Hover and selection state management
+  - Icon types: corners, edges, draw modes, filters, actions
+- `ui/compact_settings_toolbar.py` (243 lines) - CompactSettingsToolbar widget
+  - Zone state synchronization
+  - Filter group management
+  - Draw mode exclusive selection
+  - Public API: `set_zone_state()`, `set_filter_state()`, `set_draw_mode_state()`, `set_ai_detect_state()`, `sync_from_settings()`
+- `tests/test_compact_toolbar.py` (31 new tests) - Comprehensive test coverage
+  - Icon button creation and state tests
+  - Toolbar UI initialization tests
+  - Signal emission tests
+  - State synchronization tests
+  - Draw mode exclusivity tests
+  - Filter group exclusivity tests
+
+### Keyboard Shortcuts (Updated)
+- **Ctrl+Enter** - Trigger Clean button (processes PDF)
+- **Ctrl+O** - Open file
+- **Ctrl+Plus** - Zoom in
+- **Ctrl+Minus** - Zoom out
+
+### UI Integration
+- CompactSettingsToolbar integrated into SettingsPanel
+- State synchronization with main settings controls
+- Signals bridge toolbar actions to main processing logic
+
+---
+
 ## Changelog v1.1.17
 
 - **Zone config persistence:** Lưu cấu hình vùng vào JSON
@@ -202,4 +302,4 @@ GitHub Actions sẽ:
 - Multi-page zone selection
 
 ---
-*Cập nhật: 2026-01-15*
+*Cập nhật: 2026-01-16*
