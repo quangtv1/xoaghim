@@ -20,6 +20,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Get version from tag
+        id: version
+        run: |
+          # Extract version from tag (remove 'v' prefix)
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          if (-not $version) { $version = "1.1.17" }  # Default for workflow_dispatch
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+          echo "Version: $version"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -51,13 +60,15 @@ jobs:
 
       - name: Build executable (onedir)
         run: |
-          pyinstaller XoaGhim-1.1.16.spec --clean
+          $version = "${{ steps.version.outputs.VERSION }}"
+          pyinstaller XoaGhim-$version.spec --clean
 
       - name: Copy ONNX Runtime DLLs to dist
         run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
           # Copy official ONNX Runtime DLLs
           $dllPath = "onnxruntime-official\onnxruntime-win-x64-${{ env.ONNX_VERSION }}\lib"
-          Copy-Item "$dllPath\*.dll" -Destination "dist\XoaGhim-1.1.16\" -Force
+          Copy-Item "$dllPath\*.dll" -Destination "dist\XoaGhim-$version\" -Force
 
           # Also copy DLLs from Python onnxruntime package
           $pythonOnnx = python -c "import onnxruntime; import os; print(os.path.dirname(onnxruntime.__file__))"
@@ -65,16 +76,17 @@ jobs:
 
           # Copy all DLLs from onnxruntime capi folder
           if (Test-Path "$pythonOnnx\capi\*.dll") {
-            Copy-Item "$pythonOnnx\capi\*.dll" -Destination "dist\XoaGhim-1.1.16\" -Force
+            Copy-Item "$pythonOnnx\capi\*.dll" -Destination "dist\XoaGhim-$version\" -Force
             Write-Host "Copied DLLs from capi folder"
           }
 
           # List all DLLs in dist for verification
-          Write-Host "`nDLLs in dist\XoaGhim-1.1.16:"
-          Get-ChildItem dist\XoaGhim-1.1.16\*.dll | Select-Object Name, Length
+          Write-Host "`nDLLs in dist\XoaGhim-$version:"
+          Get-ChildItem dist\XoaGhim-$version\*.dll | Select-Object Name, Length
 
       - name: Copy VC++ Runtime DLLs
         run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
           # Copy VC++ runtime DLLs to ensure they're bundled
           $vcRuntimeDlls = @(
             "C:\Windows\System32\msvcp140.dll",
@@ -83,38 +95,39 @@ jobs:
           )
           foreach ($dll in $vcRuntimeDlls) {
             if (Test-Path $dll) {
-              Copy-Item $dll -Destination "dist\XoaGhim-1.1.16\" -Force
+              Copy-Item $dll -Destination "dist\XoaGhim-$version\" -Force
               Write-Host "Copied: $dll"
             }
           }
 
       - name: Create ZIP archive
         run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
           cd dist
-          Compress-Archive -Path XoaGhim-1.1.16 -DestinationPath XoaGhim-1.1.16-Windows.zip
+          Compress-Archive -Path XoaGhim-$version -DestinationPath XoaGhim-$version-Windows.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: XoaGhim-1.1.16-Windows
-          path: dist/XoaGhim-1.1.16-Windows.zip
+          name: XoaGhim-${{ steps.version.outputs.VERSION }}-Windows
+          path: dist/XoaGhim-${{ steps.version.outputs.VERSION }}-Windows.zip
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: dist/XoaGhim-1.1.16-Windows.zip
+          files: dist/XoaGhim-${{ steps.version.outputs.VERSION }}-Windows.zip
           name: "Xóa Ghim PDF ${{ github.ref_name }}"
           body: |
             ## Xóa Vết Ghim PDF ${{ github.ref_name }}
 
             ### Tính năng mới
+            - **Zone config persistence** - Lưu cấu hình vùng xử lý qua các lần mở app
+            - **2-click zone reset** - Click bỏ chọn → click chọn lại = reset về kích thước mặc định
             - **Custom Zone Draw Mode** - Vẽ vùng xử lý tùy chỉnh trực tiếp trên preview
-            - **Cải thiện quản lý vùng xử lý** - UI/UX tốt hơn cho việc chọn và chỉnh sửa zones
 
             ### Sửa lỗi
-            - **Fix Qt xcb plugin error** - Sửa lỗi Qt trên Rocky Linux/RHEL/CentOS
-            - **Fix ONNX Runtime DLL** - Bundle đầy đủ VC++ Runtime và ONNX Runtime DLLs
+            - Fix zone không update trên preview khi reset
 
             ### Tải về
             - **XoaGhim-Windows.zip** - Giải nén và chạy `XoaGhim.exe`
