@@ -68,7 +68,7 @@ jobs:
           $version = "${{ steps.version.outputs.VERSION }}"
           # Copy official ONNX Runtime DLLs
           $dllPath = "onnxruntime-official\onnxruntime-win-x64-${{ env.ONNX_VERSION }}\lib"
-          Copy-Item "$dllPath\*.dll" -Destination "dist\XoaGhim-$version\" -Force
+          Copy-Item "$dllPath\*.dll" -Destination "dist\XoaGhim-${version}\" -Force
 
           # Also copy DLLs from Python onnxruntime package
           $pythonOnnx = python -c "import onnxruntime; import os; print(os.path.dirname(onnxruntime.__file__))"
@@ -76,13 +76,13 @@ jobs:
 
           # Copy all DLLs from onnxruntime capi folder
           if (Test-Path "$pythonOnnx\capi\*.dll") {
-            Copy-Item "$pythonOnnx\capi\*.dll" -Destination "dist\XoaGhim-$version\" -Force
+            Copy-Item "$pythonOnnx\capi\*.dll" -Destination "dist\XoaGhim-${version}\" -Force
             Write-Host "Copied DLLs from capi folder"
           }
 
           # List all DLLs in dist for verification
-          Write-Host "`nDLLs in dist\XoaGhim-$version:"
-          Get-ChildItem dist\XoaGhim-$version\*.dll | Select-Object Name, Length
+          Write-Host "DLLs in dist\XoaGhim-${version}"
+          Get-ChildItem dist\XoaGhim-${version}\*.dll | Select-Object Name, Length
 
       - name: Copy VC++ Runtime DLLs
         run: |
@@ -95,7 +95,7 @@ jobs:
           )
           foreach ($dll in $vcRuntimeDlls) {
             if (Test-Path $dll) {
-              Copy-Item $dll -Destination "dist\XoaGhim-$version\" -Force
+              Copy-Item $dll -Destination "dist\XoaGhim-${version}\" -Force
               Write-Host "Copied: $dll"
             }
           }
@@ -104,7 +104,7 @@ jobs:
         run: |
           $version = "${{ steps.version.outputs.VERSION }}"
           cd dist
-          Compress-Archive -Path XoaGhim-$version -DestinationPath XoaGhim-$version-Windows.zip
+          Compress-Archive -Path "XoaGhim-${version}" -DestinationPath "XoaGhim-${version}-Windows.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
