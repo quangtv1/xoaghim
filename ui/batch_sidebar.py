@@ -71,6 +71,8 @@ class SidebarFileList(QListWidget):
         self._filter_text: str = ""
         self._visible_indices: List[int] = []
         self._page_counts: Dict[str, int] = {}
+        self._sort_column: str = 'name'  # 'name' or 'pages'
+        self._sort_asc: bool = True
 
         # Custom delegate for page count display
         self._delegate = FileItemDelegate(self._page_counts, self)
@@ -133,19 +135,38 @@ class SidebarFileList(QListWidget):
         except Exception:
             return -1
 
+    def set_sort(self, column: str, ascending: bool):
+        """Set sort column and order, then rebuild"""
+        self._sort_column = column
+        self._sort_asc = ascending
+        self._rebuild_list()
+
+    def get_sort_info(self) -> tuple:
+        """Get current sort info"""
+        return (self._sort_column, self._sort_asc)
+
     def _rebuild_list(self):
-        """Rebuild list with current filter"""
+        """Rebuild list with current filter and sort"""
         self.blockSignals(True)
         self.clear()
         self._visible_indices = []
 
+        # Build list of (idx, file_path) tuples for filtering
+        filtered = []
         for idx, file_path in enumerate(self._files):
-            # Apply filter
             if self._filter_text:
                 if self._filter_text.lower() not in file_path.lower():
                     continue
+            filtered.append((idx, file_path))
 
-            # Display only filename, not full path
+        # Sort
+        if self._sort_column == 'name':
+            filtered.sort(key=lambda x: os.path.basename(x[1]).lower(), reverse=not self._sort_asc)
+        else:  # pages
+            filtered.sort(key=lambda x: self._page_counts.get(x[1], -1), reverse=not self._sort_asc)
+
+        # Add items in sorted order
+        for idx, file_path in filtered:
             filename = os.path.basename(file_path)
 
             item = QListWidgetItem(filename)
@@ -288,42 +309,18 @@ class BatchSidebar(QFrame):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
-        # Title bar with checkbox and count
+        # Title bar with hamburger, title and count (aligns with Gốc/Đích titles)
         self._title_bar = QWidget()
-        self._title_bar.setFixedHeight(32)
+        self._title_bar.setFixedHeight(32)  # Match preview panel title bar height
         self._title_bar.setStyleSheet("background-color: #F3F4F6; border-bottom: 1px solid #D1D5DB;")
         title_layout = QHBoxLayout(self._title_bar)
-        title_layout.setContentsMargins(8, 0, 4, 0)
+        title_layout.setContentsMargins(4, 0, 4, 0)
         title_layout.setSpacing(4)
 
-        # Toggle all checkbox (in title bar)
-        self._toggle_checkbox = QCheckBox()
-        self._toggle_checkbox.setChecked(True)
-        self._toggle_checkbox.setStyleSheet("""
-            QCheckBox::indicator {
-                width: 14px;
-                height: 14px;
-            }
-        """)
-        self._toggle_checkbox.clicked.connect(self._on_toggle_all)
-        title_layout.addWidget(self._toggle_checkbox)
-
-        # Title label (normal weight)
-        self._title_label = QLabel("Danh sách")
-        self._title_label.setStyleSheet("font-size: 13px; color: #374151;")
-        title_layout.addWidget(self._title_label)
-
-        # Count label
-        self._count_label = QLabel("(0/0)")
-        self._count_label.setStyleSheet("font-size: 12px; color: #6B7280;")
-        title_layout.addWidget(self._count_label)
-
-        title_layout.addStretch()
-
-        # Toggle button (hamburger icon)
+        # Toggle button (hamburger icon) with title
         self._toggle_btn = QPushButton("☰")
         self._toggle_btn.setFixedSize(22, 22)
-        self._toggle_btn.setToolTip("Thu gọn")
+        self._toggle_btn.setToolTip("Thu gọn danh sách")
         self._toggle_btn.setStyleSheet("""
             QPushButton {
                 background-color: transparent;
@@ -339,32 +336,66 @@ class BatchSidebar(QFrame):
         self._toggle_btn.clicked.connect(self._toggle_collapsed)
         title_layout.addWidget(self._toggle_btn)
 
+        # Title label
+        self._title_label = QLabel("Danh sách")
+        self._title_label.setStyleSheet("font-size: 13px; color: #374151;")
+        title_layout.addWidget(self._title_label)
+
+        # Count label
+        self._count_label = QLabel("(0/0)")
+        self._count_label.setStyleSheet("font-size: 12px; color: #6B7280;")
+        title_layout.addWidget(self._count_label)
+
+        title_layout.addStretch()
+
         content_layout.addWidget(self._title_bar)
 
-        # Search and list container (same background as title bar)
+        # List container (same background as title bar)
         self._list_container = QWidget()
         self._list_container.setStyleSheet("background-color: #F3F4F6;")
         list_layout = QVBoxLayout(self._list_container)
         list_layout.setContentsMargins(4, 4, 4, 4)
         list_layout.setSpacing(4)
 
-        # Search box
-        self._search_box = QLineEdit()
-        self._search_box.setPlaceholderText("🔍 Tìm kiếm...")
-        self._search_box.setStyleSheet("""
-            QLineEdit {
-                border: 1px solid #D1D5DB;
-                border-radius: 4px;
-                padding: 4px 8px;
-                font-size: 11px;
-                background-color: white;
-            }
-            QLineEdit:focus {
-                border-color: #3B82F6;
-            }
+        # Header row
+        header = QWidget()
+        header.setFixedHeight(24)
+        header.setStyleSheet("background-color: white;")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(8, 0, 8, 0)
+        header_layout.setSpacing(4)
+
+        # Header checkbox (toggle all)
+        self._header_checkbox = QCheckBox()
+        self._header_checkbox.setChecked(True)
+        self._header_checkbox.setToolTip("Chọn/bỏ chọn tất cả")
+        self._header_checkbox.clicked.connect(self._on_header_checkbox_clicked)
+        header_layout.addWidget(self._header_checkbox)
+
+        # Filename header (clickable for sort)
+        self._name_btn = QPushButton("Tên file ↑")
+        self._name_btn.setFlat(True)
+        self._name_btn.setCursor(Qt.PointingHandCursor)
+        self._name_btn.setStyleSheet("""
+            QPushButton { text-align: left; font-size: 12px; color: #374151; border: none; padding: 0; }
+            QPushButton:hover { color: #1D4ED8; }
         """)
-        self._search_box.textChanged.connect(self._on_search_changed)
-        list_layout.addWidget(self._search_box)
+        self._name_btn.clicked.connect(lambda: self._on_sort_clicked('name'))
+        header_layout.addWidget(self._name_btn, 1)
+
+        # Page count header (clickable for sort)
+        self._pages_btn = QPushButton("Trang")
+        self._pages_btn.setFlat(True)
+        self._pages_btn.setCursor(Qt.PointingHandCursor)
+        self._pages_btn.setFixedWidth(50)
+        self._pages_btn.setStyleSheet("""
+            QPushButton { text-align: right; font-size: 12px; color: #374151; border: none; padding: 0; }
+            QPushButton:hover { color: #1D4ED8; }
+        """)
+        self._pages_btn.clicked.connect(lambda: self._on_sort_clicked('pages'))
+        header_layout.addWidget(self._pages_btn)
+
+        list_layout.addWidget(header)
 
         # File list
         self._file_list = SidebarFileList()
@@ -449,21 +480,20 @@ class BatchSidebar(QFrame):
             self._content.setVisible(True)
             self.resize(self.EXPANDED_WIDTH, self.height())
 
-    def _on_search_changed(self, text: str):
-        """Handle search text change"""
+    def set_search_filter(self, text: str):
+        """Filter file list by search text (called from compact toolbar)"""
         self._file_list.set_filter(text)
         self._update_count()
         self._update_toggle_state()
 
-    def _on_toggle_all(self):
-        """Toggle all files"""
+    def _on_header_checkbox_clicked(self):
+        """Toggle all files (from header checkbox)"""
         if self._file_list.is_all_checked():
             self._file_list.uncheck_all()
-            self._toggle_checkbox.setChecked(False)
         else:
             self._file_list.check_all()
-            self._toggle_checkbox.setChecked(True)
         self._update_count()
+        self._update_toggle_state()
 
     def _on_file_selected(self, file_path: str, original_idx: int):
         """Forward file selection signal"""
@@ -475,21 +505,48 @@ class BatchSidebar(QFrame):
         self._update_toggle_state()
         self.selection_changed.emit(checked_files)
 
+    def _on_sort_clicked(self, column: str):
+        """Handle sort header click"""
+        current_col, current_asc = self._file_list.get_sort_info()
+
+        if current_col == column:
+            # Toggle direction
+            new_asc = not current_asc
+        else:
+            # New column, default ascending
+            new_asc = True
+
+        self._file_list.set_sort(column, new_asc)
+        self._update_sort_labels(column, new_asc)
+
+    def _update_sort_labels(self, column: str, ascending: bool):
+        """Update header button labels with sort indicator"""
+        arrow = "↑" if ascending else "↓"
+        if column == 'name':
+            self._name_btn.setText(f"Tên file {arrow}")
+            self._pages_btn.setText("Trang")
+        else:
+            self._name_btn.setText("Tên file")
+            self._pages_btn.setText(f"Trang {arrow}")
+
     def _update_count(self):
         """Update file count label"""
         checked, total = self._file_list.get_file_count()
         self._count_label.setText(f"({checked}/{total})")
 
     def _update_toggle_state(self):
-        """Update toggle checkbox state"""
-        self._toggle_checkbox.blockSignals(True)
-        if self._file_list.is_all_checked():
-            self._toggle_checkbox.setChecked(True)
-        elif self._file_list.is_all_unchecked():
-            self._toggle_checkbox.setChecked(False)
+        """Update header checkbox state"""
+        all_checked = self._file_list.is_all_checked()
+        all_unchecked = self._file_list.is_all_unchecked()
+
+        self._header_checkbox.blockSignals(True)
+        if all_checked:
+            self._header_checkbox.setChecked(True)
+        elif all_unchecked:
+            self._header_checkbox.setChecked(False)
         else:
-            self._toggle_checkbox.setChecked(True)
-        self._toggle_checkbox.blockSignals(False)
+            self._header_checkbox.setChecked(True)
+        self._header_checkbox.blockSignals(False)
 
     # Public API
 

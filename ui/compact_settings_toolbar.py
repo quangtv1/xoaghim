@@ -2,7 +2,7 @@
 Compact Settings Toolbar - Icon-only toolbar for collapsed settings panel state
 """
 
-from PyQt5.QtWidgets import QWidget, QHBoxLayout, QButtonGroup
+from PyQt5.QtWidgets import QWidget, QHBoxLayout, QButtonGroup, QLineEdit
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor
 
@@ -18,6 +18,7 @@ class CompactSettingsToolbar(QWidget):
     draw_mode_changed = pyqtSignal(object)    # mode: 'remove', 'protect', or None
     clear_zones = pyqtSignal()
     ai_detect_toggled = pyqtSignal(bool)      # AI detect protect zones
+    search_changed = pyqtSignal(str)          # Search text for sidebar filtering
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -28,7 +29,7 @@ class CompactSettingsToolbar(QWidget):
 
     def _setup_ui(self):
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 0, 6, 0)
+        layout.setContentsMargins(0, 0, 6, 0)
         layout.setSpacing(1)
         layout.setAlignment(Qt.AlignVCenter)
 
@@ -47,6 +48,9 @@ class CompactSettingsToolbar(QWidget):
                 border-bottom: 1px solid #D1D5DB;
             }
         """)
+
+        # === Search box (left side, width matches sidebar) ===
+        self._add_search_box(layout)
 
         # === Góc group (4 corners) ===
         self._add_corner_icons(layout)
@@ -159,6 +163,37 @@ class CompactSettingsToolbar(QWidget):
         self.ai_detect_btn.clicked.connect(self._on_ai_detect_clicked)
         layout.addWidget(self.ai_detect_btn)
 
+    def _add_search_box(self, layout: QHBoxLayout):
+        """Add search box for sidebar file filtering (left side, width matches sidebar)"""
+        # Container to match sidebar width
+        from ui.batch_sidebar import BatchSidebar
+        self._search_container = QWidget()
+        self._search_container.setFixedWidth(BatchSidebar.EXPANDED_WIDTH)
+        self._search_container.setStyleSheet("background-color: #FFFFFF;")
+
+        search_layout = QHBoxLayout(self._search_container)
+        search_layout.setContentsMargins(4, 0, 4, 0)
+        search_layout.setSpacing(0)
+
+        self._search_box = QLineEdit()
+        self._search_box.setPlaceholderText("🔍 Tìm kiếm...")
+        self._search_box.setStyleSheet("""
+            QLineEdit {
+                border: 1px solid #D1D5DB;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 11px;
+                background-color: white;
+            }
+            QLineEdit:focus {
+                border-color: #3B82F6;
+            }
+        """)
+        self._search_box.textChanged.connect(self._on_search_changed)
+        search_layout.addWidget(self._search_box)
+
+        layout.addWidget(self._search_container)
+
     # === Event handlers ===
 
     def _on_zone_clicked(self, zone_id: str, checked: bool):
@@ -193,6 +228,10 @@ class CompactSettingsToolbar(QWidget):
     def _on_ai_detect_clicked(self, checked: bool):
         """Handle AI detect toggle"""
         self.ai_detect_toggled.emit(checked)
+
+    def _on_search_changed(self, text: str):
+        """Handle search text change"""
+        self.search_changed.emit(text)
 
     # === Public API for syncing state ===
 
@@ -240,3 +279,16 @@ class CompactSettingsToolbar(QWidget):
 
         # Sync AI detect
         self.set_ai_detect_state(ai_detect)
+
+    def set_search_visible(self, visible: bool):
+        """Show/hide search box based on sidebar state"""
+        self._search_container.setVisible(visible)
+
+    def set_search_width(self, width: int):
+        """Set search container width to match sidebar width"""
+        self._search_container.setFixedWidth(width)
+
+    def clear_search(self):
+        """Clear search box text"""
+        self._search_box.clear()
+

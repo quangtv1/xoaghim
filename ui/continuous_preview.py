@@ -460,6 +460,7 @@ class ContinuousPreviewPanel(QFrame):
     folder_dropped = pyqtSignal(str)  # When folder is dropped (folder_path)
     files_dropped = pyqtSignal(list)  # When multiple PDF files are dropped
     close_requested = pyqtSignal()  # When close button is clicked
+    collapse_requested = pyqtSignal()  # When collapse button is clicked (Đích panel)
     # rect_drawn: x, y, w, h (as % of page), mode ('remove' or 'protect')
     rect_drawn = pyqtSignal(float, float, float, float, str)
     # Batch mode navigation signals
@@ -512,8 +513,8 @@ class ContinuousPreviewPanel(QFrame):
         self._batch_mode = False
 
         if show_overlay:
-            # Prev button [<]
-            self.prev_btn = QPushButton("<")
+            # Prev button [←]
+            self.prev_btn = QPushButton("◂")
             self.prev_btn.setFixedSize(22, 22)
             self.prev_btn.setCursor(Qt.PointingHandCursor)
             self.prev_btn.setToolTip("File trước")
@@ -522,12 +523,13 @@ class ContinuousPreviewPanel(QFrame):
                     background-color: #D1D5DB;
                     border: none;
                     border-radius: 4px;
-                    font-size: 12px;
+                    font-size: 14px;
                     font-weight: bold;
                     color: #4B5563;
                 }
                 QPushButton:hover {
-                    background-color: #9CA3AF;
+                    background-color: #3B82F6;
+                    color: white;
                 }
                 QPushButton:disabled {
                     background-color: #E5E7EB;
@@ -538,8 +540,8 @@ class ContinuousPreviewPanel(QFrame):
             self.prev_btn.setVisible(False)
             title_layout.addWidget(self.prev_btn)
 
-            # Next button [>]
-            self.next_btn = QPushButton(">")
+            # Next button [→]
+            self.next_btn = QPushButton("▸")
             self.next_btn.setFixedSize(22, 22)
             self.next_btn.setCursor(Qt.PointingHandCursor)
             self.next_btn.setToolTip("File tiếp theo")
@@ -548,12 +550,13 @@ class ContinuousPreviewPanel(QFrame):
                     background-color: #D1D5DB;
                     border: none;
                     border-radius: 4px;
-                    font-size: 12px;
+                    font-size: 14px;
                     font-weight: bold;
                     color: #4B5563;
                 }
                 QPushButton:hover {
-                    background-color: #9CA3AF;
+                    background-color: #3B82F6;
+                    color: white;
                 }
                 QPushButton:disabled {
                     background-color: #E5E7EB;
@@ -591,6 +594,7 @@ class ContinuousPreviewPanel(QFrame):
 
         # Close button (X) - only for before panel (show_overlay=True)
         self.close_btn = None
+        self.collapse_btn = None
         if show_overlay:
             self.close_btn = QPushButton("×")
             self.close_btn.setFixedSize(22, 22)
@@ -616,6 +620,30 @@ class ContinuousPreviewPanel(QFrame):
             self.close_btn.clicked.connect(self._on_close_clicked)
             self.close_btn.setVisible(False)  # Hidden by default
             title_layout.addWidget(self.close_btn)
+        else:
+            # Collapse button (>) for after panel (Đích)
+            self.collapse_btn = QPushButton("›")
+            self.collapse_btn.setFixedSize(22, 22)
+            self.collapse_btn.setCursor(Qt.PointingHandCursor)
+            self.collapse_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #D1D5DB;
+                    border: none;
+                    border-radius: 4px;
+                    font-size: 18px;
+                    font-weight: bold;
+                    color: #4B5563;
+                    padding: 0;
+                    margin: 0;
+                }
+                QPushButton:hover {
+                    color: white;
+                    background-color: #3B82F6;
+                }
+            """)
+            self.collapse_btn.setToolTip("Ẩn/hiện panel Đích")
+            self.collapse_btn.clicked.connect(self._on_collapse_clicked)
+            title_layout.addWidget(self.collapse_btn)
         
         layout.addWidget(title_bar)
         
@@ -652,6 +680,16 @@ class ContinuousPreviewPanel(QFrame):
     def _on_close_clicked(self):
         """Handle close button click"""
         self.close_requested.emit()
+
+    def _on_collapse_clicked(self):
+        """Handle collapse button click"""
+        self.collapse_requested.emit()
+
+    def set_collapse_button_icon(self, collapsed: bool):
+        """Update collapse button icon based on state"""
+        if self.collapse_btn:
+            self.collapse_btn.setText("‹" if collapsed else "›")
+            self.collapse_btn.setToolTip("Mở rộng panel Đích" if collapsed else "Thu gọn panel Đích")
 
     def set_batch_mode(self, enabled: bool, current: int = 0, total: int = 0):
         """Show/hide navigation buttons for batch mode"""
@@ -882,11 +920,11 @@ class ContinuousPreviewPanel(QFrame):
         icon_spacing = 80
         
         # === LEFT ICON: PDF Document (Mở file) ===
-        icon_width = 36
-        icon_height = 45
+        icon_width = 24  # 2/3 of 36
+        icon_height = 30  # 2/3 of 45
         file_icon_x = placeholder_width / 2 - icon_spacing - icon_width / 2
-        icon_y = placeholder_height / 2 - 35
-        corner_size = 10
+        icon_y = placeholder_height / 2 - 25
+        corner_size = 7  # 2/3 of 10
         cobalt_blue = QColor(0, 71, 171)
         gray = QColor(140, 140, 140)
 
@@ -915,7 +953,7 @@ class ContinuousPreviewPanel(QFrame):
         # Normal PDF text
         pdf_text_normal = self.scene.addText("PDF")
         pdf_font = pdf_text_normal.font()
-        pdf_font.setPixelSize(11)
+        pdf_font.setPixelSize(8)  # 2/3 of 11
         pdf_font.setBold(True)
         pdf_text_normal.setFont(pdf_font)
         pdf_text_normal.setDefaultTextColor(gray)
@@ -946,7 +984,7 @@ class ContinuousPreviewPanel(QFrame):
         # "Mở file" text
         file_hint = self.scene.addText("Mở file")
         file_hint_font = file_hint.font()
-        file_hint_font.setPixelSize(13)
+        file_hint_font.setPixelSize(10)  # smaller
         file_hint.setFont(file_hint_font)
         file_hint.setDefaultTextColor(gray)
         file_hint_rect = file_hint.boundingRect()
@@ -963,13 +1001,13 @@ class ContinuousPreviewPanel(QFrame):
         )
         
         # === RIGHT ICON: Folder (Mở thư mục) - rounded corners, thin line ===
-        folder_icon_x = placeholder_width / 2 + icon_spacing - 18
-        folder_width = 42
-        folder_height = 30
-        folder_y = icon_y + 8
-        tab_width = 15
-        tab_height = 7
-        corner_r = 3  # Small corner radius
+        folder_icon_x = placeholder_width / 2 + icon_spacing - 14
+        folder_width = 28  # 2/3 of 42
+        folder_height = 20  # 2/3 of 30
+        folder_y = icon_y + 5
+        tab_width = 10  # 2/3 of 15
+        tab_height = 5  # 2/3 of 7
+        corner_r = 2  # 2/3 of 3
 
         # Create folder path (reusable for both normal and hover)
         def create_folder_path():
@@ -1024,7 +1062,7 @@ class ContinuousPreviewPanel(QFrame):
         # "Mở thư mục" text
         folder_hint = self.scene.addText("Mở thư mục")
         folder_hint_font = folder_hint.font()
-        folder_hint_font.setPixelSize(13)
+        folder_hint_font.setPixelSize(10)  # smaller
         folder_hint.setFont(folder_hint_font)
         folder_hint.setDefaultTextColor(QColor(140, 140, 140))
         folder_hint_rect = folder_hint.boundingRect()
@@ -1049,13 +1087,13 @@ class ContinuousPreviewPanel(QFrame):
         # Disable drag mode when placeholder is shown
         self.view.setDragMode(QGraphicsView.NoDrag)
         
-        # Enable mouse tracking for cursor updates
+        # Enable mouse tracking for cursor updates (hand cursor outside, cross on icons)
         self.view.setMouseTracking(True)
         self.view.viewport().setMouseTracking(True)
         
-        # Set cursor to cross (+) for "add" hint
-        self.view.setCursor(Qt.CrossCursor)
-        self.view.viewport().setCursor(Qt.CrossCursor)
+        # Set cursor to open hand (cross only when hovering on icons)
+        self.view.setCursor(Qt.OpenHandCursor)
+        self.view.viewport().setCursor(Qt.OpenHandCursor)
         
         # Connect mouse events
         self.view.mousePressEvent = self._on_view_click
@@ -1070,8 +1108,8 @@ class ContinuousPreviewPanel(QFrame):
     def _on_view_enter(self, event):
         """Handle mouse enter to set cursor on placeholder"""
         if self._has_placeholder:
-            self.view.setCursor(Qt.CrossCursor)
-            self.view.viewport().setCursor(Qt.CrossCursor)
+            self.view.setCursor(Qt.OpenHandCursor)
+            self.view.viewport().setCursor(Qt.OpenHandCursor)
     
     def _on_view_leave(self, event):
         """Handle mouse leave to reset hover - show normal icons, hide hover icons"""
@@ -1095,10 +1133,6 @@ class ContinuousPreviewPanel(QFrame):
     def _on_view_mouse_move(self, event):
         """Handle mouse move to update cursor and hover effects on placeholder"""
         if self._has_placeholder:
-            # Always show cross cursor when placeholder is visible
-            self.view.setCursor(Qt.CrossCursor)
-            self.view.viewport().setCursor(Qt.CrossCursor)
-
             # Get mouse position in scene coordinates
             scene_pos = self.view.mapToScene(event.pos())
 
@@ -1108,6 +1142,16 @@ class ContinuousPreviewPanel(QFrame):
 
             # Check hover on file icon - toggle visibility of normal/hover icons
             file_hover = self._placeholder_file_rect and self._placeholder_file_rect.contains(scene_pos)
+            folder_hover = self._placeholder_folder_rect and self._placeholder_folder_rect.contains(scene_pos)
+
+            # Update cursor based on hover state
+            if file_hover or folder_hover:
+                self.view.setCursor(Qt.CrossCursor)
+                self.view.viewport().setCursor(Qt.CrossCursor)
+            else:
+                self.view.setCursor(Qt.OpenHandCursor)
+                self.view.viewport().setCursor(Qt.OpenHandCursor)
+
             if file_hover:
                 # Show hover icon, hide normal icon
                 for item in self._file_icon_normal:
@@ -1126,7 +1170,6 @@ class ContinuousPreviewPanel(QFrame):
                     self._file_hint_text.setDefaultTextColor(gray)
 
             # Check hover on folder icon - toggle visibility of normal/hover icons
-            folder_hover = self._placeholder_folder_rect and self._placeholder_folder_rect.contains(scene_pos)
             if folder_hover:
                 # Show hover icon, hide normal icon
                 for item in self._folder_icon_normal:
@@ -1705,9 +1748,9 @@ class ContinuousPreviewWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         
-        # Splitter with white handle
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.setStyleSheet("""
+        # Splitter with white handle - not draggable (equal widths always)
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.setStyleSheet("""
             QSplitter {
                 background-color: #E5E7EB;
             }
@@ -1716,7 +1759,9 @@ class ContinuousPreviewWidget(QWidget):
                 width: 2px;
             }
         """)
-        splitter.setHandleWidth(2)
+        self.splitter.setHandleWidth(2)
+        # Prevent dragging by resetting sizes when moved
+        self.splitter.splitterMoved.connect(self._reset_splitter_sizes)
         
         # Panel TRƯỚC (có overlay)
         self.before_panel = ContinuousPreviewPanel("Gốc:", show_overlay=True)
@@ -1733,7 +1778,7 @@ class ContinuousPreviewWidget(QWidget):
         # Batch mode navigation signals
         self.before_panel.prev_file_requested.connect(self.prev_file_requested.emit)
         self.before_panel.next_file_requested.connect(self.next_file_requested.emit)
-        splitter.addWidget(self.before_panel)
+        self.splitter.addWidget(self.before_panel)
         
         # Panel SAU (chỉ kết quả)
         self.after_panel = ContinuousPreviewPanel("Đích:", show_overlay=False)
@@ -1742,7 +1787,37 @@ class ContinuousPreviewWidget(QWidget):
         self.after_panel.file_dropped.connect(self._on_file_dropped)
         self.after_panel.folder_dropped.connect(self._on_folder_dropped)
         self.after_panel.files_dropped.connect(self._on_files_dropped)
-        splitter.addWidget(self.after_panel)
+        self.after_panel.collapse_requested.connect(self._toggle_after_panel)
+        self.splitter.addWidget(self.after_panel)
+
+        # Track collapse state
+        self._after_panel_collapsed = False
+        self._after_panel_width = 0  # Store width before collapse
+
+        # Expand button (appears when after panel is collapsed) - positioned at top right
+        self._expand_btn = QPushButton("‹")
+        self._expand_btn.setFixedSize(22, 22)
+        self._expand_btn.setCursor(Qt.PointingHandCursor)
+        self._expand_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #D1D5DB;
+                border: none;
+                border-radius: 4px;
+                font-size: 18px;
+                font-weight: bold;
+                color: #4B5563;
+                padding: 0;
+                margin: 0;
+            }
+            QPushButton:hover {
+                color: white;
+                background-color: #3B82F6;
+            }
+        """)
+        self._expand_btn.setToolTip("Mở rộng panel Đích")
+        self._expand_btn.clicked.connect(self._toggle_after_panel)
+        self._expand_btn.setParent(self)
+        self._expand_btn.hide()  # Hidden by default
         
         # Sync zoom/scroll
         self.before_panel.view.zoom_changed.connect(self._sync_zoom)
@@ -1750,17 +1825,71 @@ class ContinuousPreviewWidget(QWidget):
         self.before_panel.view.scroll_changed.connect(self._sync_scroll_from_before)
         self.after_panel.view.scroll_changed.connect(self._sync_scroll_from_after)
         
-        splitter.setSizes([1, 1])
-        layout.addWidget(splitter)
+        # Set equal stretch factors so both panels resize equally
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setSizes([1, 1])
+        layout.addWidget(self.splitter)
 
         # Loading overlay (centered on widget)
         self._loading_overlay = LoadingOverlay(self)
         self._loading_overlay.hide()
 
+    def _reset_splitter_sizes(self):
+        """Reset splitter to equal sizes - prevents manual dragging"""
+        # Skip if after panel is collapsed
+        if self._after_panel_collapsed:
+            return
+        # Use stretch factors instead - this is called when user tries to drag the handle
+        sizes = self.splitter.sizes()
+        if sizes[0] != sizes[1]:
+            total = sum(sizes)
+            half = total // 2
+            self.splitter.setSizes([half, half])
+
+    def _toggle_after_panel(self):
+        """Toggle collapse/expand of after panel (Đích)"""
+        sizes = self.splitter.sizes()
+        total_width = sum(sizes)
+
+        if self._after_panel_collapsed:
+            # Expand - restore to half width
+            half = total_width // 2
+            self.after_panel.setVisible(True)
+            self.splitter.setSizes([half, half])
+            self._expand_btn.hide()
+            self._after_panel_collapsed = False
+        else:
+            # Collapse - hide after panel completely
+            self._after_panel_width = sizes[1]
+            self.after_panel.setVisible(False)
+            self.splitter.setSizes([total_width, 0])
+            # Show expand button at top right
+            self._expand_btn.move(self.width() - 28, 5)
+            self._expand_btn.raise_()
+            self._expand_btn.show()
+            self._after_panel_collapsed = True
+
     def resizeEvent(self, event):
-        """Resize loading overlay to match widget size"""
+        """Resize loading overlay and scale content proportionally"""
         super().resizeEvent(event)
         self._loading_overlay.setGeometry(self.rect())
+
+        # Reposition expand button if visible
+        if self._after_panel_collapsed and self._expand_btn.isVisible():
+            self._expand_btn.move(self.width() - 28, 5)
+
+        # Get old and new width
+        old_width = event.oldSize().width() if event.oldSize().isValid() else 0
+        new_width = event.size().width()
+
+        # Scale content proportionally if pages are loaded (only if not collapsed)
+        if not self._after_panel_collapsed and old_width > 0 and self._pages and new_width > 0 and old_width != new_width:
+            ratio = new_width / old_width
+            current_zoom = self.before_panel.view._zoom
+            new_zoom = current_zoom * ratio
+            new_zoom = max(0.1, min(5.0, new_zoom))
+            QTimer.singleShot(10, lambda: self.set_zoom(new_zoom))
 
     def _show_loading(self):
         """Show loading overlay"""
@@ -2344,15 +2473,20 @@ class ContinuousPreviewWidget(QWidget):
     def set_zoom(self, zoom: float):
         """Set zoom level"""
         zoom = max(0.1, min(5.0, zoom))
-        
+
         # Reset và set zoom mới
         self.before_panel.view.resetTransform()
         self.before_panel.view.scale(zoom, zoom)
         self.before_panel.view._zoom = zoom
-        
+
         self.after_panel.view.resetTransform()
         self.after_panel.view.scale(zoom, zoom)
         self.after_panel.view._zoom = zoom
+
+        # Sync scroll positions after zoom change
+        h = self.before_panel.view.horizontalScrollBar().value()
+        v = self.before_panel.view.verticalScrollBar().value()
+        self.after_panel.view.sync_scroll(h, v)
     
     def get_processed_pages(self) -> List[np.ndarray]:
         """Lấy danh sách ảnh đã xử lý"""

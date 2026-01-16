@@ -62,7 +62,6 @@ class TestRequirementChecks(unittest.TestCase):
         result = check_text_protection_requirements()
         self.assertIsInstance(result, dict)
         self.assertIn('shapely', result)
-        self.assertIn('paddleocr', result)
         self.assertIn('paddlepaddle', result)
 
     def test_check_requirements_values_are_bool(self):

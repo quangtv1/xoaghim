@@ -316,6 +316,7 @@ class MainWindow(QMainWindow):
 
         self._setup_ui()
         self._update_ui_state()
+        self._restore_window_state()
 
         # Install event filter to cancel draw mode on click outside preview
         QApplication.instance().installEventFilter(self)
@@ -325,15 +326,15 @@ class MainWindow(QMainWindow):
         central = QWidget()
         central.setStyleSheet("background-color: white;")  # White background for everything below menu
         self.setCentralWidget(central)
-        
+
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        
+
         # === MENU BAR (Ribbon tabs) ===
         self._setup_menu_bar()
-        
-        # === SETTINGS PANEL (Cấu hình) - White background, visible by default ===
+
+        # === SETTINGS PANEL (creates compact_toolbar, will be moved to right container) ===
         self.settings_panel = SettingsPanel()
         self.settings_panel.zones_changed.connect(self._on_zones_changed)
         self.settings_panel.settings_changed.connect(self._on_settings_changed)
@@ -342,17 +343,29 @@ class MainWindow(QMainWindow):
         self.settings_panel.text_protection_changed.connect(self._on_text_protection_changed)
         self.settings_panel.draw_mode_changed.connect(self._on_draw_mode_changed)
         self.settings_panel.zones_reset.connect(self._on_zones_reset)
-        self.settings_panel.setVisible(True)  # Visible by default
-        layout.addWidget(self.settings_panel)
-        
-        # === PREVIEW AREA - Gray background ===
-        preview_container = QWidget()
-        preview_container.setStyleSheet("background-color: #E5E7EB;")
-        preview_layout = QVBoxLayout(preview_container)
-        preview_layout.setContentsMargins(0, 0, 0, 0)
-        preview_layout.setSpacing(0)
-        
-        # Horizontal splitter for sidebar and preview
+
+        # === COMPACT TOOLBAR (above splitter) ===
+        # Move compact_toolbar from settings_panel to main layout
+        self.compact_toolbar = self.settings_panel.compact_toolbar
+        self.compact_toolbar.setParent(None)  # Remove from settings_panel
+        layout.addWidget(self.compact_toolbar)
+
+        # Set initial visibility based on collapsed state (mutually exclusive)
+        # Compact mode: show compact_toolbar, hide settings_panel
+        # Detail mode: show settings_panel, hide compact_toolbar
+        if self.settings_panel._collapsed:
+            self.compact_toolbar.setVisible(True)
+            self.settings_panel.setVisible(False)
+        else:
+            self.compact_toolbar.setVisible(False)
+            self.settings_panel.setVisible(True)
+
+        # Sync collapse button state with settings panel
+        self._settings_collapsed = self.settings_panel._collapsed
+        self._update_collapse_button_icon()
+
+        # === MAIN CONTENT AREA (Sidebar + Right Panel) ===
+        # Horizontal splitter: Sidebar | Right content
         self.preview_splitter = QSplitter(Qt.Horizontal)
         self.preview_splitter.setStyleSheet("""
             QSplitter::handle {
@@ -372,7 +385,6 @@ class MainWindow(QMainWindow):
         self.batch_sidebar.collapsed_changed.connect(self._on_sidebar_collapsed_changed)
         self.batch_sidebar.setVisible(False)
         self.preview_splitter.addWidget(self.batch_sidebar)
-        # Prevent splitter from collapsing sidebar completely
         self.preview_splitter.setCollapsible(0, False)
         self.preview_splitter.splitterMoved.connect(self._on_splitter_moved)
 
@@ -380,7 +392,24 @@ class MainWindow(QMainWindow):
         self._batch_files: List[str] = []
         self._batch_current_index: int = 0
 
-        # Preview widget (same for single and batch modes)
+        # Right container (Settings expanded + Preview + Bottom bar)
+        right_container = QWidget()
+        right_container.setStyleSheet("background-color: #E5E7EB;")
+        right_layout = QVBoxLayout(right_container)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+
+        # Add settings panel (visibility already set based on collapsed state)
+        right_layout.addWidget(self.settings_panel)
+
+        # Connect compact toolbar signals
+        self.compact_toolbar.search_changed.connect(
+            self.batch_sidebar.set_search_filter
+        )
+        # Initially hide search box (sidebar is hidden by default)
+        self.compact_toolbar.set_search_visible(False)
+
+        # === PREVIEW WIDGET ===
         self.preview = ContinuousPreviewWidget()
         self.preview.zone_changed.connect(self._on_zone_changed_from_preview)
         self.preview.zone_selected.connect(self._on_zone_selected_from_preview)
@@ -393,20 +422,17 @@ class MainWindow(QMainWindow):
         self.preview.close_requested.connect(self._on_close_file)
         self.preview.page_changed.connect(self._on_page_changed_from_scroll)
         self.preview.rect_drawn.connect(self._on_rect_drawn_from_preview)
-        # Batch navigation signals
         self.preview.prev_file_requested.connect(self._on_prev_file)
         self.preview.next_file_requested.connect(self._on_next_file)
-        self.preview_splitter.addWidget(self.preview)
+        right_layout.addWidget(self.preview, stretch=1)
 
-        # Set initial splitter sizes (sidebar: 250, preview: stretch)
+        # === BOTTOM BAR (inside right container) ===
+        self._setup_bottom_bar(right_layout)
+
+        self.preview_splitter.addWidget(right_container)
         self.preview_splitter.setSizes([200, 800])
-        
-        preview_layout.addWidget(self.preview_splitter)
-        
-        layout.addWidget(preview_container, stretch=1)
-        
-        # === BOTTOM BAR ===
-        self._setup_bottom_bar(layout)
+
+        layout.addWidget(self.preview_splitter, stretch=1)
         
         # Hide status bar
         self.statusBar().hide()
@@ -754,6 +780,12 @@ class MainWindow(QMainWindow):
         self.clean_shortcut = QShortcut(QKeySequence("Ctrl+Return"), self)
         self.clean_shortcut.activated.connect(self._on_clean_shortcut)
 
+        # Note: Ctrl+O is already set on open_action in menu bar
+
+        # Keyboard shortcut Ctrl+Shift+O for Open folder
+        self.open_folder_shortcut = QShortcut(QKeySequence("Ctrl+Shift+O"), self)
+        self.open_folder_shortcut.activated.connect(self._on_open_folder_batch)
+
         # Cancel button (hidden by default)
         self.cancel_btn = QPushButton("Dừng")
         self.cancel_btn.setStyleSheet("""
@@ -1078,26 +1110,54 @@ class MainWindow(QMainWindow):
             self.preview.set_current_page(current_page)
     
     def _toggle_settings(self):
-        """Toggle settings panel visibility"""
-        visible = not self.settings_panel.isVisible()
-        self.settings_panel.setVisible(visible)
+        """Toggle settings toolbar visibility (show/hide both compact and detail)"""
+        # Check if any toolbar is visible
+        any_visible = self.settings_panel.isVisible() or self.compact_toolbar.isVisible()
 
-        # Sync menu button state
-        if hasattr(self, 'config_menu_btn'):
-            self.config_menu_btn.setChecked(visible)
-
-        # Show/hide collapse button based on settings panel visibility
-        if hasattr(self, 'collapse_settings_btn'):
-            self.collapse_settings_btn.setVisible(visible)
+        if any_visible:
+            # Hide both toolbars
+            self.settings_panel.setVisible(False)
+            self.compact_toolbar.setVisible(False)
+            if hasattr(self, 'config_menu_btn'):
+                self.config_menu_btn.setChecked(False)
+            if hasattr(self, 'collapse_settings_btn'):
+                self.collapse_settings_btn.setVisible(False)
+        else:
+            # Show based on collapsed state
+            if self._settings_collapsed:
+                self.compact_toolbar.setVisible(True)
+                self.settings_panel.setVisible(False)
+            else:
+                self.settings_panel.setVisible(True)
+                self.compact_toolbar.setVisible(False)
+            if hasattr(self, 'config_menu_btn'):
+                self.config_menu_btn.setChecked(True)
+            if hasattr(self, 'collapse_settings_btn'):
+                self.collapse_settings_btn.setVisible(True)
 
     def _on_collapse_settings_clicked(self):
-        """Handle collapse/expand settings toolbar"""
+        """Toggle between compact toolbar and detail settings panel"""
         self._settings_collapsed = not self._settings_collapsed
         self._update_collapse_button_icon()
 
-        # Toggle settings panel collapse state
-        if hasattr(self, 'settings_panel'):
-            self.settings_panel._toggle_collapse()
+        # Toggle between compact and detail modes (mutually exclusive)
+        if self._settings_collapsed:
+            # Switch to Compact mode: show compact_toolbar, hide settings_panel
+            self.settings_panel._collapsed = True
+            self.settings_panel._sync_to_compact_toolbar()
+            self.settings_panel.main_content.setVisible(False)
+            self.settings_panel.setMaximumHeight(0)
+            self.settings_panel.setVisible(False)
+            self.settings_panel._save_collapsed_state()
+            self.compact_toolbar.setVisible(True)
+        else:
+            # Switch to Detail mode: show settings_panel, hide compact_toolbar
+            self.settings_panel._collapsed = False
+            self.settings_panel.main_content.setVisible(True)
+            self.settings_panel.setMaximumHeight(16777215)
+            self.settings_panel.setVisible(True)
+            self.settings_panel._save_collapsed_state()
+            self.compact_toolbar.setVisible(False)
 
     def _update_collapse_button_icon(self):
         """Update collapse button icon based on state - simple chevron"""
@@ -1236,6 +1296,14 @@ class MainWindow(QMainWindow):
         self._batch_current_index = 0
         self.batch_sidebar.set_files(pdf_files, base_dir)
         self.batch_sidebar.setVisible(True)
+        # Apply saved sidebar width
+        self._apply_saved_sidebar_width()
+        # Show search box in compact toolbar and sync width (if sidebar not collapsed)
+        if not self.batch_sidebar.is_collapsed():
+            self.compact_toolbar.set_search_visible(True)
+            # Delay width sync until after layout is complete
+            QTimer.singleShot(0, self._sync_search_width)
+
 
         # Enable batch mode in preview
         self.preview.set_batch_mode(True, 0, len(pdf_files))
@@ -1298,6 +1366,13 @@ class MainWindow(QMainWindow):
         self._batch_current_index = 0
         self.batch_sidebar.set_files(pdf_files, folder_path)
         self.batch_sidebar.setVisible(True)
+        # Apply saved sidebar width
+        self._apply_saved_sidebar_width()
+        # Show search box in compact toolbar and sync width (if sidebar not collapsed)
+        if not self.batch_sidebar.is_collapsed():
+            self.compact_toolbar.set_search_visible(True)
+            # Delay width sync until after layout is complete
+            QTimer.singleShot(0, self._sync_search_width)
 
         # Enable batch mode in preview
         self.preview.set_batch_mode(True, 0, len(pdf_files))
@@ -1328,12 +1403,24 @@ class MainWindow(QMainWindow):
         if collapsed:
             # Set splitter to collapsed width (40px)
             self.preview_splitter.setSizes([40, self.preview_splitter.width() - 40])
+            # Hide search box in compact toolbar
+            self.compact_toolbar.set_search_visible(False)
         else:
             # Restore to default expanded width
             self.preview_splitter.setSizes([200, self.preview_splitter.width() - 200])
+            # Show search box in compact toolbar and sync width
+            self.compact_toolbar.set_search_visible(True)
+            QTimer.singleShot(0, self._sync_search_width)
+
+    def _sync_search_width(self):
+        """Sync search box width with actual sidebar width"""
+        if self.batch_sidebar.isVisible() and not self.batch_sidebar.is_collapsed():
+            sidebar_width = self.preview_splitter.sizes()[0]
+            if sidebar_width > 0:
+                self.compact_toolbar.set_search_width(sidebar_width)
 
     def _on_splitter_moved(self, pos: int, index: int):
-        """Handle splitter drag - enforce minimum sidebar width"""
+        """Handle splitter drag - enforce minimum sidebar width and sync search width"""
         if not self.batch_sidebar.isVisible():
             return
         sizes = self.preview_splitter.sizes()
@@ -1342,6 +1429,10 @@ class MainWindow(QMainWindow):
         if sidebar_width < min_width:
             # Force minimum width
             self.preview_splitter.setSizes([min_width, self.preview_splitter.width() - min_width])
+            sidebar_width = min_width
+        # Sync search box width with sidebar
+        if not self.batch_sidebar.is_collapsed():
+            self.compact_toolbar.set_search_width(sidebar_width)
 
     def _on_prev_file(self):
         """Navigate to previous file in batch mode"""
@@ -1373,6 +1464,8 @@ class MainWindow(QMainWindow):
 
             # Hide sidebar and disable batch mode in preview
             self.batch_sidebar.setVisible(False)
+            self.compact_toolbar.set_search_visible(False)
+            self.compact_toolbar.clear_search()
             self.preview.set_batch_mode(False)
 
             self.setWindowTitle("Xóa Ghim PDF (5S)")
@@ -2333,10 +2426,49 @@ Thời gian: {time_str}"""
                 event.ignore()
                 return
 
+        # Save window size and sidebar width
+        self._save_window_state()
+
         if self._pdf_handler:
             self._pdf_handler.close()
 
         event.accept()
+
+    def _save_window_state(self):
+        """Save window size and sidebar width to config"""
+        from core.config_manager import get_config_manager
+        ui_config = get_config_manager().get_ui_config()
+
+        # Save window size
+        ui_config['window_width'] = self.width()
+        ui_config['window_height'] = self.height()
+
+        # Save sidebar width (if visible and not collapsed)
+        if self.batch_sidebar.isVisible() and not self.batch_sidebar.is_collapsed():
+            sidebar_width = self.preview_splitter.sizes()[0]
+            ui_config['sidebar_width'] = sidebar_width
+
+        get_config_manager().save_ui_config(ui_config)
+
+    def _restore_window_state(self):
+        """Restore window size and sidebar width from config"""
+        from core.config_manager import get_config_manager
+        ui_config = get_config_manager().get_ui_config()
+
+        # Restore window size
+        width = ui_config.get('window_width', 1200)
+        height = ui_config.get('window_height', 800)
+        self.resize(width, height)
+
+        # Restore sidebar width (will be applied when sidebar becomes visible)
+        self._saved_sidebar_width = ui_config.get('sidebar_width', BatchSidebar.EXPANDED_WIDTH)
+
+    def _apply_saved_sidebar_width(self):
+        """Apply saved sidebar width to splitter"""
+        if hasattr(self, '_saved_sidebar_width') and self._saved_sidebar_width > 0:
+            total_width = self.preview_splitter.width()
+            remaining = total_width - self._saved_sidebar_width
+            self.preview_splitter.setSizes([self._saved_sidebar_width, remaining])
 
     def eventFilter(self, obj, event):
         """Cancel draw mode when clicking outside the preview before_panel"""

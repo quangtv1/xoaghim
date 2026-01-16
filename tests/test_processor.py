@@ -165,9 +165,9 @@ class TestTextProtectionOptions(unittest.TestCase):
     def test_default_options(self):
         """Test default options"""
         options = TextProtectionOptions()
-        self.assertFalse(options.enabled)
+        self.assertTrue(options.enabled)  # Default is True (protection enabled by default)
         self.assertEqual(options.margin, 5)
-        self.assertEqual(options.confidence, 0.5)
+        self.assertEqual(options.confidence, 0.1)  # Default confidence is 10%
         self.assertIn('plain_text', options.protected_labels)
 
     def test_custom_options(self):

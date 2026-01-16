@@ -1,305 +1,467 @@
-# Xóa Vết Ghim PDF - Codebase Summary
+# XoaGhim PDF - Codebase Summary
 
-## Tổng Quan
+## Overview
 
-**Tên ứng dụng:** Xóa Vết Ghim PDF
-**Phiên bản:** 1.1.17
-**Tổ chức:** HUCE
-**Mục đích:** Ứng dụng desktop để xóa vết ghim (staple marks) từ tài liệu PDF scan
+**Application Name:** Xóa Vết Ghim PDF (Remove Staple Marks PDF)
+**Version:** 1.1.18
+**Organization:** HUCE
+**Purpose:** Desktop application for removing staple marks from scanned PDF documents
+**Framework:** PyQt5 (Python 3.8+)
+**Total Codebase:** ~14,500+ lines across 25+ Python files
 
-## Tính Năng Chi Tiết
+## Core Features
 
-### 1. Xử lý file
-- Xử lý đơn file hoặc batch (nhiều file)
-- Drag & drop hỗ trợ cả macOS và Windows
-- Lọc trang: tất cả/lẻ/chẵn
+### File Processing
+- Single file processing via file dialog
+- Batch processing from directories
+- Drag & drop support (Windows + macOS)
+- Page filtering: all/odd/even/current page
+- File metadata display: name, page count, size
 
-### 2. Chọn vùng xử lý
-- **Preset zones:** 4 góc, 4 cạnh của trang
-- **Custom Zone Draw Mode:** Vẽ vùng xử lý tùy chỉnh trực tiếp trên preview
-- **Multi-page zone selection:** Áp dụng vùng cho nhiều trang cùng lúc
-- **Zone config persistence:** Lưu cấu hình vùng (enabled, sizes, threshold, filter) qua:
-  - Đổi file/thư mục
-  - Tắt/mở app
-- **2-click zone reset:** Click bỏ chọn → click chọn lại = reset về kích thước mặc định
-- **Reset zones popup:** 3 tùy chọn
-  - Thủ công (preset + custom zones)
-  - Tự động (text protection)
-  - Tất cả
+### Zone Selection
+- **8 Preset Zones:** 4 corners + 4 edges
+- **Custom Draw Mode:** Draw zones directly on preview
+- **Multi-page Support:** Apply zones to multiple pages at once
+- **Config Persistence:** Auto-save zones to JSON
+- **2-click Reset:** Deselect then select = reset to default size
+- **Reset Popup:** 3 options (manual/auto/all)
 
-### 3. Bảo vệ nội dung
-- Bảo vệ dấu/chữ ký (màu đỏ/xanh)
+### Content Protection
+- **Red/Blue Pixel Protection:** Preserves signatures and marks
 - **AI Layout Detection:**
-  - Model YOLO DocLayNet (ONNX Runtime)
-  - Tự động nhận diện: text, table, figure, caption, list, title, header, footer...
-  - Loại trừ vùng bảo vệ khỏi xử lý
+  - YOLO DocLayNet (ONNX Runtime)
+  - 11 categories: text, title, list, table, figure, caption, header, footer, page-number, footnote, section-header
+  - Auto-exclude protected regions from processing
 
-### 4. Preview và xuất file
-- Preview song song: Gốc | Đích (realtime)
-- Sync scroll/zoom giữa 2 panel
-- Chế độ xem: liên tiếp hoặc từng trang
-- Xuất PDF: DPI 72-300, nén JPEG
+### Preview & Export
+- Side-by-side preview: Original | Processed (synchronized)
+- Sync zoom/scroll between panels
+- Continuous (multi-page) or single-page view
+- PDF export: DPI 72-300, JPEG/TIFF compression
+- Real-time preview updates
 
-## Cấu Trúc Dự Án
+## Project Structure
 
 ```
 xoaghim/
-├── main.py                    # Entry point, UI theme setup
-├── requirements.txt           # Dependencies
-├── XoaGhim-1.1.16.spec        # PyInstaller spec (Windows)
-├── core/
-│   ├── processor.py           # Thuật toán xóa vết ghim (StapleRemover)
-│   ├── pdf_handler.py         # Đọc/ghi PDF (PDFHandler, PDFExporter)
-│   ├── layout_detector.py     # AI layout detection (ONNX)
-│   ├── zone_optimizer.py      # Zone optimization utilities
-│   └── config_manager.py      # Zone config persistence (JSON)
-├── ui/
-│   ├── main_window.py         # Cửa sổ chính, menu, drag & drop
-│   ├── continuous_preview.py  # Preview liên tục với zones overlay
-│   ├── settings_panel.py      # Panel cài đặt 3 cột
-│   ├── zone_selector.py       # Widget chọn vùng (góc/cạnh/tùy biến)
-│   ├── zone_item.py           # Graphics item cho vùng kéo thả
-│   ├── batch_preview.py       # Danh sách file batch
-│   ├── preview_widget.py      # Preview widget cơ bản
-│   ├── text_protection_dialog.py  # Dialog cài đặt text protection
-│   ├── compact_toolbar_icons.py    # QPainter-based icon buttons for compact toolbar
-│   └── compact_settings_toolbar.py # Compact icon-only settings toolbar widget
-├── resources/
+├── main.py                              # Entry point, UI theme setup
+├── requirements.txt                     # Dependencies
+├── README.md                            # Project readme
+├── XoaGhim-1.1.18.spec                 # PyInstaller spec (Windows)
+│
+├── core/                                # Business logic (6 files, ~2,930 lines)
+│   ├── processor.py         (670L)      # Staple removal engine
+│   ├── pdf_handler.py       (645L)      # PDF I/O, caching, compression
+│   ├── layout_detector.py   (1,602L)    # AI layout detection (6 backends)
+│   ├── zone_optimizer.py    (315L)      # Shapely-based safe zones
+│   ├── config_manager.py    (124L)      # Config persistence (JSON)
+│   └── __init__.py
+│
+├── ui/                                  # User interface (12 files, ~10,313 lines)
+│   ├── main_window.py       (2,828L)    # Main orchestrator, menus, batch
+│   ├── continuous_preview.py (1,200L)   # Multi-page preview, zones overlay
+│   ├── settings_panel.py    (500+L)     # Zone config, sliders
+│   ├── zone_selector.py     (502L)      # Visual zone selector
+│   ├── zone_item.py         (292L)      # Draggable zones
+│   ├── compact_toolbar_icons.py (326L)  # QPainter icon buttons
+│   ├── compact_settings_toolbar.py (243L) # Icon-only toolbar
+│   ├── batch_sidebar.py     (300+L)     # Batch file list
+│   ├── batch_preview.py     (100+L)     # Batch file widget
+│   ├── preview_widget.py    (200+L)     # Dual preview panels
+│   ├── text_protection_dialog.py (200L) # AI settings dialog
+│   └── __init__.py
+│
+├── utils/                               # Utilities (1 file, 360 lines)
+│   ├── geometry.py          (360L)      # Rectangle ops, format conversions
+│   └── __init__.py
+│
+├── scripts/                             # Utility scripts (1 file)
+│   ├── verify_gpu_environment.py (433L) # GPU environment checker
+│   └── __init__.py
+│
+├── tests/                               # Tests (6 files, ~1,195 lines)
+│   ├── test_processor.py                # Processor tests
+│   ├── test_layout_detector.py          # Layout detection tests
+│   ├── test_zone_optimizer.py           # Zone optimization tests
+│   ├── test_geometry.py                 # Geometry utility tests
+│   ├── test_compact_toolbar.py (31 tests) # Compact toolbar tests
+│   └── __init__.py
+│
+├── resources/                           # Application resources
 │   └── models/
-│       └── yolov12s-doclaynet.onnx  # AI model
-├── tests/
-│   ├── test_layout_detector.py
-│   ├── test_zone_optimizer.py
-│   ├── test_processor.py
-│   ├── test_geometry.py
-│   └── test_compact_toolbar.py    # 31 tests for compact toolbar widgets
+│       └── yolov12s-doclaynet.onnx     # AI model (100MB+)
+│
+├── docs/                                # Documentation
+│   ├── project-overview-pdr.md          # Project overview & PDR
+│   ├── codebase-summary.md              # This file
+│   ├── code-standards.md                # Code standards & structure
+│   ├── system-architecture.md           # Architecture diagrams
+│   └── project-roadmap.md               # Feature roadmap
+│
 └── .github/
     └── workflows/
-        └── build-windows.yml  # GitHub Actions build
+        └── build-windows.yml            # GitHub Actions build
 ```
 
-## Tech Stack
+## Technology Stack
 
 | Component | Technology | Version |
-|-----------|------------|---------|
+|-----------|-----------|---------|
 | Language | Python | 3.8+ |
-| GUI Framework | PyQt5 | >= 5.15.0 |
-| PDF Processing | PyMuPDF (fitz) | >= 1.20.0 |
-| Image Processing | OpenCV | >= 4.5.0 |
-| AI Inference | ONNX Runtime | >= 1.22.0 |
-| Geometry | Shapely | >= 2.0.0 |
-| Arrays | NumPy | >= 1.20.0 |
+| GUI Framework | PyQt5 | ≥5.15.0 |
+| PDF Processing | PyMuPDF (fitz) | ≥1.20.0 |
+| Image Processing | OpenCV | ≥4.5.0 |
+| AI Inference | ONNX Runtime | ≥1.22.0 |
+| Geometry | Shapely | ≥2.0.0 |
+| Arrays | NumPy | ≥1.20.0 |
+| Testing | unittest/pytest | - |
 
-## Module Chi Tiết
+### Optional Dependencies
+- ultralytics (YOLO training)
+- torch (PyTorch backend for layout detection)
+- PaddleOCR (alternative layout detection)
+- detectron2 (Detectron2 layout detection backend)
+- huggingface_hub (model downloads)
 
-### Core Layer
+## Module Details
 
-#### `core/processor.py`
-- **Zone (dataclass):** Vùng xử lý với tọa độ %, threshold
-- **StapleRemover:** Class xử lý xóa vết ghim
-  - `get_background_color()` - Lấy màu nền
-  - `is_red_or_blue()` - Phát hiện pixel đỏ/xanh
-  - `process_zone()` - Xử lý một vùng
-  - `process_image()` - Xử lý ảnh với nhiều vùng
-- **PRESET_ZONES:** 4 góc, 4 cạnh
+### Core Layer (6 files, ~2,930 lines)
 
-**Thuật toán:**
-1. Lấy màu nền từ vùng an toàn
-2. Chuyển vùng sang grayscale
-3. Tìm pixel tối hơn nền theo threshold
-4. Loại trừ vùng chữ đen (gray < 80)
-5. Loại trừ pixel đỏ/xanh (bảo vệ dấu)
-6. Áp dụng morphological operations
-7. Đổ màu nền lên vùng artifact
+#### `core/processor.py` (670 lines)
+**Staple Removal Engine**
+- **Zone (dataclass):** Coordinates (%), width/height percentages, threshold, enabled flag
+- **StapleRemover:** Main processing class
+  - `get_background_color()` - Detect safe zone background color
+  - `is_red_or_blue()` - Detect red/blue pixels (signatures)
+  - `process_zone()` - Process individual zone
+  - `process_image()` - Process image with multiple zones
+  - `apply_protection()` - Apply AI-detected protected regions
+- **PRESET_ZONES:** 8 zones (4 corners, 4 edges) with default coordinates
 
-#### `core/layout_detector.py`
-- **LayoutDetector:** AI-powered layout detection
-  - Model: YOLO DocLayNet (ONNX)
-  - 11 categories: text, title, list, table, figure...
-  - Lazy loading để tối ưu memory
-- **ProtectedRegion (dataclass):** Vùng được bảo vệ
+**Algorithm Flow:**
+1. Sample background color from safe zone
+2. Convert zone to grayscale
+3. Find pixels darker than background by threshold
+4. Exclude dark text (gray < 80)
+5. Exclude red/blue pixels (signature protection)
+6. Apply morphological operations (erosion/dilation)
+7. Fill artifacts with background color
 
-#### `core/pdf_handler.py`
-- **PDFHandler:** Đọc PDF, render trang
-- **PDFExporter:** Xuất PDF với compression
+#### `core/pdf_handler.py` (645 lines)
+**PDF I/O and Rendering**
+- **PDFHandler:**
+  - Page rendering with caching (10 pages max)
+  - Zoom support
+  - Page iteration
+  - Metadata extraction (title, author, page count)
+- **PDFExporter:**
+  - Format selection: JPEG for color, TIFF for B/W
+  - DPI configuration (72-300)
+  - Compression optimization
+  - Batch export support
 
-### UI Layer
+#### `core/layout_detector.py` (1,602 lines)
+**AI-Powered Layout Detection**
+- **LayoutDetector:** Main interface for layout detection
+  - 6 backend support: YOLO (primary), PyTorch, PaddleOCR, legacy, Detectron2, GPU server
+  - YOLO DocLayNet model (opset 22, ONNX Runtime ≥1.22.0)
+  - Lazy model loading for memory efficiency
+  - Support for 11 categories: text, title, list, table, figure, caption, header, footer, page-number, footnote, section-header
+- **ProtectedRegion (dataclass):** Category, bounding box (x, y, w, h)
+- **YOLODocLayNetONNXDetector:** Primary Windows-friendly detector
+  - Automatic model download from HuggingFace
+  - CPU inference (<5 sec/page)
+  - Confidence filtering
 
-#### `ui/main_window.py`
-- **MainWindow:** Cửa sổ chính
-  - Menu ribbon-style
-  - Bottom bar (trang, zoom)
-  - Drag & drop (macOS + Windows)
-- **ProcessThread:** Thread xử lý single file
-- **BatchProcessThread:** Thread xử lý batch
+#### `core/zone_optimizer.py` (315 lines)
+**Geometry & Safe Zone Calculation**
+- **ZoneOptimizer:** Shapely-based polygon operations
+  - Safe zone buffer calculation
+  - Intersection detection
+  - Polygon simplification
+  - Coordinate validation
+  - Text protection integration
 
-#### `ui/continuous_preview.py`
-- **ContinuousPreviewWidget:** Preview song song
-- **ContinuousPreviewPanel:** Panel với zones overlay
-- **ContinuousGraphicsView:** View với sync scroll/zoom
-- Custom zone drawing mode
+#### `core/config_manager.py` (124 lines)
+**Configuration Persistence**
+- **ConfigManager:** JSON-based configuration storage
+  - Platform-specific paths:
+    - macOS: `~/Library/Application Support/XoaGhim/config.json`
+    - Windows: `%APPDATA%/XoaGhim/config.json`
+    - Linux: `~/.config/XoaGhim/config.json`
+  - Zone persistence: enabled zones, coordinates, thresholds
+  - Settings persistence: DPI, filter mode, window size
+  - Auto-load on startup, auto-save on change
 
-#### `ui/settings_panel.py`
-- **SettingsPanel:** Panel cài đặt 3 cột
-  - Cột 1: Chọn vùng (ZoneSelectorWidget)
-  - Cột 2: Thông số (rộng, cao, độ nhạy)
-  - Cột 3: Đầu ra (DPI, thư mục, tên file)
-- "Xóa tất cả" popup với 3 options
-- Text protection checkbox
+### UI Layer (12 files, ~10,313 lines)
 
-#### `ui/zone_selector.py`
-- **PaperIcon:** Icon trang giấy với zones
-- **ZoneSelectorWidget:** Widget tổng hợp
-- DPI-aware rendering (cosmetic pen)
+#### `ui/main_window.py` (2,828 lines)
+**Main Application Window**
+- **MainWindow:** Central orchestrator
+  - Menu bar: File, Edit, View, Help
+  - Menu items: Open, Batch, Settings, About
+  - Bottom status bar: page info, zoom controls
+  - Drag & drop support (Windows + macOS)
+  - Window size/position persistence
+  - Signal coordination
+- **ProcessThread:** Single-file processing in background
+  - Emits progress signals
+  - Error handling
+  - Output validation
+- **BatchProcessThread:** Multi-file batch processing
+  - Parallel execution (configurable)
+  - Progress tracking
+  - Error recovery
 
-#### `ui/zone_item.py`
-- **ZoneItem:** Graphics item kéo thả trên preview
-- Resize handles
-- Multi-page selection support
+#### `ui/continuous_preview.py` (1,200+ lines)
+**Multi-Page Preview with Zones**
+- **ContinuousPreviewWidget:** Main preview container
+  - Dual panel: original | processed
+  - Synchronized zoom & scroll
+  - Real-time update on settings change
+- **ContinuousPreviewPanel:** Individual preview panel
+  - Page caching for performance
+  - Zone overlay rendering
+  - Custom zone drawing mode
+  - Page navigation
+- **ContinuousGraphicsView:** QGraphicsView with sync
+  - Scroll/zoom synchronization
+  - Performance optimization
+  - Custom zone drawing interaction
 
-#### `ui/compact_toolbar_icons.py`
-- **CompactIconButton:** Reusable QPainter-based icon button
-  - Supports 20+ icon types: corners, edges, draw modes, filters, actions
-  - Checkable and selected state management
-  - Color states: normal (gray), hover (blue), selected/protect (blue/pink)
-  - Fixed 38x38px size with rounded background option
-  - Tooltip support and cursor feedback
-- **CompactIconSeparator:** Vertical divider between button groups
-  - Fixed 8x38px size
+#### `ui/settings_panel.py` (500+ lines)
+**Zone Configuration Panel**
+- **SettingsPanel:** 3-column layout
+  - Column 1: ZoneSelectorWidget (8 preset zones + custom)
+  - Column 2: Parameters (width %, height %, threshold slider)
+  - Column 3: Output (DPI dropdown, folder, filename pattern)
+- Features:
+  - Detail/Compact mode toggle (V button on menu bar)
+  - "Clear All" popup with 3 options: manual/auto/all
+  - Text protection checkbox
+  - Real-time preview sync
+- Compact mode: CollapseButton hides panel, shows CompactSettingsToolbar
+
+#### `ui/zone_selector.py` (502 lines)
+**Visual Zone Selection Widget**
+- **PaperIcon:** Visual representation of page with zones
+  - 8 zones displayed as colored rectangles
+  - DPI-aware rendering
+  - Cosmetic pen for consistency
+- **ZoneSelectorWidget:** Combined zone control
+  - Toggle buttons for each zone
+  - Visual feedback on selection
+  - Multi-page support
+
+#### `ui/zone_item.py` (292 lines)
+**Draggable Zone Graphics Item**
+- **ZoneItem:** QGraphicsRectItem with interaction
+  - 8 resize handles (corners + edges)
+  - Drag support
+  - Boundary constraints
+  - Multi-page selection
+  - Visual highlighting
+
+#### `ui/compact_toolbar_icons.py` (326 lines)
+**Icon Button Component for Compact Toolbar**
+- **CompactIconButton:** Reusable QPainter-based button
+  - 20+ icon types: corners, edges, draw modes, filters, actions
+  - Checkable & selectable state management
+  - Color states: normal (gray #6B7280), hover (blue #3B82F6), selected (light blue #DBEAFE), protect (pink #EC4899)
+  - Fixed 38x38px size
+  - Optional rounded background
+  - Tooltip support
+  - Cursor feedback
+  - Icons: top-left, top-right, bottom-left, bottom-right, top, bottom, left, right, add, remove, all-pages, odd-pages, even-pages, current-page, clear, ai-detect, etc.
+- **CompactIconSeparator:** Vertical divider
+  - Fixed 8x38px
   - Light gray color (#D1D5DB)
 
-#### `ui/compact_settings_toolbar.py`
-- **CompactSettingsToolbar:** Icon-only toolbar for collapsed settings panel
-  - Signals: `zone_toggled`, `filter_changed`, `draw_mode_changed`, `clear_zones`, `ai_detect_toggled`
-  - Zone buttons: 4 corners + 4 edges (8 buttons total)
-  - Draw mode buttons: Remove (-) and Protect (+) in exclusive group
-  - Filter buttons: All, Odd, Even, Current Page in exclusive group
+#### `ui/compact_settings_toolbar.py` (243 lines)
+**Collapsed Settings Toolbar**
+- **CompactSettingsToolbar:** Icon-only toolbar widget
+  - Use when settings panel is collapsed
+  - Organized button groups with separators
+  - Zone buttons: 8 total (4 corners + 4 edges)
+  - Draw mode: Remove (-) and Protect (+) exclusive group
+  - Filter: All, Odd, Even, Current Page exclusive group
   - Action buttons: Clear zones, AI detect
-  - State synchronization methods: `set_zone_state()`, `set_filter_state()`, `set_draw_mode_state()`, `set_ai_detect_state()`
-  - Full sync from settings: `sync_from_settings(enabled_zones, filter_mode, draw_mode, ai_detect)`
-  - White background (42px height), organized button groups with separators
+- Signals: zone_toggled, filter_changed, draw_mode_changed, clear_zones, ai_detect_toggled
+- State sync methods: set_zone_state(), set_filter_state(), set_draw_mode_state(), set_ai_detect_state()
+- Full sync: sync_from_settings(enabled_zones, filter_mode, draw_mode, ai_detect)
+- Visual: White background, 42px fixed height
+
+#### `ui/batch_sidebar.py` (300+ lines)
+**Batch File Management Panel**
+- **BatchSidebar:** File list with metadata
+  - File name, page count, file size
+  - Selection state
+  - Progress indicator
+  - Drag & drop support
+
+#### `ui/batch_preview.py` (100+ lines)
+**Batch File List Widget**
+- **BatchPreviewWidget:** Visual file list
+  - Thumbnail preview (optional)
+  - File metadata display
+  - Multi-selection support
+
+#### `ui/preview_widget.py` (200+ lines)
+**Basic Preview Component**
+- **PreviewWidget:** Single image display
+  - Zoom controls
+  - Scroll support
+  - Image caching
+
+#### `ui/text_protection_dialog.py` (200+ lines)
+**AI Settings Dialog**
+- **TextProtectionDialog:** Configuration dialog
+  - Backend selection (YOLO, PyTorch, PaddleOCR, Detectron2, GPU server)
+  - Model download/cache management
+  - Confidence threshold slider
+  - Category filtering
+  - Test mode with preview
+
+### Utils Layer (1 file, 360 lines)
+
+#### `utils/geometry.py` (360 lines)
+**Geometry Utilities**
+- **Rectangle operations:**
+  - Intersection detection
+  - Union calculation
+  - Bounds validation
+- **Format conversions:**
+  - Shapely ↔ OpenCV
+  - Percent ↔ Pixel coordinates
+  - Polygon simplification
+- **Coordinate validation:**
+  - Bounds checking
+  - DPI adjustment
+  - Safe zone buffering
+
+### Scripts (1 file, 433 lines)
+
+#### `scripts/verify_gpu_environment.py` (433 lines)
+**GPU Environment Verification**
+- Environment checker for Rocky Linux + Tesla V100 GPU
+- Validates CUDA, cuDNN, ONNX Runtime setup
+- Performance benchmarking
+- Used for GPU server deployment validation
+
+### Tests (6 files, ~1,195 lines)
+
+#### Test Coverage (124+ test cases)
+- `test_processor.py` - StapleRemover algorithm tests
+- `test_layout_detector.py` - Layout detection backend tests
+- `test_zone_optimizer.py` - Geometry and zone calculation tests
+- `test_geometry.py` - Utility geometry function tests
+- `test_compact_toolbar.py` - 31+ tests for toolbar widgets
+  - Icon button state management
+  - Toolbar initialization
+  - Signal emission
+  - State synchronization
+  - Draw mode exclusivity
+  - Filter group exclusivity
 
 ## Keyboard Shortcuts
 
-| Phím tắt | Chức năng | Vị trí |
-|----------|----------|--------|
-| Ctrl+O | Mở file | Menu Tệp tin |
-| Ctrl+Enter | Xử lý (Clean button) | Main window |
-| Ctrl+Plus | Phóng to preview | Bottom bar |
-| Ctrl+Minus | Thu nhỏ preview | Bottom bar |
+| Shortcut | Function | Location |
+|----------|----------|----------|
+| Ctrl+O | Open file | File menu |
+| Ctrl+Enter | Process (Clean button) | Main window |
+| Ctrl+Plus | Zoom in preview | Bottom bar |
+| Ctrl+Minus | Zoom out preview | Bottom bar |
+| V (click button) | Toggle settings panel detail/compact | Menu bar |
 
-## Cài Đặt Mặc Định
+## Default Settings
 
-| Cài đặt | Giá trị |
-|---------|---------|
-| DPI xuất | 250 |
-| Vùng mặc định | Góc trên trái (12% x 12%) |
-| Threshold | 5 |
-| Pattern tên file | `{gốc}_clean.pdf` |
-| Bảo vệ màu đỏ/xanh | Có |
-| Max preview pages | 20 |
+| Setting | Default Value | Range |
+|---------|---------------|-------|
+| Export DPI | 250 | 72-300 |
+| Default Zone | Top-left corner | 12% x 12% |
+| Threshold | 5 | 1-20 |
+| File pattern | `{original}_clean.pdf` | Custom |
+| Red/Blue protection | Enabled | Boolean |
+| Max preview pages | 10 (cached) | 1-20 |
+| Page cache size | 10 pages | 1-50 |
+| UI theme | Light | Light/Dark |
 
-## Build & Release
+## Build & Deployment
 
-### Windows Build
+### Windows Build Process
 ```bash
-# Tạo tag để trigger GitHub Actions
-git tag v1.1.16
-git push origin v1.1.16
+# Tag release to trigger GitHub Actions
+git tag v1.1.18
+git push origin v1.1.18
 ```
 
-GitHub Actions sẽ:
-1. Build với PyInstaller (onedir mode)
+**GitHub Actions Workflow** (`.github/workflows/build-windows.yml`):
+1. Build executable with PyInstaller (onedir mode)
 2. Bundle ONNX Runtime DLLs
 3. Bundle VC++ Runtime DLLs
-4. Upload artifact và tạo release
+4. Hide console window
+5. Create ZIP archive
+6. Upload artifact
+7. Create GitHub release
 
-### Output
-- `XoaGhim-1.1.16-Windows.zip`
-- Chứa: exe, DLLs, resources/models
+**Output:**
+- `XoaGhim-1.1.18-Windows.zip`
+- Contents: exe, all DLLs, resources/, models/
+- Size: ~150-200 MB (includes model)
 
-## Changelog v1.1.18 (Compact Toolbar)
+### Installation Methods
+1. **Source:** Clone + `pip install -r requirements.txt` + `python main.py`
+2. **Windows:** Download ZIP, extract, run `XoaGhim-1.1.18.exe`
+3. **Future:** Conda package, NSIS installer
 
-### Compact Settings Toolbar
-- **Collapsible toolbar** - Icon-only toolbar when settings panel is collapsed
-  - Chevron button to toggle collapse/expand state
-  - Synchronized state between main panel and toolbar
-  - Initial load fix for icon centering with proper alignment
-- **Zone toggle buttons** - 8 icon buttons for quick zone control
-  - 4 corners: Top-left, Top-right, Bottom-left, Bottom-right
-  - 4 edges: Top, Bottom, Left, Right
-- **Draw mode buttons** - Custom draw zone controls
-  - Minus (-) icon for remove zone
-  - Plus (+) icon for protect zone
-  - Exclusive selection (only one active at a time)
-- **Filter buttons** - Page filter quick access
-  - "All" (two overlapping pages icon)
-  - "Odd" (page with "1" label)
-  - "Even" (page with "2" label)
-  - "Current page" (page with "*" label)
-  - Exclusive selection group
-- **Action buttons**
-  - Trash icon for clear all zones
-  - AI text icon for auto-detect protect zones
-- **Visual design**
-  - Gray base color (#6B7280)
-  - Blue hover/selected state (#3B82F6)
-  - Pink color for protect mode (#EC4899)
-  - Light blue background for selected state (#DBEAFE)
-  - 38x38px icon buttons with consistent sizing
-  - Vertical separators between button groups
-  - 42px fixed height toolbar with white background
-- **QPainter-based icons** - Custom drawn icons for visual consistency
+## Version History
 
-### Files created
-- `ui/compact_toolbar_icons.py` (326 lines) - CompactIconButton and CompactIconSeparator classes
-  - Custom paint engine for 20+ icon types
-  - Hover and selection state management
-  - Icon types: corners, edges, draw modes, filters, actions
-- `ui/compact_settings_toolbar.py` (243 lines) - CompactSettingsToolbar widget
-  - Zone state synchronization
-  - Filter group management
-  - Draw mode exclusive selection
-  - Public API: `set_zone_state()`, `set_filter_state()`, `set_draw_mode_state()`, `set_ai_detect_state()`, `sync_from_settings()`
-- `tests/test_compact_toolbar.py` (31 new tests) - Comprehensive test coverage
-  - Icon button creation and state tests
-  - Toolbar UI initialization tests
-  - Signal emission tests
-  - State synchronization tests
-  - Draw mode exclusivity tests
-  - Filter group exclusivity tests
+### v1.1.18 (Current - 2026-01-17)
+**Compact Settings Toolbar**
+- Icon-only toolbar when settings panel is collapsed
+- 8 zone toggle buttons (4 corners + 4 edges)
+- Draw mode buttons: Remove (-) and Protect (+) exclusive
+- Filter buttons: All, Odd, Even, Current Page exclusive
+- Action buttons: Clear zones, AI detect
+- QPainter-based 20+ icon types
+- Color scheme: gray base, blue hover, pink protect, light blue selected
+- 38x38px buttons, 42px fixed height toolbar
+- Full state synchronization with settings panel
 
-### Keyboard Shortcuts (Updated)
-- **Ctrl+Enter** - Trigger Clean button (processes PDF)
-- **Ctrl+O** - Open file
-- **Ctrl+Plus** - Zoom in
-- **Ctrl+Minus** - Zoom out
+### v1.1.17
+**Zone Configuration Persistence**
+- Save zones to JSON across app sessions
+- Platform-specific config paths (macOS/Windows/Linux)
+- 2-click zone reset mechanism
 
-### UI Integration
-- CompactSettingsToolbar integrated into SettingsPanel
-- State synchronization with main settings controls
-- Signals bridge toolbar actions to main processing logic
-
----
-
-## Changelog v1.1.17
-
-- **Zone config persistence:** Lưu cấu hình vùng vào JSON
-  - macOS: `~/Library/Application Support/XoaGhim/config.json`
-  - Windows: `%APPDATA%/XoaGhim/config.json`
-  - Linux: `~/.config/XoaGhim/config.json`
-- **2-click zone reset:** Click bỏ chọn → click chọn lại = reset về size mặc định
-- File mới: `core/config_manager.py`
-
-## Changelog v1.1.16
-
-- Fix zone icon border dày trên Windows high DPI
-- Fix Windows drag & drop (file:///C:/path format)
-- Dropdown arrow icon cho DPI và Nén comboboxes
-- "Xóa tất cả" popup với 3 tùy chọn (Thủ công/Tự động/Tất cả)
-- Custom Zone Draw Mode
-- AI Layout Detection với ONNX Runtime
+### v1.1.16
+**AI Layout Detection & Custom Zones**
+- AI layout detection with YOLO DocLayNet (ONNX)
+- Custom zone draw mode
 - Multi-page zone selection
+- 3-option reset popup
+
+## Code Metrics
+
+**Total Codebase: ~14,500+ lines**
+- Core modules: ~2,930 lines
+- UI modules: ~10,313 lines
+- Tests: ~1,195 lines (124+ test cases)
+- Utilities: ~360 lines
+- Scripts: ~433 lines
+
+**Complexity Highlights:**
+- Layout detector: 1,602 lines (6 backend support)
+- Main window: 2,828 lines (orchestrator)
+- Continuous preview: 1,200+ lines (UI interaction)
+
+## Performance Characteristics
+
+**Page Processing:** 2-5 sec/page (CPU)
+**AI Detection:** 3-5 sec/page (YOLO ONNX)
+**Memory:** 50-100 MB/page (cached, 10 pages)
+**Model Size:** ~100 MB
 
 ---
-*Cập nhật: 2026-01-16*
+
+*Last Updated: 2026-01-17*

@@ -24,7 +24,7 @@ class CompactIconButton(QPushButton):
         self._selected = False
         self._checkable = False
         self.setToolTip(tooltip)
-        self.setFixedSize(38, 38)  # Icon size
+        self.setFixedSize(42, 38)  # Icon size (wider rectangle)
         self.setCursor(Qt.PointingHandCursor)
         self.setStyleSheet("""
             QPushButton {
@@ -219,17 +219,40 @@ class CompactIconButton(QPushButton):
         painter.restore()
 
     def _draw_filter_all(self, painter: QPainter, cx: int, cy: int):
-        """Draw 2 stacked pages icon for 'all pages' filter"""
+        """Draw 3 stacked pages with folded corner for 'all pages' filter"""
         painter.save()
         pen = painter.pen()
         pen.setWidthF(1.0)
         painter.setPen(pen)
-        w, h = 12, 16  # Rectangle size
-        offset = 3  # Offset between rectangles (closer)
-        # Back page (top-right)
-        painter.drawRect(cx - w // 2 + offset, cy - h // 2 - offset, w, h)
-        # Front page (bottom-left)
-        painter.drawRect(cx - w // 2 - offset, cy - h // 2 + offset, w, h)
+
+        w, h = 10, 14  # Page size
+        fold = 3  # Folded corner size
+        offset = 3  # Offset between pages
+
+        # Draw 3 pages from back to front
+        for i in range(3):
+            # Calculate position (back page top-right, front page bottom-left)
+            px = cx - w // 2 + (2 - i) * offset - 2
+            py = cy - h // 2 + i * offset - 2
+
+            # Draw page with folded corner - fill with white
+            path = QPainterPath()
+            path.moveTo(px, py)
+            path.lineTo(px + w - fold, py)  # Top edge to fold
+            path.lineTo(px + w, py + fold)  # Fold diagonal
+            path.lineTo(px + w, py + h)  # Right edge
+            path.lineTo(px, py + h)  # Bottom edge
+            path.closeSubpath()
+
+            # Fill with white background
+            painter.setBrush(QBrush(QColor(255, 255, 255)))
+            painter.drawPath(path)
+            painter.setBrush(Qt.NoBrush)
+
+            # Draw fold line
+            painter.drawLine(int(px + w - fold), int(py), int(px + w - fold), int(py + fold))
+            painter.drawLine(int(px + w - fold), int(py + fold), int(px + w), int(py + fold))
+
         painter.restore()
 
     def _draw_filter_page(self, painter: QPainter, cx: int, cy: int, label: str):
@@ -256,24 +279,33 @@ class CompactIconButton(QPushButton):
         painter.restore()
 
     def _draw_trash(self, painter: QPainter, cx: int, cy: int):
-        """Draw trash/delete icon - larger"""
-        # Lid
-        painter.drawLine(cx - 7, cy - 7, cx + 7, cy - 7)
-        painter.drawLine(cx - 3, cy - 10, cx + 3, cy - 10)
-        painter.drawLine(cx - 3, cy - 10, cx - 3, cy - 7)
-        painter.drawLine(cx + 3, cy - 10, cx + 3, cy - 7)
+        """Draw broom icon for clear - outline only"""
+        painter.save()
 
-        # Body
-        path = QPainterPath()
-        path.moveTo(cx - 6, cy - 6)
-        path.lineTo(cx - 5, cy + 9)
-        path.lineTo(cx + 5, cy + 9)
-        path.lineTo(cx + 6, cy - 6)
-        painter.drawPath(path)
+        # Broom handle (thick rectangle, diagonal)
+        handle = QPainterPath()
+        handle.moveTo(cx + 4, cy - 10)  # Top-left of handle
+        handle.lineTo(cx + 7, cy - 9)   # Top-right of handle
+        handle.lineTo(cx + 1, cy)       # Bottom-right of handle
+        handle.lineTo(cx - 2, cy - 1)   # Bottom-left of handle
+        handle.closeSubpath()
+        painter.drawPath(handle)
 
-        # Lines inside
-        painter.drawLine(cx - 2, cy - 4, cx - 2, cy + 7)
-        painter.drawLine(cx + 2, cy - 4, cx + 2, cy + 7)
+        # Broom head (trapezoid shape for bristles)
+        head = QPainterPath()
+        head.moveTo(cx - 4, cy)         # Top-left
+        head.lineTo(cx + 3, cy)         # Top-right
+        head.lineTo(cx + 6, cy + 10)    # Bottom-right
+        head.lineTo(cx - 7, cy + 10)    # Bottom-left
+        head.closeSubpath()
+        painter.drawPath(head)
+
+        # Bristle lines inside the head
+        painter.drawLine(cx - 3, cy + 1, cx - 5, cy + 9)
+        painter.drawLine(cx, cy + 1, cx, cy + 9)
+        painter.drawLine(cx + 2, cy + 1, cx + 4, cy + 9)
+
+        painter.restore()
 
     def _draw_ai(self, painter: QPainter, cx: int, cy: int):
         """Draw AI text icon for auto-detect protect zones"""

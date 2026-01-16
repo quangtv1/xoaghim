@@ -19,7 +19,6 @@ from core.config_manager import get_config_manager
 from ui.zone_selector import ZoneSelectorWidget
 from ui.text_protection_dialog import TextProtectionDialog
 from ui.compact_settings_toolbar import CompactSettingsToolbar
-from ui.compact_toolbar_icons import CompactIconButton
 
 
 class ComboItemDelegate(QStyledItemDelegate):
@@ -62,7 +61,7 @@ class SettingsPanel(QWidget):
     # Draw mode signal: None = off, 'remove' = draw removal zone, 'protect' = draw protection zone
     draw_mode_changed = pyqtSignal(object)  # str or None
     zones_reset = pyqtSignal()  # Emitted when all zones are reset
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -158,7 +157,7 @@ class SettingsPanel(QWidget):
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 12)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         # Force white background on this widget and all children
@@ -676,7 +675,7 @@ class SettingsPanel(QWidget):
         # Store reference to main content for collapse/expand
         self.main_content = QWidget()
         main_content_layout = QVBoxLayout(self.main_content)
-        main_content_layout.setContentsMargins(0, 0, 0, 0)
+        main_content_layout.setContentsMargins(12, 8, 12, 12)
         main_content_layout.setSpacing(0)
 
         # Move main_row into main_content widget
@@ -763,33 +762,21 @@ class SettingsPanel(QWidget):
         self._save_collapsed_state()
 
     def _animate_collapse(self):
-        """Animate height transition"""
+        """Animate height transition - compact toolbar is now in main layout"""
         if self._collapsed:
-            # Sync state to compact toolbar before showing
+            # Sync state to compact toolbar
             self._sync_to_compact_toolbar()
-            # Hide expanded, show compact
+            # Hide expanded content (compact toolbar is in main layout)
             self.main_content.setVisible(False)
-            self.compact_toolbar.setVisible(True)
-            # Reduce top margin for compact mode
-            self.layout().setContentsMargins(12, 2, 12, 2)
+            # Collapse to zero height
+            self.setMaximumHeight(0)
+            self.setVisible(False)
         else:
-            # Show expanded, hide compact
-            self.compact_toolbar.setVisible(False)
+            # Show expanded content
             self.main_content.setVisible(True)
-            # Restore normal margins
-            self.layout().setContentsMargins(12, 8, 12, 12)
-
-        # Animation for smooth transition
-        self.animation = QPropertyAnimation(self, b"maximumHeight")
-        self.animation.setDuration(200)
-        self.animation.setEasingCurve(QEasingCurve.OutCubic)
-
-        if self._collapsed:
-            self.animation.setEndValue(46)  # Compact height
-        else:
-            self.animation.setEndValue(16777215)  # Max height (no limit)
-
-        self.animation.start()
+            self.setVisible(True)
+            # No margin change - header_widget has its own margins
+            self.setMaximumHeight(16777215)  # Max height (no limit)
 
     def _sync_to_compact_toolbar(self):
         """Sync current state to compact toolbar"""
@@ -801,19 +788,14 @@ class SettingsPanel(QWidget):
         )
 
     def _load_collapsed_state(self):
-        """Load collapsed state from config"""
+        """Load collapsed state from config - compact toolbar is now in main layout"""
         ui_config = get_config_manager().get_ui_config()
         self._collapsed = ui_config.get('toolbar_collapsed', False)
         if self._collapsed:
             self._sync_to_compact_toolbar()
             self.main_content.setVisible(False)
-            self.compact_toolbar.setVisible(True)
-            # Set margins for compact mode (same as _animate_collapse)
-            self.layout().setContentsMargins(12, 2, 12, 2)
-            self.setMaximumHeight(46)
-            # Force layout update
-            self.compact_toolbar.updateGeometry()
-            self.updateGeometry()
+            self.setMaximumHeight(0)
+            self.setVisible(False)
 
     def _save_collapsed_state(self):
         """Save collapsed state to config"""
