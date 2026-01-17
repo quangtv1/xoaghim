@@ -2537,14 +2537,18 @@ class ContinuousPreviewWidget(QWidget):
         """Xóa cache khi cần detect lại (thay đổi settings, load PDF mới)"""
         self._cached_regions.clear()
             
-    def _get_zones_for_page(self, page_idx: int) -> List[Zone]:
+    def _get_zones_for_page(self, page_idx: int, convert_to_percent: bool = False) -> List[Zone]:
         """Get zones for a specific page from per_page_zones
 
         Returns only zones that exist in per_page_zones[page_idx].
         Handles different storage formats:
-        - corner_*: (w_px, h_px) -> Zone with size_mode='fixed'
-        - margin_*: (length_pct, depth_px) -> Zone with size_mode='hybrid'
+        - corner_*: (w_px, h_px) -> Zone with size_mode='fixed' or 'percent' if convert_to_percent
+        - margin_*: (length_pct, depth_px) -> Zone with size_mode='hybrid' or 'percent' if convert_to_percent
         - custom_*/protect_*: (x_pct, y_pct, w_pct, h_pct) -> Zone with size_mode='percent'
+
+        Args:
+            page_idx: Page index
+            convert_to_percent: If True, convert all zones to percent mode for DPI-independent output
         """
         from core.processor import Zone
 
@@ -2553,6 +2557,12 @@ class ContinuousPreviewWidget(QWidget):
 
         if page_idx not in per_page_zones:
             return []
+
+        # Get preview page dimensions for pixel-to-percent conversion
+        img_w, img_h = 1, 1  # Defaults
+        if convert_to_percent and page_idx < len(self.before_panel._page_items):
+            page_rect = self.before_panel._page_items[page_idx].boundingRect()
+            img_w, img_h = int(page_rect.width()), int(page_rect.height())
 
         for zone_id, zone_data in per_page_zones[page_idx].items():
             # Find zone_def for this zone_id to get threshold and other properties
@@ -2568,52 +2578,104 @@ class ContinuousPreviewWidget(QWidget):
             zone_id_lower = zone_id.lower()
 
             if zone_id_lower.startswith('corner_') and len(zone_data) == 2:
-                # Corner: (w_px, h_px) -> size_mode='fixed'
                 w_px, h_px = zone_data
-                page_zone = Zone(
-                    id=zone_id,
-                    name=zone_def.name if zone_def else zone_id,
-                    x=0.0, y=0.0,  # Position calculated by to_pixels()
-                    width=0.12, height=0.12,  # Fallback values
-                    threshold=zone_def.threshold if zone_def else 7,
-                    enabled=True,
-                    zone_type=getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove',
-                    size_mode='fixed',
-                    width_px=w_px,
-                    height_px=h_px
-                )
+
+                if convert_to_percent:
+                    # Convert to percent for DPI-independent output
+                    w_pct = w_px / img_w if img_w > 0 else 0.12
+                    h_pct = h_px / img_h if img_h > 0 else 0.12
+
+                    # Calculate position based on corner type
+                    if zone_id_lower == 'corner_tl':
+                        x_pct, y_pct = 0.0, 0.0
+                    elif zone_id_lower == 'corner_tr':
+                        x_pct, y_pct = 1.0 - w_pct, 0.0
+                    elif zone_id_lower == 'corner_bl':
+                        x_pct, y_pct = 0.0, 1.0 - h_pct
+                    elif zone_id_lower == 'corner_br':
+                        x_pct, y_pct = 1.0 - w_pct, 1.0 - h_pct
+                    else:
+                        x_pct, y_pct = 0.0, 0.0
+
+                    page_zone = Zone(
+                        id=zone_id,
+                        name=zone_def.name if zone_def else zone_id,
+                        x=x_pct, y=y_pct,
+                        width=w_pct, height=h_pct,
+                        threshold=zone_def.threshold if zone_def else 7,
+                        enabled=True,
+                        zone_type=getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove',
+                        size_mode='percent'
+                    )
+                else:
+                    # Original fixed mode for preview
+                    page_zone = Zone(
+                        id=zone_id,
+                        name=zone_def.name if zone_def else zone_id,
+                        x=0.0, y=0.0,
+                        width=0.12, height=0.12,
+                        threshold=zone_def.threshold if zone_def else 7,
+                        enabled=True,
+                        zone_type=getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove',
+                        size_mode='fixed',
+                        width_px=w_px,
+                        height_px=h_px
+                    )
 
             elif zone_id_lower.startswith('margin_') and len(zone_data) == 2:
-                # Edge: (length_pct, depth_px) -> size_mode='hybrid'
                 length_pct, depth_px = zone_data
-                if zone_id_lower in ('margin_top', 'margin_bottom'):
-                    # width=length_pct, height_px=depth_px
+
+                if convert_to_percent:
+                    # Convert to percent for DPI-independent output
+                    if zone_id_lower in ('margin_top', 'margin_bottom'):
+                        w_pct = length_pct
+                        h_pct = depth_px / img_h if img_h > 0 else 0.08
+                        x_pct = 0.0
+                        y_pct = 0.0 if zone_id_lower == 'margin_top' else (1.0 - h_pct)
+                    else:  # margin_left, margin_right
+                        w_pct = depth_px / img_w if img_w > 0 else 0.08
+                        h_pct = length_pct
+                        x_pct = 0.0 if zone_id_lower == 'margin_left' else (1.0 - w_pct)
+                        y_pct = 0.0
+
                     page_zone = Zone(
                         id=zone_id,
                         name=zone_def.name if zone_def else zone_id,
-                        x=0.0, y=0.0,
-                        width=length_pct, height=0.08,  # height is fallback
+                        x=x_pct, y=y_pct,
+                        width=w_pct, height=h_pct,
                         threshold=zone_def.threshold if zone_def else 7,
                         enabled=True,
                         zone_type=getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove',
-                        size_mode='hybrid',
-                        width_px=0,
-                        height_px=depth_px
+                        size_mode='percent'
                     )
-                else:  # margin_left, margin_right
-                    # height=length_pct, width_px=depth_px
-                    page_zone = Zone(
-                        id=zone_id,
-                        name=zone_def.name if zone_def else zone_id,
-                        x=0.0, y=0.0,
-                        width=0.08, height=length_pct,  # width is fallback
-                        threshold=zone_def.threshold if zone_def else 7,
-                        enabled=True,
-                        zone_type=getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove',
-                        size_mode='hybrid',
-                        width_px=depth_px,
-                        height_px=0
-                    )
+                else:
+                    # Original hybrid mode for preview
+                    if zone_id_lower in ('margin_top', 'margin_bottom'):
+                        page_zone = Zone(
+                            id=zone_id,
+                            name=zone_def.name if zone_def else zone_id,
+                            x=0.0, y=0.0,
+                            width=length_pct, height=0.08,
+                            threshold=zone_def.threshold if zone_def else 7,
+                            enabled=True,
+                            zone_type=getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove',
+                            size_mode='hybrid',
+                            width_px=0,
+                            height_px=depth_px
+                        )
+                    else:
+                        page_zone = Zone(
+                            id=zone_id,
+                            name=zone_def.name if zone_def else zone_id,
+                            x=0.0, y=0.0,
+                            width=0.08, height=length_pct,
+                            threshold=zone_def.threshold if zone_def else 7,
+                            enabled=True,
+                            zone_type=getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove',
+                            size_mode='hybrid',
+                            width_px=depth_px,
+                            height_px=0
+                        )
 
             else:
                 # Custom/protect or legacy format: (x_pct, y_pct, w_pct, h_pct)
@@ -2640,12 +2702,18 @@ class ContinuousPreviewWidget(QWidget):
         Returns zones from page 0 (or first available page) since in sync mode
         all pages share the same zone coordinates after user modifications.
         This ensures Clean uses the exact same zones shown in preview Đích.
+
+        Uses convert_to_percent=True to ensure DPI-independent output:
+        - Preview renders at 120 DPI
+        - Clean export renders at 200 DPI
+        - By converting pixel-based zones to percentages, the zones scale correctly
         """
         per_page_zones = self.before_panel._per_page_zones
 
         # Find first page with zones
         for page_idx in sorted(per_page_zones.keys()):
-            zones = self._get_zones_for_page(page_idx)
+            # convert_to_percent=True ensures zones scale correctly at export DPI
+            zones = self._get_zones_for_page(page_idx, convert_to_percent=True)
             if zones:
                 return zones
 

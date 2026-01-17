@@ -134,6 +134,9 @@ jobs:
             - Lưu zoom % và sidebar width vào config ngay lập tức
             - Sửa lỗi placeholder icon size khi đóng/mở file
 
+            ### Sửa lỗi
+            - **Fix Preview/Clean mismatch** - Vùng chọn giờ khớp giữa Preview Đích và file Clean (DPI-independent)
+
             ### Tải về
             - **XoaGhim-Windows.zip** - Giải nén và chạy `XoaGhim.exe`
         env:
