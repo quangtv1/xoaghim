@@ -1079,8 +1079,10 @@ class ContinuousPreviewPanel(QFrame):
         )
         
         self.scene.setSceneRect(0, 0, placeholder_width, placeholder_height)
-        
+
         # Center the scene without scaling (show at 1:1)
+        # Reset both transform AND internal zoom tracking
+        self.view._zoom = 1.0
         self.view.resetTransform()
         self.view.centerOn(placeholder_width / 2, placeholder_height / 2)
         
