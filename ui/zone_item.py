@@ -12,6 +12,8 @@ class ZoneSignals(QObject):
     zone_changed = pyqtSignal(str)  # zone_id
     zone_selected = pyqtSignal(str)  # zone_id
     zone_delete = pyqtSignal(str)  # zone_id - request to delete zone
+    zone_drag_started = pyqtSignal(str, QRectF)  # zone_id, rect before drag
+    zone_drag_ended = pyqtSignal(str, QRectF)  # zone_id, rect after drag (for undo)
 
 
 class HandleItem(QGraphicsEllipseItem):
@@ -58,6 +60,7 @@ class ZoneItem(QGraphicsRectItem):
         self.setFlag(QGraphicsItem.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
+        self.setFlag(QGraphicsItem.ItemIsFocusable, True)  # Enable keyboard events
 
         self.setCursor(Qt.SizeAllCursor)
 
@@ -92,6 +95,7 @@ class ZoneItem(QGraphicsRectItem):
         # Manage z-order: selected zone goes to front
         if selected:
             self.setZValue(50)
+            self.setFocus()  # Enable keyboard events
         else:
             self.setZValue(self._base_z_value)
         self._update_appearance()
@@ -139,6 +143,9 @@ class ZoneItem(QGraphicsRectItem):
         if event.button() == Qt.LeftButton:
             # Emit zone_selected signal first - this triggers set_selected() which handles z-order
             self.signals.zone_selected.emit(self.zone_id)
+
+            # Emit drag started signal with current rect (for undo)
+            self.signals.zone_drag_started.emit(self.zone_id, self.rect())
 
             # Check if clicking on a handle
             pos = event.pos()
@@ -222,6 +229,10 @@ class ZoneItem(QGraphicsRectItem):
         self.signals.zone_changed.emit(self.zone_id)
     
     def mouseReleaseEvent(self, event):
+        # Emit drag ended signal with final rect (for undo) before clearing drag state
+        if self._drag_start_rect is not None:
+            self.signals.zone_drag_ended.emit(self.zone_id, self.rect())
+
         self._drag_handle = None
         self._drag_start_rect = None
         self._drag_start_pos = None
@@ -291,6 +302,23 @@ class ZoneItem(QGraphicsRectItem):
     def mouseDoubleClickEvent(self, event):
         """Double click để mở dialog chỉnh sửa (implement later)"""
         super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event):
+        """Handle keyboard shortcuts - Delete key to delete zone"""
+        if event.key() == Qt.Key_Delete or event.key() == Qt.Key_Backspace:
+            if self._selected:
+                # Use same deletion logic as context menu
+                scene = self.scene()
+                if scene:
+                    for view in scene.views():
+                        parent = view.parent()
+                        while parent:
+                            if hasattr(parent, 'request_zone_delete'):
+                                parent.request_zone_delete(self.zone_id)
+                                event.accept()
+                                return
+                            parent = parent.parent() if hasattr(parent, 'parent') else None
+        super().keyPressEvent(event)
     
     def get_normalized_rect(self, image_width: int, image_height: int) -> tuple:
         """Lấy rect dưới dạng % (x, y, w, h)"""

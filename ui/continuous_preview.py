@@ -4,6 +4,8 @@ Continuous Preview - Preview liên tục nhiều trang với nền đen
 
 import os
 
+from .undo_manager import UndoManager, UndoAction
+
 from PyQt5.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
@@ -479,6 +481,8 @@ class ContinuousPreviewPanel(QFrame):
     zone_changed = pyqtSignal(str)  # zone_id
     zone_selected = pyqtSignal(str)  # zone_id
     zone_delete = pyqtSignal(str)  # zone_id - request to delete custom zone
+    zone_drag_started = pyqtSignal(str, QRectF)  # zone_id, rect before drag (for undo)
+    zone_drag_ended = pyqtSignal(str, QRectF)  # zone_id, rect after drag (for undo)
     placeholder_clicked = pyqtSignal()  # When placeholder "Mở file" is clicked
     folder_placeholder_clicked = pyqtSignal()  # When placeholder "Mở thư mục" is clicked
     file_dropped = pyqtSignal(str)  # When file is dropped (file_path)
@@ -950,12 +954,12 @@ class ContinuousPreviewPanel(QFrame):
         # Spacing between icons
         icon_spacing = 80
         
-        # === LEFT ICON: PDF Document (Mở file) ===
-        icon_width = 24  # 2/3 of 36
-        icon_height = 30  # 2/3 of 45
+        # === LEFT ICON: PDF Document (Mở file pdf) ===
+        icon_width = 36  # increased 50% from 24
+        icon_height = 45  # increased 50% from 30
         file_icon_x = placeholder_width / 2 - icon_spacing - icon_width / 2
-        icon_y = placeholder_height / 2 - 25
-        corner_size = 7  # 2/3 of 10
+        icon_y = placeholder_height / 2 - 30
+        corner_size = 11  # increased 50% from 7
         cobalt_blue = QColor(0, 71, 171)
         gray = QColor(140, 140, 140)
 
@@ -984,7 +988,7 @@ class ContinuousPreviewPanel(QFrame):
         # Normal PDF text
         pdf_text_normal = self.scene.addText("PDF")
         pdf_font = pdf_text_normal.font()
-        pdf_font.setPixelSize(8)  # 2/3 of 11
+        pdf_font.setPixelSize(12)  # increased 50% from 8
         pdf_font.setBold(True)
         pdf_text_normal.setFont(pdf_font)
         pdf_text_normal.setDefaultTextColor(gray)
@@ -1012,10 +1016,10 @@ class ContinuousPreviewPanel(QFrame):
         pdf_text_hover.setVisible(False)
         self._file_icon_hover.append(pdf_text_hover)
 
-        # "Mở file" text
-        file_hint = self.scene.addText("Mở file")
+        # "Mở file pdf" text
+        file_hint = self.scene.addText("Mở file pdf")
         file_hint_font = file_hint.font()
-        file_hint_font.setPixelSize(10)  # smaller
+        file_hint_font.setPixelSize(13)  # same as menu font
         file_hint.setFont(file_hint_font)
         file_hint.setDefaultTextColor(gray)
         file_hint_rect = file_hint.boundingRect()
@@ -1032,13 +1036,13 @@ class ContinuousPreviewPanel(QFrame):
         )
         
         # === RIGHT ICON: Folder (Mở thư mục) - rounded corners, thin line ===
-        folder_icon_x = placeholder_width / 2 + icon_spacing - 14
-        folder_width = 28  # 2/3 of 42
-        folder_height = 20  # 2/3 of 30
-        folder_y = icon_y + 5
-        tab_width = 10  # 2/3 of 15
-        tab_height = 5  # 2/3 of 7
-        corner_r = 2  # 2/3 of 3
+        folder_icon_x = placeholder_width / 2 + icon_spacing - 21
+        folder_width = 42  # increased 50% from 28
+        folder_height = 30  # increased 50% from 20
+        folder_y = icon_y + 8
+        tab_width = 15  # increased 50% from 10
+        tab_height = 8  # increased 50% from 5
+        corner_r = 3  # increased 50% from 2
 
         # Create folder path (reusable for both normal and hover)
         def create_folder_path():
@@ -1093,7 +1097,7 @@ class ContinuousPreviewPanel(QFrame):
         # "Mở thư mục" text
         folder_hint = self.scene.addText("Mở thư mục")
         folder_hint_font = folder_hint.font()
-        folder_hint_font.setPixelSize(10)  # smaller
+        folder_hint_font.setPixelSize(13)  # same as menu font
         folder_hint.setFont(folder_hint_font)
         folder_hint.setDefaultTextColor(QColor(140, 140, 140))
         folder_hint_rect = folder_hint.boundingRect()
@@ -1112,10 +1116,17 @@ class ContinuousPreviewPanel(QFrame):
         self.scene.setSceneRect(0, 0, placeholder_width, placeholder_height)
 
         # Center the scene without scaling (show at 1:1)
-        # Reset both transform AND internal zoom tracking
+        # Use deferred reset to ensure view has correct size (important on app startup)
+        def _deferred_reset():
+            self.view._zoom = 1.0
+            self.view.resetTransform()
+            self.view.centerOn(placeholder_width / 2, placeholder_height / 2)
+
+        # Reset immediately AND defer to ensure both startup and file-close work correctly
         self.view._zoom = 1.0
         self.view.resetTransform()
         self.view.centerOn(placeholder_width / 2, placeholder_height / 2)
+        QTimer.singleShot(0, _deferred_reset)
         
         # Disable drag mode when placeholder is shown
         self.view.setDragMode(QGraphicsView.NoDrag)
@@ -1480,6 +1491,8 @@ class ContinuousPreviewPanel(QFrame):
         zone_item.signals.zone_changed.connect(self._on_zone_changed)
         zone_item.signals.zone_selected.connect(self._on_zone_selected)
         zone_item.signals.zone_delete.connect(self._on_zone_delete)
+        zone_item.signals.zone_drag_started.connect(self._on_zone_drag_started)
+        zone_item.signals.zone_drag_ended.connect(self._on_zone_drag_ended)
         return zone_item
 
     def _recreate_zone_overlays(self):
@@ -1668,7 +1681,15 @@ class ContinuousPreviewPanel(QFrame):
     def _on_zone_delete(self, zone_id: str):
         """Handle zone delete request"""
         self.zone_delete.emit(zone_id)
-    
+
+    def _on_zone_drag_started(self, zone_id: str, rect: QRectF):
+        """Handle zone drag start - forward for undo tracking"""
+        self.zone_drag_started.emit(zone_id, rect)
+
+    def _on_zone_drag_ended(self, zone_id: str, rect: QRectF):
+        """Handle zone drag end - forward for undo tracking"""
+        self.zone_drag_ended.emit(zone_id, rect)
+
     def request_zone_delete(self, zone_id: str):
         """Request zone deletion - called from ZoneItem context menu"""
         # Use QTimer to defer deletion until after menu closes completely
@@ -1810,6 +1831,10 @@ class ContinuousPreviewWidget(QWidget):
     zone_changed = pyqtSignal(str, float, float, float, float)  # zone_id, x, y, w, h
     zone_selected = pyqtSignal(str)  # zone_id
     zone_delete = pyqtSignal(str)  # zone_id - request to delete custom zone
+    # Undo signals - for syncing with settings_panel
+    undo_zone_removed = pyqtSignal(str)  # zone_id - zone was removed by undo (undo add)
+    undo_zone_restored = pyqtSignal(str, float, float, float, float, str)  # zone_id, x, y, w, h, zone_type - zone was restored by undo (undo delete)
+    undo_preset_zone_toggled = pyqtSignal(str, bool)  # zone_id, enabled - preset zone toggle by undo
     open_file_requested = pyqtSignal()  # When placeholder "Mở file" is clicked
     open_folder_requested = pyqtSignal()  # When placeholder "Mở thư mục" is clicked
     file_dropped = pyqtSignal(str)  # When file is dropped (file_path)
@@ -1852,6 +1877,11 @@ class ContinuousPreviewWidget(QWidget):
         # Track last emitted page to avoid duplicate signals
         self._last_emitted_page = -1
 
+        # Undo manager for zone operations
+        self._undo_manager = UndoManager()
+        self._drag_before_rect: Optional[QRectF] = None  # Store rect before drag for undo
+        self._drag_zone_id: Optional[str] = None  # Store zone_id being dragged
+
         self._setup_ui()
 
     def closeEvent(self, event):
@@ -1890,6 +1920,8 @@ class ContinuousPreviewWidget(QWidget):
         self.before_panel.zone_changed.connect(self._on_zone_changed)
         self.before_panel.zone_selected.connect(self._on_zone_selected)
         self.before_panel.zone_delete.connect(self._on_zone_delete)
+        self.before_panel.zone_drag_started.connect(self._on_zone_drag_started)
+        self.before_panel.zone_drag_ended.connect(self._on_zone_drag_ended)
         self.before_panel.placeholder_clicked.connect(self._on_placeholder_clicked)
         self.before_panel.folder_placeholder_clicked.connect(self._on_folder_placeholder_clicked)
         self.before_panel.file_dropped.connect(self._on_file_dropped)
@@ -2087,8 +2119,18 @@ class ContinuousPreviewWidget(QWidget):
         # Clear cached regions khi load pages mới
         self._cached_regions.clear()
 
+        # Clear undo history when loading new file
+        self._undo_manager.clear()
+
         self.before_panel.set_pages(pages)
         self.after_panel.set_pages(self._processed_pages)
+
+        # If empty pages (closing file), ensure zoom is reset for placeholder icons
+        if not pages:
+            self.before_panel.view._zoom = 1.0
+            self.before_panel.view.resetTransform()
+            self.after_panel.view._zoom = 1.0
+            self.after_panel.view.resetTransform()
 
         self._schedule_process()
     
@@ -2140,13 +2182,13 @@ class ContinuousPreviewWidget(QWidget):
             x, y, w, h = rect
             # zone_id format: "custom_1_0" -> base_id should be "custom_1"
             base_id = zone_id.rsplit('_', 1)[0]
-            
+
             page_filter = self.before_panel._page_filter
-            
+
             if page_filter != 'none':
                 # Sync mode: update internal zone and emit signal
                 self.zone_changed.emit(base_id, x, y, w, h)
-                
+
                 # Update internal zone definitions
                 for zone in self._zones:
                     if zone.id == base_id:
@@ -2156,7 +2198,7 @@ class ContinuousPreviewWidget(QWidget):
                         zone.height = h
                         break
             # In 'none' mode, per-page zones are already stored in before_panel._per_page_zones
-            
+
             self._schedule_process()
     
     def _on_zone_selected(self, zone_id: str):
@@ -2170,7 +2212,188 @@ class ContinuousPreviewWidget(QWidget):
         # Use rsplit to get everything except the last part (page index)
         base_id = zone_id.rsplit('_', 1)[0]
         self.zone_delete.emit(base_id)
-    
+
+    def _on_zone_drag_started(self, zone_id: str, rect: QRectF):
+        """Store zone rect before drag for undo"""
+        self._drag_zone_id = zone_id
+        self._drag_before_rect = QRectF(rect)  # Copy rect
+
+    def _on_zone_drag_ended(self, zone_id: str, after_rect: QRectF):
+        """Record undo when zone drag ends"""
+        if self._drag_zone_id != zone_id or self._drag_before_rect is None:
+            return
+
+        # zone_id format: "custom_1_0" -> base_id = "custom_1", page_idx = 0
+        parts = zone_id.rsplit('_', 1)
+        base_id = parts[0]
+        page_idx = int(parts[1]) if len(parts) > 1 else 0
+
+        # Get page dimensions for conversion
+        if page_idx < len(self.before_panel._page_items):
+            page_rect = self.before_panel._page_items[page_idx].boundingRect()
+            img_w, img_h = int(page_rect.width()), int(page_rect.height())
+
+            # Convert both rects to storage format
+            before_data = self.before_panel._pixel_rect_to_zone_data(
+                base_id, self._drag_before_rect, img_w, img_h)
+            after_data = self.before_panel._pixel_rect_to_zone_data(
+                base_id, after_rect, img_w, img_h)
+
+            # Record undo if data actually changed
+            self.record_zone_edit(base_id, page_idx, before_data, after_data)
+
+        # Clear drag tracking
+        self._drag_zone_id = None
+        self._drag_before_rect = None
+
+    def record_zone_add(self, zone_id: str, page_idx: int, zone_data: tuple, zone_type: str = 'remove'):
+        """Record zone add action for undo"""
+        action = UndoAction(
+            action_type='add',
+            zone_id=zone_id,
+            page_idx=page_idx,
+            before_data=None,
+            after_data=zone_data,
+            zone_type=zone_type
+        )
+        self._undo_manager.push(action)
+
+    def record_zone_delete(self, zone_id: str, page_idx: int, zone_data: tuple, zone_type: str = 'remove'):
+        """Record zone delete action for undo"""
+        action = UndoAction(
+            action_type='delete',
+            zone_id=zone_id,
+            page_idx=page_idx,
+            before_data=zone_data,
+            after_data=None,
+            zone_type=zone_type
+        )
+        self._undo_manager.push(action)
+
+    def record_zone_edit(self, zone_id: str, page_idx: int, before_data: tuple, after_data: tuple):
+        """Record zone edit action for undo"""
+        # Only record if data actually changed
+        if before_data != after_data:
+            action = UndoAction(
+                action_type='edit',
+                zone_id=zone_id,
+                page_idx=page_idx,
+                before_data=before_data,
+                after_data=after_data
+            )
+            self._undo_manager.push(action)
+
+    def undo(self) -> bool:
+        """Perform undo - returns True if undo was performed"""
+        action = self._undo_manager.undo()
+        if not action:
+            return False
+
+        # Disable undo recording while restoring
+        self._undo_manager.set_enabled(False)
+
+        try:
+            if action.action_type == 'add':
+                # Undo add = delete the zone
+                self._undo_remove_zone(action.zone_id, action.page_idx)
+            elif action.action_type == 'delete':
+                # Undo delete = restore the zone
+                self._undo_restore_zone(action.zone_id, action.page_idx,
+                                        action.before_data, action.zone_type)
+            elif action.action_type == 'edit':
+                # Undo edit = restore previous data
+                self._undo_restore_zone_data(action.zone_id, action.page_idx,
+                                              action.before_data)
+            return True
+        finally:
+            self._undo_manager.set_enabled(True)
+
+    def _undo_remove_zone(self, zone_id: str, page_idx: int):
+        """Remove zone from per_page_zones (undo add)"""
+        # Check if it's a preset zone (corner or edge)
+        is_preset = zone_id.startswith('corner_') or zone_id.startswith('margin_')
+
+        if is_preset:
+            # Preset zone: just emit signal to toggle in settings_panel
+            # settings_panel.toggle_preset_zone() will handle the rest
+            self.undo_preset_zone_toggled.emit(zone_id, False)
+        else:
+            # Custom zone: remove from per_page_zones
+            per_page_zones = self.before_panel._per_page_zones
+            if page_idx == -1:
+                # Remove from all pages
+                for pg_idx in per_page_zones:
+                    if zone_id in per_page_zones[pg_idx]:
+                        del per_page_zones[pg_idx][zone_id]
+            else:
+                if page_idx in per_page_zones and zone_id in per_page_zones[page_idx]:
+                    del per_page_zones[page_idx][zone_id]
+
+            # Remove from _zones list
+            self._zones = [z for z in self._zones if z.id != zone_id]
+
+            # Emit signal to sync with settings_panel
+            self.undo_zone_removed.emit(zone_id)
+
+            self.before_panel._rebuild_scene()
+            self._schedule_process()
+
+    def _undo_restore_zone(self, zone_id: str, page_idx: int, zone_data: tuple, zone_type: str):
+        """Restore zone to per_page_zones (undo delete)"""
+        # Check if it's a preset zone (corner or edge)
+        is_preset = zone_id.startswith('corner_') or zone_id.startswith('margin_')
+
+        if is_preset:
+            # Preset zone: just emit signal to toggle in settings_panel
+            # settings_panel.toggle_preset_zone() will handle the rest
+            self.undo_preset_zone_toggled.emit(zone_id, True)
+        else:
+            # Custom zone: restore to per_page_zones
+            per_page_zones = self.before_panel._per_page_zones
+            if page_idx == -1:
+                # Restore to all pages
+                for pg_idx in per_page_zones:
+                    per_page_zones[pg_idx][zone_id] = zone_data
+            else:
+                if page_idx not in per_page_zones:
+                    per_page_zones[page_idx] = {}
+                per_page_zones[page_idx][zone_id] = zone_data
+
+            # Emit signal to sync with settings_panel
+            # zone_data is (x, y, w, h) for custom zones
+            if len(zone_data) == 4:
+                x, y, w, h = zone_data
+                self.undo_zone_restored.emit(zone_id, x, y, w, h, zone_type)
+
+            self.before_panel._rebuild_scene()
+            self._schedule_process()
+
+    def _undo_restore_zone_data(self, zone_id: str, page_idx: int, zone_data: tuple):
+        """Restore zone data (undo edit)"""
+        per_page_zones = self.before_panel._per_page_zones
+        page_filter = self.before_panel._page_filter
+
+        if page_filter != 'none':
+            # Sync mode: restore to all pages
+            for pg_idx in per_page_zones:
+                if zone_id in per_page_zones[pg_idx]:
+                    per_page_zones[pg_idx][zone_id] = zone_data
+        else:
+            # Per-page mode: restore to specific page
+            if page_idx in per_page_zones:
+                per_page_zones[page_idx][zone_id] = zone_data
+
+        self.before_panel._rebuild_scene()
+        self._schedule_process()
+
+    def can_undo(self) -> bool:
+        """Check if undo is available"""
+        return self._undo_manager.can_undo()
+
+    def clear_undo_history(self):
+        """Clear undo history (when loading new file)"""
+        self._undo_manager.clear()
+
     def _schedule_process(self):
         """Schedule processing với debounce"""
         self._process_timer.start(150)  # Reduced from 300ms for faster response

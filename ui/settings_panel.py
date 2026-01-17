@@ -67,6 +67,8 @@ class SettingsPanel(QWidget):
     # Draw mode signal: None = off, 'remove' = draw removal zone, 'protect' = draw protection zone
     draw_mode_changed = pyqtSignal(object)  # str or None
     zones_reset = pyqtSignal()  # Emitted when all zones are reset
+    # Undo signal for preset zones (corners/edges): zone_id, enabled, zone_data (w_px, h_px) or (length_pct, depth_px)
+    zone_preset_toggled = pyqtSignal(str, bool, tuple)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -757,6 +759,15 @@ class SettingsPanel(QWidget):
             self._emit_zones()
             self._save_zone_config()
 
+            # Emit undo signal for preset zones
+            zone = self._zones.get(zone_id)
+            if zone:
+                if zone_id.startswith('corner_'):
+                    zone_data = (zone.width_px, zone.height_px)
+                else:
+                    zone_data = (zone.width, zone.height_px)
+                self.zone_preset_toggled.emit(zone_id, enabled, zone_data)
+
     def _on_compact_filter_changed(self, filter_mode: str):
         """Handle filter change from compact toolbar"""
         filter_map = {'all': self.apply_all_rb, 'odd': self.apply_odd_rb,
@@ -907,7 +918,19 @@ class SettingsPanel(QWidget):
             if selected_zones:
                 first_zone = next(iter(selected_zones))
                 self._select_zone_in_combo(first_zone)
-    
+
+        # Emit undo signal for preset zones (corners/edges)
+        if zone_id.startswith('corner_') or zone_id.startswith('margin_'):
+            zone = self._zones.get(zone_id)
+            if zone:
+                if zone_id.startswith('corner_'):
+                    # Corners: (width_px, height_px)
+                    zone_data = (zone.width_px, zone.height_px)
+                else:
+                    # Edges: (length_pct, depth_px)
+                    zone_data = (zone.width, zone.height_px)
+                self.zone_preset_toggled.emit(zone_id, enabled, zone_data)
+
     def _select_zone_in_combo(self, zone_id: str):
         """Chọn zone trong combo box theo zone_id"""
         for i in range(self.zone_combo.count()):
@@ -1043,6 +1066,90 @@ class SettingsPanel(QWidget):
     def delete_custom_zone(self, zone_id: str):
         """Backward compatibility - calls delete_zone"""
         self.delete_zone(zone_id)
+
+    def restore_custom_zone(self, zone_id: str, x: float, y: float, width: float, height: float, zone_type: str = 'remove'):
+        """Restore a custom zone (for undo delete operation)
+
+        Args:
+            zone_id: Zone ID (e.g., 'custom_1', 'protect_2')
+            x, y, width, height: Zone coordinates as percentages (0.0-1.0)
+            zone_type: 'remove' or 'protect'
+        """
+        # Determine zone name from id
+        if zone_type == 'protect' or zone_id.startswith('protect_'):
+            zone_name = f'Bảo vệ {zone_id.split("_")[-1]}'
+        else:
+            zone_name = f'Xóa ghim {zone_id.split("_")[-1]}'
+
+        self._custom_zones[zone_id] = Zone(
+            id=zone_id,
+            name=zone_name,
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+            threshold=self.threshold_slider.value(),
+            enabled=True,
+            zone_type=zone_type,
+            page_filter=self._get_current_filter()
+        )
+
+        # Add to selection history if not present
+        if zone_id not in self._zone_selection_history:
+            self._zone_selection_history.append(zone_id)
+
+        self._update_zone_combo()
+        self._emit_zones()
+
+    def toggle_preset_zone(self, zone_id: str, enabled: bool, emit_signal: bool = False):
+        """Toggle a preset zone (corner/edge) enabled state.
+
+        Used by undo to restore zone state without triggering another undo record.
+
+        Args:
+            zone_id: Zone ID (e.g., 'corner_tl', 'margin_top')
+            enabled: Whether to enable or disable the zone
+            emit_signal: Whether to emit zone_preset_toggled signal (default False for undo)
+        """
+        if zone_id not in self._zones:
+            return
+
+        self._zones[zone_id].enabled = enabled
+
+        # Sync with zone selector widget
+        self.zone_selector.blockSignals(True)
+        if zone_id.startswith('corner_'):
+            self.zone_selector.corner_icon.set_zone_selected(zone_id, enabled)
+        elif zone_id.startswith('margin_'):
+            self.zone_selector.edge_icon.set_zone_selected(zone_id, enabled)
+        self.zone_selector.blockSignals(False)
+
+        # Sync with compact toolbar if visible
+        if hasattr(self, 'compact_toolbar') and self.compact_toolbar.isVisible():
+            self.compact_toolbar.set_zone_state(zone_id, enabled)
+
+        # Update selection history
+        if enabled:
+            if zone_id in self._zone_selection_history:
+                self._zone_selection_history.remove(zone_id)
+            self._zone_selection_history.append(zone_id)
+        else:
+            if zone_id in self._zone_selection_history:
+                self._zone_selection_history.remove(zone_id)
+
+        self._update_zone_combo()
+        self._emit_zones()
+        self._save_zone_config()
+
+        # Optionally emit signal for redo scenario
+        if emit_signal:
+            zone = self._zones.get(zone_id)
+            if zone:
+                if zone_id.startswith('corner_'):
+                    zone_data = (zone.width_px, zone.height_px)
+                else:
+                    zone_data = (zone.width, zone.height_px)
+                self.zone_preset_toggled.emit(zone_id, enabled, zone_data)
 
     def clear_custom_zones_with_free_filter(self):
         """Clear custom zones that have page_filter='none' (Tự do mode).

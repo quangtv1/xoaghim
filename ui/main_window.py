@@ -356,6 +356,7 @@ class MainWindow(QMainWindow):
         self.settings_panel.text_protection_changed.connect(self._on_text_protection_changed)
         self.settings_panel.draw_mode_changed.connect(self._on_draw_mode_changed)
         self.settings_panel.zones_reset.connect(self._on_zones_reset)
+        self.settings_panel.zone_preset_toggled.connect(self._on_preset_zone_toggled)
 
         # === COMPACT TOOLBAR (above splitter) ===
         # Move compact_toolbar from settings_panel to main layout
@@ -428,6 +429,9 @@ class MainWindow(QMainWindow):
         self.preview.zone_changed.connect(self._on_zone_changed_from_preview)
         self.preview.zone_selected.connect(self._on_zone_selected_from_preview)
         self.preview.zone_delete.connect(self._on_zone_delete_from_preview)
+        self.preview.undo_zone_removed.connect(self._on_undo_zone_removed)
+        self.preview.undo_zone_restored.connect(self._on_undo_zone_restored)
+        self.preview.undo_preset_zone_toggled.connect(self._on_undo_preset_zone_toggled)
         self.preview.open_file_requested.connect(self._on_open)
         self.preview.open_folder_requested.connect(self._on_open_folder_batch)
         self.preview.file_dropped.connect(self._on_file_dropped)
@@ -799,6 +803,10 @@ class MainWindow(QMainWindow):
         # Keyboard shortcut Ctrl+Shift+O for Open folder
         self.open_folder_shortcut = QShortcut(QKeySequence("Ctrl+Shift+O"), self)
         self.open_folder_shortcut.activated.connect(self._on_open_folder_batch)
+
+        # Keyboard shortcut Ctrl+Z for Undo zone operations
+        self.undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
+        self.undo_shortcut.activated.connect(self._on_undo)
 
         # Cancel button (hidden by default)
         self.cancel_btn = QPushButton("Dừng")
@@ -1521,7 +1529,12 @@ class MainWindow(QMainWindow):
         # Clear preview
         self.preview.set_pages([])
         self.preview.clear_file_paths()
-        
+
+        # Reset zoom to 100% for placeholder icons
+        self.zoom_combo.blockSignals(True)
+        self.zoom_combo.setCurrentText("100%")
+        self.zoom_combo.blockSignals(False)
+
         # Reset page navigation
         self.page_spin.setMaximum(1)
         self.page_spin.setValue(1)
@@ -1774,6 +1787,14 @@ class MainWindow(QMainWindow):
     def _on_rect_drawn_from_preview(self, x: float, y: float, w: float, h: float, mode: str):
         """Handle rectangle drawn on preview - create custom zone"""
         self.settings_panel.add_custom_zone_from_rect(x, y, w, h, mode)
+        # Record undo action for the newly added zone
+        # Get the last added zone id from settings panel
+        zones = self.settings_panel.get_zones()
+        if zones:
+            last_zone = zones[-1]  # Most recently added
+            zone_data = (last_zone.x, last_zone.y, last_zone.width, last_zone.height)
+            zone_type = getattr(last_zone, 'zone_type', 'remove')
+            self.preview.record_zone_add(last_zone.id, -1, zone_data, zone_type)
 
     def _on_output_settings_changed(self, output_dir: str, filename_pattern: str):
         """Handle output settings change"""
@@ -1801,6 +1822,23 @@ class MainWindow(QMainWindow):
     
     def _on_zone_delete_from_preview(self, zone_id: str):
         """Handle zone delete request from preview"""
+        # Record undo action before deletion
+        per_page_zones = self.preview.before_panel._per_page_zones
+        # Get zone data from first page that has it
+        zone_data = None
+        zone_type = 'remove'
+        for page_idx in per_page_zones:
+            if zone_id in per_page_zones[page_idx]:
+                zone_data = per_page_zones[page_idx][zone_id]
+                # Get zone type from _zones
+                for z in self.preview._zones:
+                    if z.id == zone_id:
+                        zone_type = getattr(z, 'zone_type', 'remove')
+                        break
+                break
+        if zone_data:
+            self.preview.record_zone_delete(zone_id, -1, zone_data, zone_type)
+
         self.settings_panel.delete_custom_zone(zone_id)
         # Refresh preview with updated zones
         zones = self.settings_panel.get_zones()
@@ -1810,6 +1848,32 @@ class MainWindow(QMainWindow):
         """Handle Ctrl+Enter shortcut - only trigger if button is enabled"""
         if self.run_btn.isEnabled() and self.run_btn.isVisible():
             self._on_process()
+
+    def _on_undo(self):
+        """Handle Ctrl+Z shortcut - undo zone operations"""
+        if self.preview.undo():
+            self.statusBar().showMessage("Đã hoàn tác", 2000)
+
+    def _on_undo_zone_removed(self, zone_id: str):
+        """Handle undo zone removed - sync with settings_panel"""
+        self.settings_panel.delete_custom_zone(zone_id)
+
+    def _on_undo_zone_restored(self, zone_id: str, x: float, y: float, w: float, h: float, zone_type: str):
+        """Handle undo zone restored - sync with settings_panel"""
+        self.settings_panel.restore_custom_zone(zone_id, x, y, w, h, zone_type)
+
+    def _on_preset_zone_toggled(self, zone_id: str, enabled: bool, zone_data: tuple):
+        """Handle preset zone (corner/edge) toggle - record undo"""
+        if enabled:
+            # Zone was added (enabled) -> record add action
+            self.preview.record_zone_add(zone_id, -1, zone_data, 'remove')
+        else:
+            # Zone was removed (disabled) -> record delete action
+            self.preview.record_zone_delete(zone_id, -1, zone_data, 'remove')
+
+    def _on_undo_preset_zone_toggled(self, zone_id: str, enabled: bool):
+        """Handle undo for preset zone toggle - toggle zone in settings_panel"""
+        self.settings_panel.toggle_preset_zone(zone_id, enabled)
 
     def _on_process(self):
         """Bắt đầu xử lý"""
@@ -2688,6 +2752,8 @@ Thời gian: {time_str}"""
             <li>Ctrl+O: Mở file</li>
             <li>Ctrl++: Phóng to</li>
             <li>Ctrl+-: Thu nhỏ</li>
+            <li>Ctrl+Z: Hoàn tác thao tác vùng chọn</li>
+            <li>Delete: Xóa vùng đang chọn</li>
         </ul>
         """
         QMessageBox.information(self, "Hướng dẫn", help_text)
