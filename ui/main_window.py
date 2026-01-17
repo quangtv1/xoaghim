@@ -391,6 +391,7 @@ class MainWindow(QMainWindow):
         # Batch state variables
         self._batch_files: List[str] = []
         self._batch_current_index: int = 0
+        self._is_first_file_in_batch: bool = True  # Track first file to fit width
 
         # Right container (Settings expanded + Preview + Bottom bar)
         right_container = QWidget()
@@ -1294,6 +1295,7 @@ class MainWindow(QMainWindow):
 
         # Show batch sidebar with file list
         self._batch_current_index = 0
+        self._is_first_file_in_batch = True  # First file in new batch gets fit width
         self.batch_sidebar.set_files(pdf_files, base_dir)
         self.batch_sidebar.setVisible(True)
         # Apply saved sidebar width
@@ -1364,6 +1366,7 @@ class MainWindow(QMainWindow):
 
         # Show batch sidebar with file list
         self._batch_current_index = 0
+        self._is_first_file_in_batch = True  # First file in new batch gets fit width
         self.batch_sidebar.set_files(pdf_files, folder_path)
         self.batch_sidebar.setVisible(True)
         # Apply saved sidebar width
@@ -1391,6 +1394,8 @@ class MainWindow(QMainWindow):
     def _on_sidebar_file_selected(self, file_path: str, original_idx: int):
         """Handle file selection from sidebar"""
         self._batch_current_index = original_idx
+        # Clear custom zones with 'none' filter (Tự do) - not inherited between files
+        self.settings_panel.clear_custom_zones_with_free_filter()
         self._load_pdf(file_path)
         self.preview.set_file_index(original_idx, len(self._batch_files))
 
@@ -1440,6 +1445,8 @@ class MainWindow(QMainWindow):
             self._batch_current_index -= 1
             file_path = self._batch_files[self._batch_current_index]
             self.batch_sidebar.select_by_original_index(self._batch_current_index)
+            # Clear custom zones with 'none' filter (Tự do) - not inherited between files
+            self.settings_panel.clear_custom_zones_with_free_filter()
             self._load_pdf(file_path)
             self.preview.set_file_index(self._batch_current_index, len(self._batch_files))
 
@@ -1449,6 +1456,8 @@ class MainWindow(QMainWindow):
             self._batch_current_index += 1
             file_path = self._batch_files[self._batch_current_index]
             self.batch_sidebar.select_by_original_index(self._batch_current_index)
+            # Clear custom zones with 'none' filter (Tự do) - not inherited between files
+            self.settings_panel.clear_custom_zones_with_free_filter()
             self._load_pdf(file_path)
             self.preview.set_file_index(self._batch_current_index, len(self._batch_files))
 
@@ -1461,6 +1470,7 @@ class MainWindow(QMainWindow):
             self._batch_output_dir = ""
             self._batch_files = []
             self._batch_current_index = 0
+            self._is_first_file_in_batch = True  # Reset for next batch
 
             # Hide sidebar and disable batch mode in preview
             self.batch_sidebar.setVisible(False)
@@ -1555,12 +1565,14 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Đã mở: {file_path}")
 
             # Reset to first page
-            self._user_zoomed = False
             self.preview.set_current_page(0)  # Scroll về trang đầu
 
-            # Defer fit width đến sau khi layout hoàn tất
-            # Dùng 100ms delay để đảm bảo viewport đã có kích thước đúng
-            QTimer.singleShot(100, self._fit_first_page_width)
+            # Only fit width for first file in batch, otherwise preserve zoom
+            if self._is_first_file_in_batch:
+                self._user_zoomed = False
+                # Defer fit width đến sau khi layout hoàn tất
+                # Dùng 100ms delay để đảm bảo viewport đã có kích thước đúng
+                QTimer.singleShot(100, self._fit_first_page_width)
             
         except Exception as e:
             QMessageBox.critical(self, "Lỗi", f"Không thể mở file:\n{e}")
@@ -1571,6 +1583,8 @@ class MainWindow(QMainWindow):
             # scroll_to_page=True để scroll đến trang đầu tiên
             self.preview.zoom_fit_width(0, scroll_to_page=True)
             self._update_zoom_combo()
+            # Mark first file processed - subsequent files preserve zoom
+            self._is_first_file_in_batch = False
 
     def _on_prev_page(self):
         if self.page_spin.value() > 1:

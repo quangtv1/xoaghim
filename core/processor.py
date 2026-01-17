@@ -15,7 +15,13 @@ from dataclasses import dataclass, field
 
 @dataclass
 class Zone:
-    """Vùng xử lý"""
+    """Vùng xử lý với hybrid sizing support.
+
+    Size modes:
+    - 'percent': width/height as % of page (default, backward compatible)
+    - 'fixed': width_px/height_px as fixed pixels (corners)
+    - 'hybrid': one dimension as %, other as fixed pixels (edges)
+    """
     id: str
     name: str
     x: float  # % từ trái (0.0 - 1.0)
@@ -26,13 +32,86 @@ class Zone:
     enabled: bool = True
     zone_type: str = 'remove'  # 'remove' (xóa) or 'protect' (bảo vệ)
     page_filter: str = 'all'  # 'all', 'odd', 'even', 'none' - filter khi tạo zone
-    
+    # Hybrid sizing fields
+    width_px: int = 0   # Fixed pixel width (for corners, edge depth)
+    height_px: int = 0  # Fixed pixel height (for corners, edge depth)
+    size_mode: str = 'percent'  # 'percent', 'fixed', 'hybrid'
+
     def to_pixels(self, img_width: int, img_height: int) -> Tuple[int, int, int, int]:
-        """Chuyển đổi % sang pixels: (x, y, w, h)"""
-        x = int(self.x * img_width)
-        y = int(self.y * img_height)
-        w = int(self.width * img_width)
-        h = int(self.height * img_height)
+        """Chuyển đổi sang pixels dựa trên size_mode.
+
+        - percent: width/height as % of page dimensions
+        - fixed: width_px/height_px as fixed pixels (corners - position adjusted)
+        - hybrid: one dimension %, other fixed pixels (edges)
+
+        Returns: (x, y, w, h) in pixels
+        """
+        zone_id = self.id.lower()
+
+        if self.size_mode == 'fixed':
+            # Fixed pixel size (corners) - position based on corner type
+            w = self.width_px if self.width_px > 0 else int(self.width * img_width)
+            h = self.height_px if self.height_px > 0 else int(self.height * img_height)
+
+            # Calculate exact corner positions
+            if zone_id == 'corner_tl':
+                x, y = 0, 0
+            elif zone_id == 'corner_tr':
+                x, y = img_width - w, 0
+            elif zone_id == 'corner_bl':
+                x, y = 0, img_height - h
+            elif zone_id == 'corner_br':
+                x, y = img_width - w, img_height - h
+            else:
+                # Non-corner fixed zones: use percentage position
+                x = int(self.x * img_width)
+                y = int(self.y * img_height)
+
+        elif self.size_mode == 'hybrid':
+            # Hybrid: one dimension %, other fixed (edges)
+            if zone_id == 'margin_top':
+                # Top edge: width=%, height=fixed, centered horizontally
+                w = int(self.width * img_width)
+                h = self.height_px if self.height_px > 0 else int(self.height * img_height)
+                x = int(self.x * img_width) if self.x > 0 else (img_width - w) // 2
+                y = 0
+            elif zone_id == 'margin_bottom':
+                # Bottom edge: width=%, height=fixed, centered horizontally
+                w = int(self.width * img_width)
+                h = self.height_px if self.height_px > 0 else int(self.height * img_height)
+                x = int(self.x * img_width) if self.x > 0 else (img_width - w) // 2
+                y = img_height - h
+            elif zone_id == 'margin_left':
+                # Left edge: width=fixed, height=%, centered vertically
+                w = self.width_px if self.width_px > 0 else int(self.width * img_width)
+                h = int(self.height * img_height)
+                x = 0
+                y = int(self.y * img_height) if self.y > 0 else (img_height - h) // 2
+            elif zone_id == 'margin_right':
+                # Right edge: width=fixed, height=%, centered vertically
+                w = self.width_px if self.width_px > 0 else int(self.width * img_width)
+                h = int(self.height * img_height)
+                x = img_width - w
+                y = int(self.y * img_height) if self.y > 0 else (img_height - h) // 2
+            else:
+                # Custom zones in hybrid mode
+                x = int(self.x * img_width)
+                y = int(self.y * img_height)
+                w = self.width_px if self.width_px > 0 else int(self.width * img_width)
+                h = self.height_px if self.height_px > 0 else int(self.height * img_height)
+        else:
+            # Default: percent mode (backward compatible)
+            x = int(self.x * img_width)
+            y = int(self.y * img_height)
+            w = int(self.width * img_width)
+            h = int(self.height * img_height)
+
+        # Clip to image bounds
+        x = max(0, min(x, img_width - 1))
+        y = max(0, min(y, img_height - 1))
+        w = min(w, img_width - x)
+        h = min(h, img_height - y)
+
         return (x, y, w, h)
 
     def to_bbox(self, img_width: int, img_height: int) -> Tuple[int, int, int, int]:
@@ -623,47 +702,70 @@ class StapleRemover:
 
 
 # Preset zones
+# Default pixel sizes for staple marks (typical at 150 DPI)
+DEFAULT_CORNER_WIDTH_PX = 100   # Fixed corner width
+DEFAULT_CORNER_HEIGHT_PX = 150  # Fixed corner height
+DEFAULT_EDGE_DEPTH_PX = 100     # Fixed edge depth (into page)
+
 PRESET_ZONES = {
     'corner_tl': Zone(
         id='corner_tl',
         name='Góc trên trái',
         x=0.0, y=0.0,
-        width=0.12, height=0.12,
-        threshold=3
+        width=0.12, height=0.12,  # Fallback % values
+        threshold=3,
+        size_mode='fixed',
+        width_px=DEFAULT_CORNER_WIDTH_PX,
+        height_px=DEFAULT_CORNER_HEIGHT_PX
     ),
     'corner_tr': Zone(
         id='corner_tr',
         name='Góc trên phải',
         x=0.88, y=0.0,
         width=0.12, height=0.12,
-        threshold=5
+        threshold=5,
+        size_mode='fixed',
+        width_px=DEFAULT_CORNER_WIDTH_PX,
+        height_px=DEFAULT_CORNER_HEIGHT_PX
     ),
     'corner_bl': Zone(
         id='corner_bl',
         name='Góc dưới trái',
         x=0.0, y=0.88,
         width=0.12, height=0.12,
-        threshold=5
+        threshold=5,
+        size_mode='fixed',
+        width_px=DEFAULT_CORNER_WIDTH_PX,
+        height_px=DEFAULT_CORNER_HEIGHT_PX
     ),
     'corner_br': Zone(
         id='corner_br',
         name='Góc dưới phải',
         x=0.88, y=0.88,
         width=0.12, height=0.12,
-        threshold=5
+        threshold=5,
+        size_mode='fixed',
+        width_px=DEFAULT_CORNER_WIDTH_PX,
+        height_px=DEFAULT_CORNER_HEIGHT_PX
     ),
     'margin_left': Zone(
         id='margin_left',
         name='Viền trái',
         x=0.0, y=0.0,
-        width=0.08, height=1.0,
-        threshold=8
+        width=0.08, height=0.3,  # 30% of page height
+        threshold=8,
+        size_mode='hybrid',
+        width_px=DEFAULT_EDGE_DEPTH_PX,  # Fixed depth
+        height_px=0  # Use % for length
     ),
     'margin_right': Zone(
         id='margin_right',
         name='Viền phải',
         x=0.92, y=0.0,
-        width=0.08, height=1.0,
-        threshold=8
+        width=0.08, height=0.3,
+        threshold=8,
+        size_mode='hybrid',
+        width_px=DEFAULT_EDGE_DEPTH_PX,
+        height_px=0
     ),
 }

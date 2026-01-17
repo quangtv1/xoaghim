@@ -1339,112 +1339,97 @@ class ContinuousPreviewPanel(QFrame):
         elif self._page_filter == 'none':
             return [self._current_page] if self._current_page < len(self._pages) else []
         return all_pages
-    
-    def _recreate_zone_overlays(self):
-        """Tạo lại overlay zones cho tất cả trang
 
-        Display: Always show ALL zones in per_page_zones (no filter)
-        Each page shows its own zones from per_page_zones[page_idx]
+    def _find_zone_def(self, zone_id: str) -> Optional[Zone]:
+        """Find zone definition by ID"""
+        for zd in self._zone_definitions:
+            if zd.id == zone_id:
+                return zd
+        return None
+
+    def _calculate_zone_pixels(self, zone_def: Optional[Zone], zone_coords: tuple,
+                               img_w: int, img_h: int) -> tuple:
+        """Calculate zone pixel coordinates based on size_mode.
+
+        Returns: (x, y, w, h) in pixels
         """
-        # Remove existing zones
+        if zone_def and zone_def.size_mode in ('fixed', 'hybrid'):
+            return zone_def.to_pixels(img_w, img_h)
+        # Default: percent mode
+        return (
+            zone_coords[0] * img_w,
+            zone_coords[1] * img_h,
+            zone_coords[2] * img_w,
+            zone_coords[3] * img_h
+        )
+
+    def _create_zone_overlay_item(self, zone_id: str, zone_def: Optional[Zone],
+                                   rect: QRectF, page_idx: int,
+                                   page_pos: QPointF, page_rect: QRectF) -> ZoneItem:
+        """Create a ZoneItem and connect its signals."""
+        zone_type = getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove'
+        zone_item = ZoneItem(f"{zone_id}_{page_idx}", rect, zone_type=zone_type)
+        zone_item.setPos(page_pos)
+        zone_item.set_bounds(page_rect)
+        zone_item.signals.zone_changed.connect(self._on_zone_changed)
+        zone_item.signals.zone_selected.connect(self._on_zone_selected)
+        zone_item.signals.zone_delete.connect(self._on_zone_delete)
+        return zone_item
+
+    def _recreate_zone_overlays(self):
+        """Tạo lại overlay zones cho tất cả trang (continuous mode)"""
+        self._recreate_zone_overlays_for_pages(self._page_items, enumerate(self._page_items))
+
+    def _recreate_zone_overlays_single(self):
+        """Tạo lại overlay zones cho trang hiện tại (single page mode)"""
+        if not self._pages or not self._page_items:
+            self._clear_zone_overlays()
+            return
+        # Single mode: one item, but use current_page index for zone lookup
+        self._recreate_zone_overlays_for_pages(
+            self._page_items,
+            [(self._current_page, self._page_items[0])]
+        )
+
+    def _clear_zone_overlays(self):
+        """Remove all zone overlay items from scene"""
         for zone in self._zones:
             self.scene.removeItem(zone)
         self._zones.clear()
+
+    def _recreate_zone_overlays_for_pages(self, page_items: list, page_iterator):
+        """Create zone overlays for specified pages.
+
+        Args:
+            page_items: List of page items (for bounds reference)
+            page_iterator: Iterator of (page_idx, page_item) tuples
+        """
+        self._clear_zone_overlays()
 
         if not self._pages:
             return
 
-        # Create zones for each page - show ALL zones (no filter)
-        for page_idx, page_item in enumerate(self._page_items):
+        for page_idx, page_item in page_iterator:
             page_rect = page_item.boundingRect()
             page_pos = page_item.pos()
+            img_w, img_h = int(page_rect.width()), int(page_rect.height())
 
-            # Get zones for this page from per_page_zones
             page_zones = self._per_page_zones.get(page_idx, {})
 
             for zone_id, zone_coords in page_zones.items():
-                # Find zone_def for this zone_id to get zone_type
-                zone_def = None
-                for zd in self._zone_definitions:
-                    if zd.id == zone_id:
-                        zone_def = zd
-                        break
+                zone_def = self._find_zone_def(zone_id)
 
                 if zone_def and not zone_def.enabled:
-                    continue  # Skip disabled zones
+                    continue
 
-                # Calculate pixel coordinates
-                zx = zone_coords[0] * page_rect.width()
-                zy = zone_coords[1] * page_rect.height()
-                zw = zone_coords[2] * page_rect.width()
-                zh = zone_coords[3] * page_rect.height()
-
-                # Create zone item with zone_type for correct color
+                zx, zy, zw, zh = self._calculate_zone_pixels(zone_def, zone_coords, img_w, img_h)
                 rect = QRectF(zx, zy, zw, zh)
-                zone_type = getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove'
-                zone_item = ZoneItem(f"{zone_id}_{page_idx}", rect, zone_type=zone_type)
-                zone_item.setPos(page_pos)
-                zone_item.set_bounds(page_rect)
 
-                zone_item.signals.zone_changed.connect(self._on_zone_changed)
-                zone_item.signals.zone_selected.connect(self._on_zone_selected)
-                zone_item.signals.zone_delete.connect(self._on_zone_delete)
-
+                zone_item = self._create_zone_overlay_item(
+                    zone_id, zone_def, rect, page_idx, page_pos, page_rect
+                )
                 self.scene.addItem(zone_item)
                 self._zones.append(zone_item)
-
-    def _recreate_zone_overlays_single(self):
-        """Tạo lại overlay zones cho trang hiện tại (single page mode)
-
-        Display: Always show ALL zones in per_page_zones for current page (no filter)
-        """
-        # Remove existing zones
-        for zone in self._zones:
-            self.scene.removeItem(zone)
-        self._zones.clear()
-
-        if not self._pages or not self._page_items:
-            return
-
-        # Create zones for current page only
-        page_item = self._page_items[0]  # Only one item in single mode
-        page_rect = page_item.boundingRect()
-        page_pos = page_item.pos()
-        page_idx = self._current_page
-
-        # Get zones for this page from per_page_zones
-        page_zones = self._per_page_zones.get(page_idx, {})
-
-        for zone_id, zone_coords in page_zones.items():
-            # Find zone_def for this zone_id to get zone_type
-            zone_def = None
-            for zd in self._zone_definitions:
-                if zd.id == zone_id:
-                    zone_def = zd
-                    break
-
-            if zone_def and not zone_def.enabled:
-                continue  # Skip disabled zones
-
-            # Calculate pixel coordinates
-            zx = zone_coords[0] * page_rect.width()
-            zy = zone_coords[1] * page_rect.height()
-            zw = zone_coords[2] * page_rect.width()
-            zh = zone_coords[3] * page_rect.height()
-
-            # Create zone item with zone_type for correct color
-            rect = QRectF(zx, zy, zw, zh)
-            zone_type = getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove'
-            zone_item = ZoneItem(f"{zone_id}_{page_idx}", rect, zone_type=zone_type)
-            zone_item.setPos(page_pos)
-            zone_item.set_bounds(page_rect)
-
-            zone_item.signals.zone_changed.connect(self._on_zone_changed)
-            zone_item.signals.zone_selected.connect(self._on_zone_selected)
-            zone_item.signals.zone_delete.connect(self._on_zone_delete)
-
-            self.scene.addItem(zone_item)
-            self._zones.append(zone_item)
     
     def update_page(self, page_idx: int, image: np.ndarray):
         """Cập nhật ảnh một trang"""

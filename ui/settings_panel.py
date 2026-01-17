@@ -14,7 +14,7 @@ from PyQt5.QtCore import Qt, pyqtSignal, QSize, QPoint, QPropertyAnimation, QEas
 from PyQt5.QtGui import QColor, QPixmap, QPainter, QPolygon
 
 from typing import List, Dict, Set
-from core.processor import Zone, PRESET_ZONES, TextProtectionOptions
+from core.processor import Zone, PRESET_ZONES, TextProtectionOptions, DEFAULT_EDGE_DEPTH_PX
 from core.config_manager import get_config_manager
 from ui.zone_selector import ZoneSelectorWidget
 from ui.text_protection_dialog import TextProtectionDialog
@@ -29,22 +29,28 @@ class ComboItemDelegate(QStyledItemDelegate):
         return size
 
 
-# Thêm preset cho margin_top và margin_bottom
+# Thêm preset cho margin_top và margin_bottom với hybrid sizing
 EXTENDED_PRESET_ZONES = {
     **PRESET_ZONES,
     'margin_top': Zone(
         id='margin_top',
         name='Viền trên',
         x=0.0, y=0.0,
-        width=1.0, height=0.05,
-        threshold=5
+        width=0.3, height=0.05,  # 30% width, fallback height
+        threshold=5,
+        size_mode='hybrid',
+        width_px=0,  # Use % for width (along edge)
+        height_px=DEFAULT_EDGE_DEPTH_PX  # Fixed depth into page
     ),
     'margin_bottom': Zone(
         id='margin_bottom',
         name='Viền dưới',
         x=0.0, y=0.95,
-        width=1.0, height=0.05,
-        threshold=5
+        width=0.3, height=0.05,
+        threshold=5,
+        size_mode='hybrid',
+        width_px=0,
+        height_px=DEFAULT_EDGE_DEPTH_PX
     ),
 }
 
@@ -90,12 +96,19 @@ class SettingsPanel(QWidget):
         for zone_id in self._zones:
             self._zones[zone_id].enabled = (zone_id in enabled_zones)
 
-        # Restore zone sizes
+        # Restore zone sizes (including hybrid sizing fields)
         zone_sizes = config.get('zone_sizes', {})
         for zone_id, size in zone_sizes.items():
             if zone_id in self._zones:
                 self._zones[zone_id].width = size.get('width', self._zones[zone_id].width)
                 self._zones[zone_id].height = size.get('height', self._zones[zone_id].height)
+                # Hybrid sizing fields
+                if 'width_px' in size:
+                    self._zones[zone_id].width_px = size['width_px']
+                if 'height_px' in size:
+                    self._zones[zone_id].height_px = size['height_px']
+                if 'size_mode' in size:
+                    self._zones[zone_id].size_mode = size['size_mode']
 
         # Restore threshold
         threshold = config.get('threshold', 5)
@@ -135,14 +148,18 @@ class SettingsPanel(QWidget):
             self._selected_zone_id = enabled_zones[-1]
 
     def _save_zone_config(self):
-        """Save current zone configuration to config file"""
+        """Save current zone configuration to config file (including hybrid sizing)"""
         enabled_zones = [z.id for z in self._zones.values() if z.enabled]
 
         zone_sizes = {}
         for zone_id, zone in self._zones.items():
             zone_sizes[zone_id] = {
                 'width': zone.width,
-                'height': zone.height
+                'height': zone.height,
+                # Hybrid sizing fields
+                'width_px': zone.width_px,
+                'height_px': zone.height_px,
+                'size_mode': zone.size_mode,
             }
 
         config = {
@@ -686,7 +703,7 @@ class SettingsPanel(QWidget):
         layout.addWidget(self.main_content)
     
     def _init_preset_zones(self):
-        """Khởi tạo preset zones"""
+        """Khởi tạo preset zones với hybrid sizing support"""
         for zone_id, zone in EXTENDED_PRESET_ZONES.items():
             self._zones[zone_id] = Zone(
                 id=zone.id,
@@ -696,7 +713,11 @@ class SettingsPanel(QWidget):
                 width=zone.width,
                 height=zone.height,
                 threshold=zone.threshold,
-                enabled=False
+                enabled=False,
+                # Hybrid sizing fields
+                size_mode=zone.size_mode,
+                width_px=zone.width_px,
+                height_px=zone.height_px
             )
         
         # Enable góc trên trái mặc định
@@ -1024,7 +1045,34 @@ class SettingsPanel(QWidget):
     def delete_custom_zone(self, zone_id: str):
         """Backward compatibility - calls delete_zone"""
         self.delete_zone(zone_id)
-    
+
+    def clear_custom_zones_with_free_filter(self):
+        """Clear custom zones that have page_filter='none' (Tự do mode).
+
+        Called when switching files in batch mode to prevent per-page zones
+        from being applied to files with different page counts.
+        """
+        zones_to_remove = [
+            zone_id for zone_id, zone in self._custom_zones.items()
+            if zone.page_filter == 'none'
+        ]
+
+        if not zones_to_remove:
+            return False  # No zones removed
+
+        for zone_id in zones_to_remove:
+            del self._custom_zones[zone_id]
+            if zone_id in self._zone_selection_history:
+                self._zone_selection_history.remove(zone_id)
+
+        # Update UI
+        self._update_zone_combo()
+        if self._zone_selection_history:
+            self._select_zone_in_combo(self._zone_selection_history[-1])
+        self._emit_zones()
+
+        return True  # Zones were removed
+
     def _on_settings_changed(self):
         """Khi thay đổi settings"""
         self.threshold_label.setText(str(self.threshold_slider.value()))
