@@ -143,7 +143,8 @@ class ZoneItem(QGraphicsRectItem):
             # Check if clicking on a handle
             pos = event.pos()
             for handle_pos, handle in self.handles.items():
-                if handle.contains(pos - handle.pos()):
+                handle_check_pos = pos - handle.pos()
+                if handle.contains(handle_check_pos):
                     self._drag_handle = handle_pos
                     self._drag_start_rect = self.rect()
                     self._drag_start_pos = event.scenePos()
@@ -175,7 +176,18 @@ class ZoneItem(QGraphicsRectItem):
                 rect.setTop(rect.top() + delta.y())
             if 'b' in self._drag_handle:
                 rect.setBottom(rect.bottom() + delta.y())
-            
+
+            # Constrain resize to bounds
+            if self._bounds:
+                if rect.left() < self._bounds.left():
+                    rect.setLeft(self._bounds.left())
+                if rect.right() > self._bounds.right():
+                    rect.setRight(self._bounds.right())
+                if rect.top() < self._bounds.top():
+                    rect.setTop(self._bounds.top())
+                if rect.bottom() > self._bounds.bottom():
+                    rect.setBottom(self._bounds.bottom())
+
             # Ensure minimum size
             if rect.width() < 20:
                 if 'l' in self._drag_handle:
@@ -187,7 +199,7 @@ class ZoneItem(QGraphicsRectItem):
                     rect.setTop(rect.bottom() - 20)
                 else:
                     rect.setBottom(rect.top() + 20)
-            
+
             self.setRect(rect)
         else:
             # Move

@@ -147,11 +147,15 @@ class PaperIcon(QWidget):
         if self.mode == 'custom':
             # Custom mode: split into 2 areas (top: -, bottom: +)
             self._paint_custom_mode(painter, paper)
+            # Set cursor based on draw mode
+            if self._draw_mode_remove or self._draw_mode_protect:
+                self.setCursor(Qt.CrossCursor)
+            else:
+                self.setCursor(Qt.PointingHandCursor)
         else:
             # Normal mode: draw text lines and zones
             self._paint_normal_mode(painter, paper)
-
-        self.setCursor(Qt.PointingHandCursor)
+            self.setCursor(Qt.PointingHandCursor)
 
     def _paint_normal_mode(self, painter: QPainter, paper: QRectF):
         """Paint normal mode (corner/edge zones)"""
@@ -420,6 +424,10 @@ class ZoneSelectorWidget(QFrame):
 
     def _on_zone_toggled(self, zone_id: str, enabled: bool):
         """Khi toggle zone"""
+        # Turn off draw mode when clicking preset zones (Góc/Cạnh)
+        if self._draw_mode is not None:
+            self._set_draw_mode(None)
+
         all_zones = self.get_all_selected_zones()
         self.zones_changed.emit(all_zones)
         # Emit last clicked zone
@@ -454,12 +462,26 @@ class ZoneSelectorWidget(QFrame):
         """Internal: set draw mode and emit signal"""
         self._draw_mode = mode
         self.custom_icon.set_draw_mode(mode)
+        # Update tooltip based on mode
+        if mode == 'remove':
+            self.custom_icon.setToolTip("Đang vẽ vùng xóa (click để tắt)")
+        elif mode == 'protect':
+            self.custom_icon.setToolTip("Đang vẽ vùng bảo vệ (click để tắt)")
+        else:
+            self.custom_icon.setToolTip("Vẽ vùng xóa ghim (-) hoặc bảo vệ (+)")
         self.draw_mode_changed.emit(mode)
 
     def set_draw_mode(self, mode: Optional[str]):
         """Set draw mode state from outside"""
         self._draw_mode = mode
         self.custom_icon.set_draw_mode(mode)
+        # Update tooltip based on mode
+        if mode == 'remove':
+            self.custom_icon.setToolTip("Đang vẽ vùng xóa (click để tắt)")
+        elif mode == 'protect':
+            self.custom_icon.setToolTip("Đang vẽ vùng bảo vệ (click để tắt)")
+        else:
+            self.custom_icon.setToolTip("Vẽ vùng xóa ghim (-) hoặc bảo vệ (+)")
 
     def get_draw_mode(self) -> Optional[str]:
         """Get current draw mode: 'remove', 'protect', or None"""

@@ -13,6 +13,7 @@ from typing import List, Tuple, Optional, Set
 from dataclasses import dataclass, field
 
 
+
 @dataclass
 class Zone:
     """Vùng xử lý với hybrid sizing support.
@@ -69,30 +70,31 @@ class Zone:
 
         elif self.size_mode == 'hybrid':
             # Hybrid: one dimension %, other fixed (edges)
+            # Edges: 100% along edge, fixed depth into page
             if zone_id == 'margin_top':
-                # Top edge: width=%, height=fixed, centered horizontally
+                # Top edge: width=100%, height=fixed
                 w = int(self.width * img_width)
                 h = self.height_px if self.height_px > 0 else int(self.height * img_height)
-                x = int(self.x * img_width) if self.x > 0 else (img_width - w) // 2
+                x = 0
                 y = 0
             elif zone_id == 'margin_bottom':
-                # Bottom edge: width=%, height=fixed, centered horizontally
+                # Bottom edge: width=100%, height=fixed
                 w = int(self.width * img_width)
                 h = self.height_px if self.height_px > 0 else int(self.height * img_height)
-                x = int(self.x * img_width) if self.x > 0 else (img_width - w) // 2
+                x = 0
                 y = img_height - h
             elif zone_id == 'margin_left':
-                # Left edge: width=fixed, height=%, centered vertically
+                # Left edge: width=fixed, height=100%
                 w = self.width_px if self.width_px > 0 else int(self.width * img_width)
                 h = int(self.height * img_height)
                 x = 0
-                y = int(self.y * img_height) if self.y > 0 else (img_height - h) // 2
+                y = 0
             elif zone_id == 'margin_right':
-                # Right edge: width=fixed, height=%, centered vertically
+                # Right edge: width=fixed, height=100%
                 w = self.width_px if self.width_px > 0 else int(self.width * img_width)
                 h = int(self.height * img_height)
                 x = img_width - w
-                y = int(self.y * img_height) if self.y > 0 else (img_height - h) // 2
+                y = 0
             else:
                 # Custom zones in hybrid mode
                 x = int(self.x * img_width)
@@ -752,7 +754,7 @@ PRESET_ZONES = {
         id='margin_left',
         name='Viền trái',
         x=0.0, y=0.0,
-        width=0.08, height=0.3,  # 30% of page height
+        width=0.08, height=1.0,  # 100% of page height + overflow
         threshold=8,
         size_mode='hybrid',
         width_px=DEFAULT_EDGE_DEPTH_PX,  # Fixed depth
@@ -762,7 +764,7 @@ PRESET_ZONES = {
         id='margin_right',
         name='Viền phải',
         x=0.92, y=0.0,
-        width=0.08, height=0.3,
+        width=0.08, height=1.0,  # 100% of page height + overflow
         threshold=8,
         size_mode='hybrid',
         width_px=DEFAULT_EDGE_DEPTH_PX,

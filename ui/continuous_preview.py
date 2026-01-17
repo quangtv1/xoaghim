@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
     QGraphicsRectItem, QFrame, QSplitter, QScrollArea, QPushButton,
-    QGraphicsOpacityEffect
+    QGraphicsOpacityEffect, QApplication
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QRectF, QTimer, QPointF, QPropertyAnimation, QEasingCurve
 from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QBrush, QPen, QCursor, QPainterPath, QFont
@@ -80,20 +80,21 @@ class LoadingOverlay(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.setStyleSheet("background-color: rgba(0, 0, 0, 0.15);")
+        self.setStyleSheet("background-color: transparent;")
 
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignCenter)
 
-        # Container cho loading indicator
+        # Container popup - hình chữ nhật xám nhẹ, round bé, 80% opacity
         container = QFrame()
         container.setStyleSheet("""
             QFrame {
-                background-color: #F9FAFB;
-                border-radius: 12px;
+                background-color: rgba(200, 200, 200, 0.8);
+                border: none;
+                border-radius: 6px;
             }
         """)
-        container.setFixedSize(100, 90)
+        container.setFixedSize(180, 100)
         container_layout = QVBoxLayout(container)
         container_layout.setAlignment(Qt.AlignCenter)
         container_layout.setSpacing(10)
@@ -102,11 +103,12 @@ class LoadingOverlay(QWidget):
         self._spinner = SpinnerWidget(size=36, line_width=4)
         container_layout.addWidget(self._spinner, alignment=Qt.AlignCenter)
 
-        # Loading text (smaller, below)
-        self._loading_label = QLabel("Đang phát hiện")
+        # Loading text - màu xanh cobalt, không nền
+        self._loading_label = QLabel("Đang phát hiện layout")
         self._loading_label.setStyleSheet("""
-            font-size: 11px;
-            color: #6B7280;
+            font-size: 13px;
+            color: #0047AB;
+            background: transparent;
         """)
         self._loading_label.setAlignment(Qt.AlignCenter)
         container_layout.addWidget(self._loading_label)
@@ -177,13 +179,9 @@ class DetectionRunner:
                 original_idx = self._original_indices[i]
                 regions = self._processor.detect_protected_regions(page)
                 results[original_idx] = regions
-                print(f"[Detection] Page {original_idx}: {len(regions)} regions found")
             except Exception as e:
                 original_idx = self._original_indices[i]
                 results[original_idx] = []
-                print(f"[Detection] Error on page {original_idx}: {e}")
-                import traceback
-                traceback.print_exc()
 
         # Call callback with results (if not cancelled)
         if not self._cancelled and self._callback:
@@ -211,7 +209,7 @@ class ContinuousGraphicsView(QGraphicsView):
 
         self.setRenderHint(QPainter.Antialiasing)
         self.setRenderHint(QPainter.SmoothPixmapTransform)
-        self.setDragMode(QGraphicsView.ScrollHandDrag)
+        self.setDragMode(QGraphicsView.NoDrag)  # Allow zone items to show their cursors
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
 
@@ -324,19 +322,24 @@ class ContinuousGraphicsView(QGraphicsView):
             page_bounds: (x, y, w, h) of current page (fallback)
             all_page_bounds: List of (x, y, w, h) for all pages (for accurate detection)
         """
-        print(f"[DrawMode] ContinuousGraphicsView.set_draw_mode: mode={mode}, page_bounds={page_bounds}")
+        old_mode = self._draw_mode
         self._draw_mode = mode
         self._page_bounds = page_bounds
         self._all_page_bounds = all_page_bounds or []
         if mode:
             self.setDragMode(QGraphicsView.NoDrag)
-            self.setCursor(Qt.CrossCursor)
-            self.viewport().setCursor(Qt.CrossCursor)
-            print(f"[DrawMode] Cursor set to CrossCursor")
+            # Use override cursor to force CrossCursor even over zone items
+            # Only set if not already in draw mode (avoid stacking overrides)
+            if not old_mode:
+                QApplication.setOverrideCursor(QCursor(Qt.CrossCursor))
         else:
-            self.setDragMode(QGraphicsView.ScrollHandDrag)
-            self.setCursor(Qt.ArrowCursor)
-            self.viewport().setCursor(Qt.ArrowCursor)
+            # Restore cursor - remove override only if was in draw mode
+            if old_mode:
+                QApplication.restoreOverrideCursor()
+            # Use NoDrag to allow zone items to show their cursors
+            self.setDragMode(QGraphicsView.NoDrag)
+            self.unsetCursor()
+            self.viewport().unsetCursor()
             # Clean up any in-progress drawing
             if self._draw_rect_item and self._draw_rect_item.scene():
                 self.scene().removeItem(self._draw_rect_item)
@@ -359,10 +362,17 @@ class ContinuousGraphicsView(QGraphicsView):
     def mousePressEvent(self, event):
         """Start drawing if in draw mode"""
         if self._draw_mode and event.button() == Qt.LeftButton:
-            self._drawing = True
-            self._draw_start = self.mapToScene(event.pos())
-            # Don't create rect yet - wait for actual dragging
-            self._draw_rect_item = None
+            scene_pos = self.mapToScene(event.pos())
+            # Find nearest page to clamp drawing
+            page_bounds = self._find_page_at_y(scene_pos.y())
+            if page_bounds:
+                px, py, pw, ph = page_bounds
+                # Clamp start point to page bounds (if outside, use edge)
+                clamped_x = max(px, min(scene_pos.x(), px + pw))
+                clamped_y = max(py, min(scene_pos.y(), py + ph))
+                self._drawing = True
+                self._draw_start = QPointF(clamped_x, clamped_y)
+                self._draw_rect_item = None
         else:
             # Check if clicking on empty space (no item at click position)
             if event.button() == Qt.LeftButton:
@@ -383,10 +393,25 @@ class ContinuousGraphicsView(QGraphicsView):
         """Update rectangle while drawing"""
         if self._drawing and self._draw_start:
             current = self.mapToScene(event.pos())
-            x = min(self._draw_start.x(), current.x())
-            y = min(self._draw_start.y(), current.y())
-            w = abs(current.x() - self._draw_start.x())
-            h = abs(current.y() - self._draw_start.y())
+
+            # Find page bounds to constrain drawing
+            page_bounds = self._find_page_at_y(self._draw_start.y())
+            if page_bounds:
+                px, py, pw, ph = page_bounds
+                # Clamp current position to page bounds
+                current_x = max(px, min(current.x(), px + pw))
+                current_y = max(py, min(current.y(), py + ph))
+                # Clamp start position to page bounds
+                start_x = max(px, min(self._draw_start.x(), px + pw))
+                start_y = max(py, min(self._draw_start.y(), py + ph))
+            else:
+                current_x, current_y = current.x(), current.y()
+                start_x, start_y = self._draw_start.x(), self._draw_start.y()
+
+            x = min(start_x, current_x)
+            y = min(start_y, current_y)
+            w = abs(current_x - start_x)
+            h = abs(current_y - start_y)
 
             # Only create rect if dragged enough (> 5 pixels)
             if w > 5 or h > 5:
@@ -791,15 +816,21 @@ class ContinuousPreviewPanel(QFrame):
         return True
     
     def get_zone_rect_for_page(self, zone_id: str, page_idx: int) -> Optional[tuple]:
-        """Get zone rect for a specific page (used in per-page mode)"""
+        """Get zone data for a specific page (used in per-page mode)
+
+        Note: Returns raw storage format which varies by zone type:
+        - corner_*: (w_px, h_px)
+        - margin_*: (length_pct, depth_px)
+        - custom_*: (x_pct, y_pct, w_pct, h_pct)
+        """
         base_id = zone_id.rsplit('_', 1)[0] if '_' in zone_id else zone_id
-        
+
         if self._page_filter == 'none':
             # Per-page mode: get from per_page_zones
             if page_idx in self._per_page_zones:
                 return self._per_page_zones[page_idx].get(base_id)
-        
-        # Sync mode: get from zone definitions
+
+        # Sync mode: get from zone definitions (fallback to percentage format)
         for zdef in self._zone_definitions:
             if zdef.id == base_id:
                 return (zdef.x, zdef.y, zdef.width, zdef.height)
@@ -831,10 +862,10 @@ class ContinuousPreviewPanel(QFrame):
         if hasattr(self, '_protected_region_items'):
             self._protected_region_items.clear()
         # Reset cursor on both view and viewport
-        self.view.setCursor(Qt.ArrowCursor)
-        self.view.viewport().setCursor(Qt.ArrowCursor)
-        # Restore drag mode
-        self.view.setDragMode(QGraphicsView.ScrollHandDrag)
+        self.view.unsetCursor()
+        self.view.viewport().unsetCursor()
+        # Use NoDrag to allow zone items to show their cursors
+        self.view.setDragMode(QGraphicsView.NoDrag)
         
         if not self._pages:
             # Show placeholder only for before panel (show_overlay=True)
@@ -1288,29 +1319,17 @@ class ContinuousPreviewPanel(QFrame):
             if page_idx not in self._per_page_zones:
                 self._per_page_zones[page_idx] = {}
 
-        # Build zone data map for comparison
-        zone_data_map = {z.id: (z.x, z.y, z.width, z.height) for z in zones if z.enabled}
-
         # Add new zones to pages based on filter
         for zone in zones:
             if zone.id in newly_added and zone.enabled:
-                zone_data = (zone.x, zone.y, zone.width, zone.height)
                 pages_to_add = self._get_pages_for_filter()
                 for page_idx in pages_to_add:
+                    # Calculate zone_data based on size_mode and page dimensions
+                    zone_data = self._calculate_initial_zone_data(zone, page_idx)
                     self._per_page_zones[page_idx][zone.id] = zone_data
 
-        # Update existing zones if their data changed (for reset functionality)
-        # Only update zones that exist and have different values
-        existing_zones = new_zone_ids & old_zone_ids
-        for zone_id in existing_zones:
-            new_data = zone_data_map.get(zone_id)
-            if new_data:
-                pages_to_update = self._get_pages_for_filter()
-                for page_idx in pages_to_update:
-                    if page_idx in self._per_page_zones and zone_id in self._per_page_zones[page_idx]:
-                        old_data = self._per_page_zones[page_idx][zone_id]
-                        if old_data != new_data:
-                            self._per_page_zones[page_idx][zone_id] = new_data
+        # NOTE: Do NOT update existing zones here - user modifications must be preserved
+        # User can reset a zone by disabling and re-enabling it
 
         # Remove disabled zones from ALL pages (global removal)
         for zone_id in newly_removed:
@@ -1324,6 +1343,45 @@ class ContinuousPreviewPanel(QFrame):
                 self._recreate_zone_overlays_single()
             else:
                 self._recreate_zone_overlays()
+
+    def _calculate_initial_zone_data(self, zone: Zone, page_idx: int) -> tuple:
+        """Calculate initial zone data based on zone type.
+
+        Storage formats (detected by zone_id prefix):
+        - corner_*: (w_px, h_px) - 2 elements, position calculated from corner type
+        - margin_*: (length_pct, depth_px) - 2 elements, hybrid storage
+        - custom_*/protect_*: (x_pct, y_pct, w_pct, h_pct) - 4 elements, full percentage
+
+        Args:
+            zone: Zone definition
+            page_idx: Index of the page
+
+        Returns:
+            tuple: Format depends on zone type
+        """
+        zone_id = zone.id.lower()
+
+        if zone_id.startswith('corner_'):
+            # Corners: store pixel size only (w_px, h_px)
+            w_px = zone.width_px if zone.width_px > 0 else 100  # default 100px
+            h_px = zone.height_px if zone.height_px > 0 else 150  # default 150px
+            return (w_px, h_px)
+
+        elif zone_id.startswith('margin_'):
+            # Edges: store (length_pct, depth_px)
+            # length_pct: percentage along edge (default 100% = 1.0)
+            # depth_px: fixed pixel depth into page
+            if zone_id in ('margin_top', 'margin_bottom'):
+                length_pct = zone.width if zone.width > 0 else 1.0  # width is the "length" for top/bottom
+                depth_px = zone.height_px if zone.height_px > 0 else 100
+            else:  # margin_left, margin_right
+                length_pct = zone.height if zone.height > 0 else 1.0  # height is the "length" for left/right
+                depth_px = zone.width_px if zone.width_px > 0 else 100
+            return (length_pct, depth_px)
+
+        else:
+            # Custom/protect zones: store (x_pct, y_pct, w_pct, h_pct)
+            return (zone.x, zone.y, zone.width, zone.height)
 
     def _get_pages_for_filter(self) -> List[int]:
         """Get list of page indices based on current filter"""
@@ -1351,19 +1409,65 @@ class ContinuousPreviewPanel(QFrame):
 
     def _calculate_zone_pixels(self, zone_def: Optional[Zone], zone_coords: tuple,
                                img_w: int, img_h: int) -> tuple:
-        """Calculate zone pixel coordinates based on size_mode.
+        """Calculate zone pixel coordinates from stored zone_coords.
+
+        Handles different storage formats:
+        - corner_*: (w_px, h_px) - 2 elements
+        - margin_*: (length_pct, depth_px) - 2 elements
+        - custom_*/protect_*: (x_pct, y_pct, w_pct, h_pct) - 4 elements
 
         Returns: (x, y, w, h) in pixels
         """
-        if zone_def and zone_def.size_mode in ('fixed', 'hybrid'):
-            return zone_def.to_pixels(img_w, img_h)
-        # Default: percent mode
-        return (
-            zone_coords[0] * img_w,
-            zone_coords[1] * img_h,
-            zone_coords[2] * img_w,
-            zone_coords[3] * img_h
-        )
+        zone_id = zone_def.id.lower() if zone_def else ''
+
+        if zone_id.startswith('corner_') and len(zone_coords) == 2:
+            # Corner: (w_px, h_px) - position calculated from corner type
+            w_px, h_px = zone_coords
+            if 'corner_tl' in zone_id:
+                return (0, 0, w_px, h_px)
+            elif 'corner_tr' in zone_id:
+                return (img_w - w_px, 0, w_px, h_px)
+            elif 'corner_bl' in zone_id:
+                return (0, img_h - h_px, w_px, h_px)
+            elif 'corner_br' in zone_id:
+                return (img_w - w_px, img_h - h_px, w_px, h_px)
+            else:
+                return (0, 0, w_px, h_px)
+
+        elif zone_id.startswith('margin_') and len(zone_coords) == 2:
+            # Edge: (length_pct, depth_px)
+            length_pct, depth_px = zone_coords
+            if zone_id == 'margin_top':
+                # Top: width=length%, height=depth_px, at top
+                w = int(length_pct * img_w)
+                x = (img_w - w) // 2  # center if not 100%
+                return (x, 0, w, depth_px)
+            elif zone_id == 'margin_bottom':
+                # Bottom: width=length%, height=depth_px, at bottom
+                w = int(length_pct * img_w)
+                x = (img_w - w) // 2
+                return (x, img_h - depth_px, w, depth_px)
+            elif zone_id == 'margin_left':
+                # Left: width=depth_px, height=length%, at left
+                h = int(length_pct * img_h)
+                y = (img_h - h) // 2
+                return (0, y, depth_px, h)
+            elif zone_id == 'margin_right':
+                # Right: width=depth_px, height=length%, at right
+                h = int(length_pct * img_h)
+                y = (img_h - h) // 2
+                return (img_w - depth_px, y, depth_px, h)
+            else:
+                return (0, 0, int(length_pct * img_w), depth_px)
+
+        else:
+            # Custom/protect or legacy format: (x_pct, y_pct, w_pct, h_pct)
+            return (
+                zone_coords[0] * img_w,
+                zone_coords[1] * img_h,
+                zone_coords[2] * img_w,
+                zone_coords[3] * img_h
+            )
 
     def _create_zone_overlay_item(self, zone_id: str, zone_def: Optional[Zone],
                                    rect: QRectF, page_idx: int,
@@ -1446,46 +1550,87 @@ class ContinuousPreviewPanel(QFrame):
         parts = zone_id.rsplit('_', 1)
         base_id = parts[0]
         page_idx = int(parts[1]) if len(parts) > 1 else 0
-        
+
         # Find the changed zone item
         changed_zone = None
         for zone_item in self._zones:
             if zone_item.zone_id == zone_id:
                 changed_zone = zone_item
                 break
-        
+
         if not changed_zone or page_idx >= len(self._page_items):
             self.zone_changed.emit(zone_id)
             return
-        
-        # Get the new rect as percentages
+
+        # Get page dimensions and zone pixel rect
         page_rect = self._page_items[page_idx].boundingRect()
-        new_rect = changed_zone.get_normalized_rect(
-            int(page_rect.width()), 
-            int(page_rect.height())
-        )
-        
+        img_w, img_h = int(page_rect.width()), int(page_rect.height())
+        zone_rect = changed_zone.rect()
+
+        # Convert to correct storage format based on zone type
+        zone_data = self._pixel_rect_to_zone_data(base_id, zone_rect, img_w, img_h)
+
         if self._page_filter != 'none':
-            # Sync mode: update zone_definitions and sync to all pages
-            for zdef in self._zone_definitions:
-                if zdef.id == base_id:
-                    zdef.x, zdef.y, zdef.width, zdef.height = new_rect
-                    break
-            
-            # Sync to all other zone items with same base_id
-            self._sync_zone_to_pages(base_id, new_rect)
+            # Sync mode: sync to all pages
+            self._sync_zone_to_pages(base_id, zone_data)
         else:
             # Per-page mode: store independently
             if page_idx not in self._per_page_zones:
                 self._per_page_zones[page_idx] = {}
-            self._per_page_zones[page_idx][base_id] = new_rect
-        
+            self._per_page_zones[page_idx][base_id] = zone_data
+
         self.zone_changed.emit(zone_id)
-    
-    def _sync_zone_to_pages(self, base_id: str, rect: tuple):
-        """Sync zone rect to all pages with same zone"""
-        x, y, w, h = rect
-        
+
+    def _pixel_rect_to_zone_data(self, zone_id: str, rect: QRectF, img_w: int, img_h: int) -> tuple:
+        """Convert pixel rect from ZoneItem to correct storage format.
+
+        Args:
+            zone_id: Zone ID (e.g., 'corner_tl', 'margin_top', 'custom_1')
+            rect: QRectF with pixel coordinates
+            img_w, img_h: Page dimensions in pixels
+
+        Returns:
+            tuple: Correct format for storage
+        """
+        zone_id_lower = zone_id.lower()
+
+        if zone_id_lower.startswith('corner_'):
+            # Corners: store (w_px, h_px) only
+            return (int(rect.width()), int(rect.height()))
+
+        elif zone_id_lower.startswith('margin_'):
+            # Edges: store (length_pct, depth_px)
+            if zone_id_lower in ('margin_top', 'margin_bottom'):
+                # length = width (%), depth = height (px)
+                length_pct = rect.width() / img_w
+                depth_px = int(rect.height())
+                return (length_pct, depth_px)
+            else:  # margin_left, margin_right
+                # length = height (%), depth = width (px)
+                length_pct = rect.height() / img_h
+                depth_px = int(rect.width())
+                return (length_pct, depth_px)
+
+        else:
+            # Custom/protect: store (x_pct, y_pct, w_pct, h_pct)
+            return (
+                rect.x() / img_w,
+                rect.y() / img_h,
+                rect.width() / img_w,
+                rect.height() / img_h
+            )
+
+    def _sync_zone_to_pages(self, base_id: str, zone_data: tuple):
+        """Sync zone data to all pages with same zone"""
+        # Update _per_page_zones for ALL pages
+        for page_idx in self._per_page_zones:
+            if base_id in self._per_page_zones[page_idx]:
+                self._per_page_zones[page_idx][base_id] = zone_data
+
+        # Find zone_def for calculating pixels
+        zone_def = self._find_zone_def(base_id)
+
+        # Update visual zone items
         for zone_item in self._zones:
             zone_base_id = zone_item.zone_id.rsplit('_', 1)[0]
             if zone_base_id == base_id:
@@ -1493,13 +1638,12 @@ class ContinuousPreviewPanel(QFrame):
                 page_idx = int(zone_item.zone_id.rsplit('_', 1)[1])
                 if page_idx < len(self._page_items):
                     page_rect = self._page_items[page_idx].boundingRect()
-                    # Convert percentages to pixels for this page
-                    new_pixel_rect = QRectF(
-                        x * page_rect.width(),
-                        y * page_rect.height(),
-                        w * page_rect.width(),
-                        h * page_rect.height()
-                    )
+                    img_w, img_h = int(page_rect.width()), int(page_rect.height())
+
+                    # Calculate pixel rect using the correct method
+                    zx, zy, zw, zh = self._calculate_zone_pixels(zone_def, zone_data, img_w, img_h)
+                    new_pixel_rect = QRectF(zx, zy, zw, zh)
+
                     # Update zone item rect (without triggering signal again)
                     zone_item.signals.blockSignals(True)
                     zone_item.setRect(new_pixel_rect)
@@ -1624,8 +1768,6 @@ class ContinuousPreviewPanel(QFrame):
         Args:
             mode: None (off), 'remove' (blue), or 'protect' (pink)
         """
-        print(f"[DrawMode] set_draw_mode called: mode={mode}")
-
         # If turning off, always allow
         if mode is None:
             self.view.set_draw_mode(None, None, None)
@@ -1633,7 +1775,6 @@ class ContinuousPreviewPanel(QFrame):
 
         # Need pages loaded to enable draw mode
         if not self._pages or not self._page_items:
-            print(f"[DrawMode] No pages loaded: _pages={len(self._pages) if self._pages else 0}, _page_items={len(self._page_items) if self._page_items else 0}")
             return
 
         # Get all page bounds for accurate page detection
@@ -1645,21 +1786,15 @@ class ContinuousPreviewPanel(QFrame):
 
         # Get current page bounds as fallback
         page_bounds = None
-        print(f"[DrawMode] view_mode={self._view_mode}, current_page={self._current_page}, page_items={len(self._page_items)}")
 
         if self._view_mode == 'single' and self._page_items:
             page_bounds = all_page_bounds[0] if all_page_bounds else None
         elif self._view_mode == 'continuous' and self._current_page < len(all_page_bounds):
             page_bounds = all_page_bounds[self._current_page]
 
-        print(f"[DrawMode] page_bounds={page_bounds}, all_page_bounds count={len(all_page_bounds)}")
-
         # Only enable if we have valid page bounds
         if page_bounds and page_bounds[2] > 0 and page_bounds[3] > 0:
-            print(f"[DrawMode] Enabling draw mode on view")
             self.view.set_draw_mode(mode, page_bounds, all_page_bounds)
-        else:
-            print(f"[DrawMode] Invalid page_bounds, not enabling")
 
     def _on_rect_drawn(self, x: float, y: float, w: float, h: float, mode: str):
         """Forward rect_drawn signal - keep draw mode active for continuous drawing"""
@@ -1860,7 +1995,7 @@ class ContinuousPreviewWidget(QWidget):
     def resizeEvent(self, event):
         """Resize loading overlay and scale content proportionally"""
         super().resizeEvent(event)
-        self._loading_overlay.setGeometry(self.rect())
+        self._update_loading_overlay_geometry()
 
         # Reposition expand button if visible
         if self._after_panel_collapsed and self._expand_btn.isVisible():
@@ -1878,9 +2013,16 @@ class ContinuousPreviewWidget(QWidget):
             new_zoom = max(0.1, min(5.0, new_zoom))
             QTimer.singleShot(10, lambda: self.set_zoom(new_zoom))
 
+    def _update_loading_overlay_geometry(self):
+        """Position loading overlay centered on before_panel (Gốc)"""
+        # Map before_panel position to this widget's coordinates
+        pos = self.before_panel.mapTo(self, self.before_panel.rect().topLeft())
+        size = self.before_panel.size()
+        self._loading_overlay.setGeometry(pos.x(), pos.y(), size.width(), size.height())
+
     def _show_loading(self):
-        """Show loading overlay"""
-        self._loading_overlay.setGeometry(self.rect())
+        """Show loading overlay centered on before_panel"""
+        self._update_loading_overlay_geometry()
         self._loading_overlay.show()
         self._loading_overlay.raise_()
         # Force repaint
@@ -2176,7 +2318,10 @@ class ContinuousPreviewWidget(QWidget):
         """Get zones for a specific page from per_page_zones
 
         Returns only zones that exist in per_page_zones[page_idx].
-        Each page has its own set of zones (like layers).
+        Handles different storage formats:
+        - corner_*: (w_px, h_px) -> Zone with size_mode='fixed'
+        - margin_*: (length_pct, depth_px) -> Zone with size_mode='hybrid'
+        - custom_*/protect_*: (x_pct, y_pct, w_pct, h_pct) -> Zone with size_mode='percent'
         """
         from core.processor import Zone
 
@@ -2186,7 +2331,7 @@ class ContinuousPreviewWidget(QWidget):
         if page_idx not in per_page_zones:
             return []
 
-        for zone_id, zone_coords in per_page_zones[page_idx].items():
+        for zone_id, zone_data in per_page_zones[page_idx].items():
             # Find zone_def for this zone_id to get threshold and other properties
             zone_def = None
             for z in self._zones:
@@ -2197,21 +2342,92 @@ class ContinuousPreviewWidget(QWidget):
             if zone_def and not zone_def.enabled:
                 continue  # Skip disabled zones
 
-            # Create zone with page-specific coordinates
-            page_zone = Zone(
-                id=zone_id,
-                name=zone_def.name if zone_def else zone_id,
-                x=zone_coords[0],
-                y=zone_coords[1],
-                width=zone_coords[2],
-                height=zone_coords[3],
-                threshold=zone_def.threshold if zone_def else 7,
-                enabled=True,
-                zone_type=getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove'
-            )
+            zone_id_lower = zone_id.lower()
+
+            if zone_id_lower.startswith('corner_') and len(zone_data) == 2:
+                # Corner: (w_px, h_px) -> size_mode='fixed'
+                w_px, h_px = zone_data
+                page_zone = Zone(
+                    id=zone_id,
+                    name=zone_def.name if zone_def else zone_id,
+                    x=0.0, y=0.0,  # Position calculated by to_pixels()
+                    width=0.12, height=0.12,  # Fallback values
+                    threshold=zone_def.threshold if zone_def else 7,
+                    enabled=True,
+                    zone_type=getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove',
+                    size_mode='fixed',
+                    width_px=w_px,
+                    height_px=h_px
+                )
+
+            elif zone_id_lower.startswith('margin_') and len(zone_data) == 2:
+                # Edge: (length_pct, depth_px) -> size_mode='hybrid'
+                length_pct, depth_px = zone_data
+                if zone_id_lower in ('margin_top', 'margin_bottom'):
+                    # width=length_pct, height_px=depth_px
+                    page_zone = Zone(
+                        id=zone_id,
+                        name=zone_def.name if zone_def else zone_id,
+                        x=0.0, y=0.0,
+                        width=length_pct, height=0.08,  # height is fallback
+                        threshold=zone_def.threshold if zone_def else 7,
+                        enabled=True,
+                        zone_type=getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove',
+                        size_mode='hybrid',
+                        width_px=0,
+                        height_px=depth_px
+                    )
+                else:  # margin_left, margin_right
+                    # height=length_pct, width_px=depth_px
+                    page_zone = Zone(
+                        id=zone_id,
+                        name=zone_def.name if zone_def else zone_id,
+                        x=0.0, y=0.0,
+                        width=0.08, height=length_pct,  # width is fallback
+                        threshold=zone_def.threshold if zone_def else 7,
+                        enabled=True,
+                        zone_type=getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove',
+                        size_mode='hybrid',
+                        width_px=depth_px,
+                        height_px=0
+                    )
+
+            else:
+                # Custom/protect or legacy format: (x_pct, y_pct, w_pct, h_pct)
+                page_zone = Zone(
+                    id=zone_id,
+                    name=zone_def.name if zone_def else zone_id,
+                    x=zone_data[0],
+                    y=zone_data[1],
+                    width=zone_data[2],
+                    height=zone_data[3],
+                    threshold=zone_def.threshold if zone_def else 7,
+                    enabled=True,
+                    zone_type=getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove',
+                    size_mode='percent'
+                )
+
             page_zones.append(page_zone)
 
         return page_zones
+
+    def get_zones_for_processing(self) -> List[Zone]:
+        """Get zones with user-modified coordinates for Clean process.
+
+        Returns zones from page 0 (or first available page) since in sync mode
+        all pages share the same zone coordinates after user modifications.
+        This ensures Clean uses the exact same zones shown in preview Đích.
+        """
+        per_page_zones = self.before_panel._per_page_zones
+
+        # Find first page with zones
+        for page_idx in sorted(per_page_zones.keys()):
+            zones = self._get_zones_for_page(page_idx)
+            if zones:
+                return zones
+
+        # Fallback: return zones from _zones (definitions)
+        return [z for z in self._zones if z.enabled]
     
     def _sync_zoom(self, zoom: float):
         """Sync zoom"""
@@ -2498,7 +2714,6 @@ class ContinuousPreviewWidget(QWidget):
         Args:
             mode: None (off), 'remove' (blue), or 'protect' (pink)
         """
-        print(f"[DrawMode] ContinuousPreviewWidget.set_draw_mode: mode={mode}")
         self.before_panel.set_draw_mode(mode)
 
     def _on_rect_drawn(self, x: float, y: float, w: float, h: float, mode: str):

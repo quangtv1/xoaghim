@@ -36,7 +36,7 @@ EXTENDED_PRESET_ZONES = {
         id='margin_top',
         name='Viền trên',
         x=0.0, y=0.0,
-        width=0.3, height=0.05,  # 30% width, fallback height
+        width=1.0, height=0.05,  # 100% width + overflow, fallback height
         threshold=5,
         size_mode='hybrid',
         width_px=0,  # Use % for width (along edge)
@@ -46,7 +46,7 @@ EXTENDED_PRESET_ZONES = {
         id='margin_bottom',
         name='Viền dưới',
         x=0.0, y=0.95,
-        width=0.3, height=0.05,
+        width=1.0, height=0.05,  # 100% width + overflow
         threshold=5,
         size_mode='hybrid',
         width_px=0,
@@ -962,7 +962,6 @@ class SettingsPanel(QWidget):
     
     def _on_draw_mode_changed(self, mode):
         """Forward draw mode signal to MainWindow (mode: 'remove', 'protect', or None)"""
-        print(f"[DrawMode] SettingsPanel._on_draw_mode_changed: mode={mode}")
         self.draw_mode_changed.emit(mode)
 
     def add_custom_zone_from_rect(self, x: float, y: float, width: float, height: float, zone_type: str = 'remove'):
@@ -972,7 +971,6 @@ class SettingsPanel(QWidget):
             x, y, width, height: Zone coordinates as percentages (0.0-1.0)
             zone_type: 'remove' for removal zone, 'protect' for protection zone
         """
-        print(f"[DrawMode] add_custom_zone_from_rect: x={x:.3f}, y={y:.3f}, w={width:.3f}, h={height:.3f}, type={zone_type}")
         self._custom_zone_counter += 1
 
         if zone_type == 'protect':

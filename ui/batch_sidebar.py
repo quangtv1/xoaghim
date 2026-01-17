@@ -224,6 +224,10 @@ class SidebarFileList(QListWidget):
         total = len(self._files)
         return (checked, total)
 
+    def get_page_counts(self) -> Dict[str, int]:
+        """Return dict of {file_path: page_count}"""
+        return self._page_counts.copy()
+
     def check_all(self):
         """Check all visible items"""
         self.blockSignals(True)
@@ -560,6 +564,14 @@ class BatchSidebar(QFrame):
     def get_checked_files(self) -> List[str]:
         """Get list of checked files"""
         return self._file_list.get_checked_files()
+
+    def get_file_count(self) -> tuple:
+        """Return (checked_count, total_count)"""
+        return self._file_list.get_file_count()
+
+    def get_page_counts(self) -> Dict[str, int]:
+        """Return dict of {file_path: page_count}"""
+        return self._file_list.get_page_counts()
 
     def select_by_original_index(self, original_idx: int):
         """Select file by original index"""

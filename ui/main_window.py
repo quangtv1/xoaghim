@@ -172,20 +172,24 @@ class ProcessThread(QThread):
 
 class BatchProcessThread(QThread):
     """Thread xử lý batch PDF"""
-    
+
     progress = pyqtSignal(int, int, str)  # current_file, total_files, current_filename
-    file_progress = pyqtSignal(int, int)  # current_page, total_pages
+    file_progress = pyqtSignal(int, int)  # current_page, total_pages_in_file
+    total_progress = pyqtSignal(int, int)  # pages_processed, total_pages_all_files
     finished = pyqtSignal(bool, dict)  # success, stats {total, success, failed, errors}
-    
-    def __init__(self, files: List[str], base_dir: str, output_dir: str, 
-                 zones: List[Zone], settings: dict):
+
+    def __init__(self, files: List[str], base_dir: str, output_dir: str,
+                 zones: List[Zone], settings: dict, page_counts: dict = None):
         super().__init__()
         self.files = files
         self.base_dir = base_dir
         self.output_dir = output_dir
         self.zones = zones
         self.settings = settings
+        self.page_counts = page_counts or {}  # {file_path: page_count}
         self._cancelled = False
+        self._pages_processed = 0
+        self._total_pages = sum(self.page_counts.get(f, 0) for f in files)
     
     def run(self):
         stats = {
@@ -237,9 +241,15 @@ class BatchProcessThread(QThread):
                         print(f"{file_idx}/{total_files}: {pdf_path} >> Trang {page_num}")
                         return processor.process_image(image, zones_list)
 
+                    # Track pages for total progress
+                    file_pages_before = self._pages_processed
+
                     def page_progress(current, total):
                         if not self._cancelled:
                             self.file_progress.emit(current, total)
+                            # Emit total progress (pages across all files)
+                            pages_done = file_pages_before + current
+                            self.total_progress.emit(pages_done, self._total_pages)
 
                     success = PDFExporter.export(
                         input_path,
@@ -250,6 +260,9 @@ class BatchProcessThread(QThread):
                         optimize_size=self.settings.get('optimize_size', False),
                         progress_callback=page_progress
                     )
+
+                    # Update pages processed for next file
+                    self._pages_processed += self.page_counts.get(input_path, 0)
 
                     # Log elapsed time after each file
                     elapsed = int(time.time() - start_time)
@@ -306,7 +319,7 @@ class MainWindow(QMainWindow):
         self._batch_base_dir = ""
         self._batch_output_dir = ""
         self._batch_files: List[str] = []
-        self._last_dir = ""  # Remember last opened folder
+        self._last_dir = self._get_default_folder_dir()  # Remember last opened folder
         self._user_zoomed = False  # Track if user has manually zoomed
         self._current_draw_mode = None  # Track current draw mode for cancel logic
 
@@ -1240,7 +1253,10 @@ class MainWindow(QMainWindow):
             "PDF Files (*.pdf);;All Files (*)"
         )
         if file_path:
-            self._last_dir = str(Path(file_path).parent)
+            # Save file's directory for next time
+            file_dir = str(Path(file_path).parent)
+            self._last_dir = file_dir
+            self._save_last_folder_dir(file_dir)
             self._load_pdf(file_path)
     
     def _on_file_dropped(self, file_path: str):
@@ -1322,7 +1338,10 @@ class MainWindow(QMainWindow):
             self, "Chọn thư mục chứa file PDF", self._last_dir
         )
         if folder_path:
-            self._last_dir = folder_path
+            # Save parent directory for next time
+            parent_dir = os.path.dirname(folder_path)
+            self._last_dir = parent_dir
+            self._save_last_folder_dir(parent_dir)
             self._load_folder(folder_path)
     
     def _load_folder(self, folder_path: str):
@@ -1438,6 +1457,13 @@ class MainWindow(QMainWindow):
         # Sync search box width with sidebar
         if not self.batch_sidebar.is_collapsed():
             self.compact_toolbar.set_search_width(sidebar_width)
+            # Update saved sidebar width for persistence
+            self._saved_sidebar_width = sidebar_width
+            # Save to config immediately
+            from core.config_manager import get_config_manager
+            ui_config = get_config_manager().get_ui_config()
+            ui_config['sidebar_width'] = sidebar_width
+            get_config_manager().save_ui_config(ui_config)
 
     def _on_prev_file(self):
         """Navigate to previous file in batch mode"""
@@ -1488,6 +1514,10 @@ class MainWindow(QMainWindow):
         self._current_file_path = None
         self._all_pages = []
         
+        # Clear draw mode (remove override cursor)
+        self.preview.set_draw_mode(None)
+        self.settings_panel.set_draw_mode(None)
+
         # Clear preview
         self.preview.set_pages([])
         self.preview.clear_file_paths()
@@ -1578,10 +1608,16 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Lỗi", f"Không thể mở file:\n{e}")
     
     def _fit_first_page_width(self):
-        """Fit chiều rộng trang đầu và scroll đến trang đầu - được gọi sau khi layout cập nhật"""
+        """Apply saved zoom or fit width for first page - called after layout update"""
         if self._all_pages:
-            # scroll_to_page=True để scroll đến trang đầu tiên
-            self.preview.zoom_fit_width(0, scroll_to_page=True)
+            # Use saved zoom if available, otherwise fit to width
+            if hasattr(self, '_saved_zoom_percent') and self._saved_zoom_percent > 0:
+                zoom = self._saved_zoom_percent / 100.0
+                self.preview.set_zoom(zoom)
+                self._user_zoomed = True  # Preserve this zoom for subsequent files
+            else:
+                # scroll_to_page=True để scroll đến trang đầu tiên
+                self.preview.zoom_fit_width(0, scroll_to_page=True)
             self._update_zoom_combo()
             # Mark first file processed - subsequent files preserve zoom
             self._is_first_file_in_batch = False
@@ -1695,6 +1731,12 @@ class MainWindow(QMainWindow):
             if 0.1 <= zoom <= 5.0:
                 self._user_zoomed = True  # Track manual zoom
                 self.preview.set_zoom(zoom)
+                self._saved_zoom_percent = int(zoom * 100)
+                # Save to config immediately
+                from core.config_manager import get_config_manager
+                ui_config = get_config_manager().get_ui_config()
+                ui_config['last_zoom_percent'] = self._saved_zoom_percent
+                get_config_manager().save_ui_config(ui_config)
         except:
             pass
     
@@ -1704,6 +1746,13 @@ class MainWindow(QMainWindow):
             self.zoom_combo.blockSignals(True)
             self.zoom_combo.setCurrentText(f"{int(zoom * 100)}%")
             self.zoom_combo.blockSignals(False)
+            # Update saved zoom for persistence when opening new files
+            self._saved_zoom_percent = int(zoom * 100)
+            # Save to config immediately
+            from core.config_manager import get_config_manager
+            ui_config = get_config_manager().get_ui_config()
+            ui_config['last_zoom_percent'] = self._saved_zoom_percent
+            get_config_manager().save_ui_config(ui_config)
         except:
             pass
     
@@ -1719,7 +1768,6 @@ class MainWindow(QMainWindow):
 
     def _on_draw_mode_changed(self, mode):
         """Handle draw mode toggle from settings panel (mode: 'remove', 'protect', or None)"""
-        print(f"[DrawMode] MainWindow._on_draw_mode_changed: mode={mode}")
         self._current_draw_mode = mode
         self.preview.set_draw_mode(mode)
 
@@ -1802,7 +1850,8 @@ class MainWindow(QMainWindow):
             if not self._show_overwrite_dialog(output_path):
                 return
 
-        zones = self.settings_panel.get_zones()
+        # Get zones from preview (with user-modified coordinates)
+        zones = self.preview.get_zones_for_processing()
 
         # Show progress dialog like batch mode
         self._show_single_progress_dialog(
@@ -1855,9 +1904,15 @@ class MainWindow(QMainWindow):
         if existing_files:
             if not self._show_batch_overwrite_dialog(len(existing_files)):
                 return
-        
-        zones = self.settings_panel.get_zones()
-        
+
+        # Show confirmation dialog with file counts
+        checked_count, total_count = self.batch_sidebar.get_file_count()
+        if not self._show_batch_confirm_dialog(checked_count, total_count):
+            return
+
+        # Get zones from preview (with user-modified coordinates)
+        zones = self.preview.get_zones_for_processing()
+
         # Show batch progress dialog
         self._show_batch_progress_dialog(checked_files, output_dir, zones, settings)
     
@@ -2044,25 +2099,14 @@ class MainWindow(QMainWindow):
         dialog.setWindowTitle("Hoàn thành")
         dialog.setMinimumSize(450, 200)
         dialog.setStyleSheet("""
-            QDialog {
-                background-color: white;
-            }
-            QLabel {
-                font-size: 13px;
-                font-weight: normal;
-            }
+            QDialog { background-color: white; }
+            QLabel { font-size: 13px; font-weight: normal; }
             QPushButton {
-                padding: 8px 16px;
-                border-radius: 4px;
-                font-size: 13px;
-                min-width: 80px;
-                background-color: #E5E7EB;
-                color: #374151;
-                border: 1px solid #D1D5DB;
+                padding: 8px 16px; border-radius: 4px; font-size: 13px;
+                min-width: 80px; background-color: #E5E7EB;
+                color: #374151; border: 1px solid #D1D5DB;
             }
-            QPushButton:hover {
-                background-color: #D1D5DB;
-            }
+            QPushButton:hover { background-color: #3B82F6; color: white; border: none; }
         """)
 
         layout = QVBoxLayout(dialog)
@@ -2111,25 +2155,14 @@ class MainWindow(QMainWindow):
         dialog.setWindowTitle("Xác nhận")
         dialog.setMinimumSize(450, 180)
         dialog.setStyleSheet("""
-            QDialog {
-                background-color: white;
-            }
-            QLabel {
-                font-size: 13px;
-                font-weight: normal;
-            }
+            QDialog { background-color: white; }
+            QLabel { font-size: 13px; font-weight: normal; }
             QPushButton {
-                padding: 8px 16px;
-                border-radius: 4px;
-                font-size: 13px;
-                min-width: 80px;
-                background-color: #E5E7EB;
-                color: #374151;
-                border: 1px solid #D1D5DB;
+                padding: 8px 16px; border-radius: 4px; font-size: 13px;
+                min-width: 80px; background-color: #E5E7EB;
+                color: #374151; border: 1px solid #D1D5DB;
             }
-            QPushButton:hover {
-                background-color: #D1D5DB;
-            }
+            QPushButton:hover { background-color: #3B82F6; color: white; border: none; }
         """)
         
         layout = QVBoxLayout(dialog)
@@ -2173,7 +2206,7 @@ class MainWindow(QMainWindow):
                 min-width: 80px; background-color: #E5E7EB;
                 color: #374151; border: 1px solid #D1D5DB;
             }
-            QPushButton:hover { background-color: #D1D5DB; }
+            QPushButton:hover { background-color: #3B82F6; color: white; border: none; }
         """)
         
         layout = QVBoxLayout(dialog)
@@ -2199,9 +2232,54 @@ class MainWindow(QMainWindow):
         btn_layout.addWidget(yes_btn)
         
         layout.addLayout(btn_layout)
-        
+
         return dialog.exec_() == QDialog.Accepted
-    
+
+    def _show_batch_confirm_dialog(self, checked_count: int, total_count: int) -> bool:
+        """Show batch confirmation dialog with file counts"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Xác nhận")
+        dialog.setMinimumSize(400, 150)
+        dialog.setStyleSheet("""
+            QDialog { background-color: white; }
+            QLabel { font-size: 13px; font-weight: normal; }
+            QPushButton {
+                padding: 8px 16px; border-radius: 4px; font-size: 13px;
+                min-width: 80px; background-color: #E5E7EB;
+                color: #374151; border: 1px solid #D1D5DB;
+            }
+            QPushButton:hover { background-color: #D1D5DB; }
+            QPushButton#confirm_btn { background-color: #3B82F6; color: white; border: none; }
+            QPushButton#confirm_btn:hover { background-color: #2563EB; }
+        """)
+
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
+
+        msg_label = QLabel(f"Xử lý {checked_count} / {total_count} file?\n\nBạn có muốn tiếp tục?")
+        msg_label.setWordWrap(True)
+        layout.addWidget(msg_label)
+
+        layout.addStretch()
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(12)
+        btn_layout.addStretch()
+
+        cancel_btn = QPushButton("Hủy")
+        cancel_btn.clicked.connect(dialog.reject)
+        btn_layout.addWidget(cancel_btn)
+
+        confirm_btn = QPushButton("Xác nhận")
+        confirm_btn.setObjectName("confirm_btn")
+        confirm_btn.clicked.connect(dialog.accept)
+        btn_layout.addWidget(confirm_btn)
+
+        layout.addLayout(btn_layout)
+
+        return dialog.exec_() == QDialog.Accepted
+
     def _show_batch_progress_dialog(self, files: List[str], output_dir: str,
                                     zones: List[Zone], settings: dict):
         """Show batch processing progress dialog"""
@@ -2227,8 +2305,13 @@ class MainWindow(QMainWindow):
                 min-width: 80px; background-color: #E5E7EB;
                 color: #374151; border: 1px solid #D1D5DB;
             }
-            QPushButton:hover { background-color: #D1D5DB; }
+            QPushButton:hover { background-color: #EF4444; color: white; border: none; }
         """)
+
+        # Get page counts for accurate progress
+        self._batch_page_counts = self.batch_sidebar.get_page_counts()
+        self._batch_total_pages = sum(self._batch_page_counts.get(f, 0) for f in files)
+        self._batch_total_files = len(files)
 
         layout = QVBoxLayout(self._batch_dialog)
         layout.setSpacing(12)
@@ -2238,14 +2321,19 @@ class MainWindow(QMainWindow):
         self._batch_file_label = QLabel("Đang chuẩn bị...")
         layout.addWidget(self._batch_file_label)
 
-        # Progress bar
+        # Page progress label
+        self._batch_page_label = QLabel("")
+        self._batch_page_label.setStyleSheet("color: #6B7280; font-size: 12px;")
+        layout.addWidget(self._batch_page_label)
+
+        # Progress bar (based on total pages)
         self._batch_progress = QProgressBar()
-        self._batch_progress.setMaximum(len(files))
+        self._batch_progress.setMaximum(self._batch_total_pages if self._batch_total_pages > 0 else 100)
         self._batch_progress.setValue(0)
         layout.addWidget(self._batch_progress)
 
         # Stats label
-        self._batch_stats_label = QLabel(f"0/{len(files)} files")
+        self._batch_stats_label = QLabel(f"0/{self._batch_total_files} files (0/{self._batch_total_pages} trang)")
         layout.addWidget(self._batch_stats_label)
 
         # Timer label
@@ -2272,9 +2360,11 @@ class MainWindow(QMainWindow):
 
         # Start batch processing
         self._batch_process_thread = BatchProcessThread(
-            files, self._batch_base_dir, output_dir, zones, settings
+            files, self._batch_base_dir, output_dir, zones, settings, self._batch_page_counts
         )
         self._batch_process_thread.progress.connect(self._on_batch_progress)
+        self._batch_process_thread.file_progress.connect(self._on_batch_page_progress)
+        self._batch_process_thread.total_progress.connect(self._on_batch_total_progress)
         self._batch_process_thread.finished.connect(self._on_batch_finished)
 
         self._batch_process_thread.start()
@@ -2287,10 +2377,22 @@ class MainWindow(QMainWindow):
         self._batch_time_label.setText(f"Thời gian: {h:02d}:{m:02d}:{s:02d}")
     
     def _on_batch_progress(self, current: int, total: int, filename: str):
-        """Update batch progress"""
-        self._batch_file_label.setText(f"File hiện tại: {filename}")
-        self._batch_progress.setValue(current)
-        self._batch_stats_label.setText(f"Đã xử lý: {current}/{total} files")
+        """Update batch file progress (file info only, progress bar updated by total_progress)"""
+        self._batch_file_label.setText(f"File {current}/{total}: {filename}")
+        self._batch_current_file = current
+        # Reset page label when starting new file
+        self._batch_page_label.setText("")
+
+    def _on_batch_page_progress(self, current_page: int, total_pages: int):
+        """Update page progress within current file"""
+        self._batch_page_label.setText(f"Trang {current_page}/{total_pages}")
+
+    def _on_batch_total_progress(self, pages_done: int, total_pages: int):
+        """Update total progress bar based on pages processed"""
+        self._batch_progress.setValue(pages_done)
+        file_info = f"{getattr(self, '_batch_current_file', 0)}/{self._batch_total_files} files"
+        page_info = f"{pages_done}/{total_pages} trang"
+        self._batch_stats_label.setText(f"Đã xử lý: {file_info} ({page_info})")
     
     def _on_batch_cancel(self):
         """Cancel batch processing"""
@@ -2333,7 +2435,7 @@ class MainWindow(QMainWindow):
                 min-width: 80px; background-color: #E5E7EB;
                 color: #374151; border: 1px solid #D1D5DB;
             }
-            QPushButton:hover { background-color: #D1D5DB; }
+            QPushButton:hover { background-color: #3B82F6; color: white; border: none; }
         """)
 
         layout = QVBoxLayout(dialog)
@@ -2449,7 +2551,7 @@ Thời gian: {time_str}"""
         event.accept()
 
     def _save_window_state(self):
-        """Save window size and sidebar width to config"""
+        """Save window size, sidebar width, zoom level and panel state to config"""
         from core.config_manager import get_config_manager
         ui_config = get_config_manager().get_ui_config()
 
@@ -2462,10 +2564,17 @@ Thời gian: {time_str}"""
             sidebar_width = self.preview_splitter.sizes()[0]
             ui_config['sidebar_width'] = sidebar_width
 
+        # Save zoom level (as percentage)
+        zoom = self.preview.before_panel.view._zoom
+        ui_config['last_zoom_percent'] = int(zoom * 100)
+
+        # Save after panel (Đích) collapsed state
+        ui_config['after_panel_collapsed'] = self.preview._after_panel_collapsed
+
         get_config_manager().save_ui_config(ui_config)
 
     def _restore_window_state(self):
-        """Restore window size and sidebar width from config"""
+        """Restore window size, sidebar width, zoom level and panel state from config"""
         from core.config_manager import get_config_manager
         ui_config = get_config_manager().get_ui_config()
 
@@ -2476,6 +2585,38 @@ Thời gian: {time_str}"""
 
         # Restore sidebar width (will be applied when sidebar becomes visible)
         self._saved_sidebar_width = ui_config.get('sidebar_width', BatchSidebar.EXPANDED_WIDTH)
+
+        # Restore zoom level (will be applied when file is loaded)
+        self._saved_zoom_percent = ui_config.get('last_zoom_percent', 100)
+
+        # Restore after panel (Đích) collapsed state
+        if ui_config.get('after_panel_collapsed', False):
+            self.preview._toggle_after_panel()  # Toggle to collapse
+
+    def _get_default_folder_dir(self) -> str:
+        """Get default folder directory from config, fallback to Desktop"""
+        from core.config_manager import get_config_manager
+        ui_config = get_config_manager().get_ui_config()
+        saved_dir = ui_config.get('last_folder_parent', '')
+
+        # Check if saved directory exists
+        if saved_dir and os.path.isdir(saved_dir):
+            return saved_dir
+
+        # Fallback to Desktop
+        desktop = os.path.join(os.path.expanduser('~'), 'Desktop')
+        if os.path.isdir(desktop):
+            return desktop
+
+        # Fallback to home directory
+        return os.path.expanduser('~')
+
+    def _save_last_folder_dir(self, folder_dir: str):
+        """Save last folder parent directory to config"""
+        from core.config_manager import get_config_manager
+        ui_config = get_config_manager().get_ui_config()
+        ui_config['last_folder_parent'] = folder_dir
+        get_config_manager().save_ui_config(ui_config)
 
     def _apply_saved_sidebar_width(self):
         """Apply saved sidebar width to splitter"""
