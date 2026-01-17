@@ -124,11 +124,15 @@ jobs:
             ### Tính năng mới
             - **Undo (Ctrl+Z)** - Hoàn tác thao tác vùng chọn (thêm/xóa/sửa) tối đa 79 lần
             - **Phím Delete** - Xóa vùng chọn đang được chọn bằng phím Delete/Backspace
+            - **Hybrid Zone Sizing** - Góc dùng pixel cố định, cạnh dùng % chiều dài + pixel độ sâu
 
             ### Cải tiến
-            - Undo hoạt động cho cả vùng tùy biến (custom) và vùng preset (góc/cạnh)
-            - Đồng bộ trạng thái undo giữa preview và settings panel
-            - Tối ưu hiệu suất ghi nhận thao tác
+            - Undo hoạt động cho cả vùng tùy biến và vùng preset (góc/cạnh)
+            - Giữ nguyên zoom khi chuyển file trong batch mode
+            - Loading overlay khi phát hiện layout
+            - Batch dialog hiển thị số file và tiến trình trang
+            - Lưu zoom % và sidebar width vào config ngay lập tức
+            - Sửa lỗi placeholder icon size khi đóng/mở file
 
             ### Tải về
             - **XoaGhim-Windows.zip** - Giải nén và chạy `XoaGhim.exe`
