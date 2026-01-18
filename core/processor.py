@@ -33,6 +33,7 @@ class Zone:
     enabled: bool = True
     zone_type: str = 'remove'  # 'remove' (xóa) or 'protect' (bảo vệ)
     page_filter: str = 'all'  # 'all', 'odd', 'even', 'none' - filter khi tạo zone
+    target_page: int = -1  # Target page index when page_filter='none' (-1 means all)
     # Hybrid sizing fields
     width_px: int = 0   # Fixed pixel width (for corners, edge depth)
     height_px: int = 0  # Fixed pixel height (for corners, edge depth)

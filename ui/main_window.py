@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional, List
 import numpy as np
 
-from ui.continuous_preview import ContinuousPreviewWidget
+from ui.continuous_preview import ContinuousPreviewWidget, LoadingOverlay
 from ui.batch_sidebar import BatchSidebar
 from ui.settings_panel import SettingsPanel
 from core.processor import Zone, StapleRemover
@@ -336,7 +336,7 @@ class BatchProcessThread(QThread):
 class MainWindow(QMainWindow):
     """Cửa sổ chính"""
     
-    MAX_PREVIEW_PAGES = 20
+    MAX_PREVIEW_PAGES = 500
     
     def __init__(self):
         super().__init__()
@@ -361,6 +361,10 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._update_ui_state()
         self._restore_window_state()
+
+        # Loading overlay for PDF loading
+        self._loading_overlay = LoadingOverlay(self)
+        self._loading_overlay.hide()
 
         # Install event filter to cancel draw mode on click outside preview
         QApplication.instance().installEventFilter(self)
@@ -1666,13 +1670,34 @@ class MainWindow(QMainWindow):
             num_pages = min(self._pdf_handler.page_count, self.MAX_PREVIEW_PAGES)
             self._all_pages = []
 
+            # Show loading overlay for large files (>20 pages)
+            show_overlay = num_pages > 20
+            if show_overlay:
+                # Position overlay over preview area
+                preview_rect = self.preview.geometry()
+                preview_pos = self.preview.mapTo(self, self.preview.rect().topLeft())
+                self._loading_overlay.setGeometry(
+                    preview_pos.x(), preview_pos.y(),
+                    preview_rect.width(), preview_rect.height()
+                )
+                self._loading_overlay.set_text(f"Đang tải 1/{num_pages}")
+                self._loading_overlay.show()
+                self._loading_overlay.raise_()
+                QApplication.processEvents()
+
             for i in range(num_pages):
+                if show_overlay:
+                    self._loading_overlay.set_text(f"Đang tải {i+1}/{num_pages}")
                 self.statusBar().showMessage(f"Đang tải trang {i+1}/{num_pages}...")
                 QApplication.processEvents()
 
                 img = self._pdf_handler.render_page(i, dpi=120)
                 if img is not None:
                     self._all_pages.append(img)
+
+            # Hide loading overlay
+            if show_overlay:
+                self._loading_overlay.hide()
 
             # Update page navigation
             self.page_spin.setMaximum(self._pdf_handler.page_count)
@@ -1728,8 +1753,9 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(100, self._fit_first_page_width)
             
         except Exception as e:
+            self._loading_overlay.hide()
             QMessageBox.critical(self, "Lỗi", f"Không thể mở file:\n{e}")
-    
+
     def _fit_first_page_width(self):
         """Apply saved zoom or fit width for first page - called after layout update"""
         if self._all_pages:

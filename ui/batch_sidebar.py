@@ -6,10 +6,18 @@ Shows source files with checkbox, filename, and page count
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFrame, QLabel,
     QPushButton, QLineEdit, QCheckBox, QListWidget, QListWidgetItem,
-    QAbstractItemView, QStyledItemDelegate, QStyle
+    QAbstractItemView, QStyledItemDelegate, QStyle, QComboBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QSize, QRect
 from PyQt5.QtGui import QColor, QPainter, QFont
+
+
+class ComboItemDelegate(QStyledItemDelegate):
+    """Custom delegate for larger combobox items"""
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        size.setHeight(24)  # Set item height to 24px
+        return size
 
 import os
 import fitz  # PyMuPDF for page count
@@ -69,6 +77,7 @@ class SidebarFileList(QListWidget):
         self._files: List[str] = []
         self._base_dir: str = ""
         self._filter_text: str = ""
+        self._filter_pages: int = -1  # -1 = all pages (no filter)
         self._visible_indices: List[int] = []
         self._page_counts: Dict[str, int] = {}
         self._sort_column: str = 'name'  # 'name' or 'pages'
@@ -110,6 +119,7 @@ class SidebarFileList(QListWidget):
         self._files = files
         self._base_dir = base_dir
         self._filter_text = ""
+        self._filter_pages = -1
         self._page_counts.clear()
 
         # Load page counts
@@ -154,8 +164,13 @@ class SidebarFileList(QListWidget):
         # Build list of (idx, file_path) tuples for filtering
         filtered = []
         for idx, file_path in enumerate(self._files):
+            # Filter by name
             if self._filter_text:
                 if self._filter_text.lower() not in file_path.lower():
+                    continue
+            # Filter by pages
+            if self._filter_pages > 0:
+                if self._page_counts.get(file_path, -1) != self._filter_pages:
                     continue
             filtered.append((idx, file_path))
 
@@ -184,6 +199,22 @@ class SidebarFileList(QListWidget):
         self._filter_text = text
         self._rebuild_list()
         self.selection_changed.emit(self.get_checked_files())
+
+    def set_page_filter(self, pages: int):
+        """Set page count filter. -1 = all."""
+        self._filter_pages = pages
+        self._rebuild_list()
+        self.selection_changed.emit(self.get_checked_files())
+
+    def get_unique_page_counts(self) -> List[int]:
+        """Get sorted unique page counts for combobox."""
+        counts = set(self._page_counts.values())
+        counts.discard(-1)  # Remove error values
+        return sorted(counts)
+
+    def get_visible_count(self) -> int:
+        """Get count of visible (filtered) items."""
+        return len(self._visible_indices)
 
     def _on_item_clicked(self, item: QListWidgetItem):
         """Handle item click"""
@@ -364,7 +395,7 @@ class BatchSidebar(QFrame):
         # Header row
         header = QWidget()
         header.setFixedHeight(24)
-        header.setStyleSheet("background-color: white;")
+        header.setStyleSheet("background-color: #F3F4F6;")
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(8, 0, 8, 0)
         header_layout.setSpacing(4)
@@ -400,6 +431,100 @@ class BatchSidebar(QFrame):
         header_layout.addWidget(self._pages_btn)
 
         list_layout.addWidget(header)
+
+        # Filter row (full width)
+        filter_row = QWidget()
+        filter_row.setFixedHeight(32)
+        filter_row.setStyleSheet("background-color: #F9FAFB;")
+        filter_layout = QHBoxLayout(filter_row)
+        filter_layout.setContentsMargins(4, 4, 4, 4)
+        filter_layout.setSpacing(4)
+
+        # Name filter (full width to left edge)
+        self._name_filter = QLineEdit()
+        self._name_filter.setPlaceholderText("🔍 Lọc tên file...")
+        self._name_filter.setStyleSheet("""
+            QLineEdit {
+                border: 1px solid #D1D5DB;
+                border-radius: 4px;
+                padding: 3px 6px;
+                font-size: 12px;
+                background: white;
+            }
+            QLineEdit:focus {
+                border-color: #3B82F6;
+            }
+        """)
+        self._name_filter.textChanged.connect(self._on_name_filter_changed)
+        filter_layout.addWidget(self._name_filter, 1)
+
+        self._name_clear_btn = QPushButton("✕")
+        self._name_clear_btn.setFixedSize(18, 18)
+        self._name_clear_btn.setStyleSheet("""
+            QPushButton {
+                background: #E5E7EB;
+                border: none;
+                border-radius: 9px;
+                color: #6B7280;
+                font-size: 10px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: #FEE2E2;
+                color: #EF4444;
+            }
+        """)
+        self._name_clear_btn.clicked.connect(self._clear_name_filter)
+        self._name_clear_btn.setVisible(False)
+        filter_layout.addWidget(self._name_clear_btn)
+
+        # Pages filter (like zoom combo - minimal styling to keep default icon)
+        self._pages_combo = QComboBox()
+        self._pages_combo.addItem("All")
+        self._pages_combo.setFixedWidth(58)
+        self._pages_combo.setFixedHeight(24)
+        self._pages_combo.setToolTip("Lọc theo số trang")
+        self._pages_combo.view().setStyleSheet("""
+            QListView {
+                background-color: white;
+                font-size: 10px;
+            }
+            QListView::item {
+                padding: 4px 6px;
+            }
+            QListView::item:hover {
+                background-color: #93C5FD;
+            }
+            QListView::item:selected {
+                background-color: #93C5FD;
+            }
+        """)
+        self._pages_combo.currentTextChanged.connect(self._on_pages_filter_changed)
+        self._pages_combo.currentIndexChanged.connect(self._update_pages_combo_style)
+        filter_layout.addWidget(self._pages_combo)
+        self._update_pages_combo_style(0)  # Initial style for "All"
+
+        self._pages_clear_btn = QPushButton("✕")
+        self._pages_clear_btn.setFixedSize(18, 18)
+        self._pages_clear_btn.setStyleSheet("""
+            QPushButton {
+                background: #E5E7EB;
+                border: none;
+                border-radius: 9px;
+                color: #6B7280;
+                font-size: 10px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: #FEE2E2;
+                color: #EF4444;
+            }
+        """)
+        self._pages_clear_btn.clicked.connect(self._clear_pages_filter)
+        self._pages_clear_btn.setVisible(False)
+        filter_layout.addWidget(self._pages_clear_btn)
+
+        list_layout.addWidget(filter_row)
 
         # File list
         self._file_list = SidebarFileList()
@@ -489,6 +614,47 @@ class BatchSidebar(QFrame):
         self._file_list.set_filter(text)
         self._update_count()
         self._update_toggle_state()
+        self._update_sort_labels_with_filter()
+
+    def _on_name_filter_changed(self, text: str):
+        """Handle name filter text change"""
+        self._file_list.set_filter(text)
+        self._name_clear_btn.setVisible(bool(text))
+        self._update_count()
+        self._update_toggle_state()
+        self._update_sort_labels_with_filter()
+
+    def _on_pages_filter_changed(self, text: str):
+        """Handle pages filter change"""
+        if text == "All" or not text:
+            self._file_list.set_page_filter(-1)
+            self._pages_clear_btn.setVisible(False)
+        else:
+            try:
+                pages = int(text)
+                self._file_list.set_page_filter(pages)
+                self._pages_clear_btn.setVisible(True)
+            except ValueError:
+                # Invalid input, reset to all
+                self._file_list.set_page_filter(-1)
+                self._pages_clear_btn.setVisible(False)
+        self._update_count()
+        self._update_toggle_state()
+        self._update_sort_labels_with_filter()
+
+    def _update_pages_combo_style(self, index: int):
+        """Update combobox text color based on selection (All = gray, others = normal)"""
+        color = "#9CA3AF" if index == 0 else "#374151"
+        # Minimal styling to keep native dropdown icon
+        self._pages_combo.setStyleSheet(f"QComboBox {{ color: {color}; font-size: 11px; }}")
+
+    def _clear_name_filter(self):
+        """Clear name filter"""
+        self._name_filter.clear()
+
+    def _clear_pages_filter(self):
+        """Clear pages filter"""
+        self._pages_combo.setCurrentIndex(0)  # Back to "All"
 
     def _on_header_checkbox_clicked(self):
         """Toggle all files (from header checkbox)"""
@@ -526,12 +692,23 @@ class BatchSidebar(QFrame):
     def _update_sort_labels(self, column: str, ascending: bool):
         """Update header button labels with sort indicator"""
         arrow = "↑" if ascending else "↓"
+
+        # Check if filter is active
+        is_filtered = self._name_filter.text() or (self._pages_combo.currentText() and self._pages_combo.currentText() != "All")
+        visible = self._file_list.get_visible_count()
+        count_suffix = f" ({visible})" if is_filtered else ""
+
         if column == 'name':
-            self._name_btn.setText(f"Tên file {arrow}")
+            self._name_btn.setText(f"Tên file {arrow}{count_suffix}")
             self._pages_btn.setText("Trang")
         else:
-            self._name_btn.setText("Tên file")
+            self._name_btn.setText(f"Tên file{count_suffix}")
             self._pages_btn.setText(f"Trang {arrow}")
+
+    def _update_sort_labels_with_filter(self):
+        """Update sort labels with current filter count"""
+        column, ascending = self._file_list.get_sort_info()
+        self._update_sort_labels(column, ascending)
 
     def _update_count(self):
         """Update file count label"""
@@ -558,8 +735,23 @@ class BatchSidebar(QFrame):
         """Set file list"""
         self._base_dir = base_dir
         self._file_list.set_files(files, base_dir)
+
+        # Reset filters
+        self._name_filter.clear()
+        self._pages_combo.blockSignals(True)
+        self._pages_combo.clear()
+        self._pages_combo.addItem("All")
+        for page_count in self._file_list.get_unique_page_counts():
+            self._pages_combo.addItem(str(page_count))
+        self._pages_combo.setCurrentIndex(0)  # Select "All"
+        self._pages_combo.blockSignals(False)
+        self._update_pages_combo_style(0)  # Apply gray style for "All"
+        self._name_clear_btn.setVisible(False)
+        self._pages_clear_btn.setVisible(False)
+
         self._update_count()
         self._update_toggle_state()
+        self._update_sort_labels_with_filter()
 
     def get_checked_files(self) -> List[str]:
         """Get list of checked files"""

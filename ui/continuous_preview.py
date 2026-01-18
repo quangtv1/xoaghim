@@ -126,6 +126,10 @@ class LoadingOverlay(QWidget):
         super().hideEvent(event)
         self._spinner.stop()
 
+    def set_text(self, text: str):
+        """Set loading label text"""
+        self._loading_label.setText(text)
+
 import numpy as np
 import cv2
 from typing import List, Optional, Dict, TYPE_CHECKING
