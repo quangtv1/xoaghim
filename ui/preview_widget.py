@@ -267,7 +267,7 @@ class PreviewWidget(QWidget):
         self._original_image = None
         self._processed_image = None
         self._zones: List[Zone] = []
-        self._processor = StapleRemover(protect_red=True)
+        self._processor = StapleRemover(protect_red=False)
         self._text_protection_enabled = False
         self._protected_regions = []
 

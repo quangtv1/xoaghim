@@ -127,7 +127,7 @@ class ProcessThread(QThread):
     def run(self):
         try:
             start_time = time.time()
-            processor = StapleRemover(protect_red=self.settings.get('protect_red', True))
+            processor = StapleRemover(protect_red=False)
 
             def process_func(image, page_num):
                 if self._cancelled:
@@ -203,7 +203,7 @@ class BatchProcessThread(QThread):
 
         try:
             start_time = time.time()
-            processor = StapleRemover(protect_red=self.settings.get('protect_red', True))
+            processor = StapleRemover(protect_red=False)
 
             for i, input_path in enumerate(self.files):
                 if self._cancelled:

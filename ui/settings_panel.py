@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QFileDialog, QCheckBox, QRadioButton, QButtonGroup, QMessageBox,
     QStyledItemDelegate, QSizePolicy
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QSize, QPoint, QPropertyAnimation, QEasingCurve
+from PyQt5.QtCore import Qt, pyqtSignal, QSize, QPoint, QPropertyAnimation, QEasingCurve, QTimer
 from PyQt5.QtGui import QColor, QPixmap, QPainter, QPolygon
 
 from typing import List, Dict, Set
@@ -80,6 +80,11 @@ class SettingsPanel(QWidget):
         self._zone_selection_history: List[str] = []  # Track order of zone selections
         self._collapsed = False
         self._current_draw_mode = None  # Track current draw mode
+
+        # Debounce timer for saving zone config (reduce I/O during drag operations)
+        self._save_config_timer = QTimer()
+        self._save_config_timer.setSingleShot(True)
+        self._save_config_timer.timeout.connect(self._save_zone_config)
 
         self._setup_ui()
         self._setup_compact_toolbar()
@@ -1509,15 +1514,18 @@ class SettingsPanel(QWidget):
             zone.y = y
             zone.width = w
             zone.height = h
-            
+
             if zone_id == self._selected_zone_id:
                 self.width_slider.blockSignals(True)
                 self.height_slider.blockSignals(True)
-                
+
                 self.width_slider.setValue(int(w * 100))
                 self.height_slider.setValue(int(h * 100))
-                
+
                 self.width_slider.blockSignals(False)
                 self.height_slider.blockSignals(False)
-                
+
                 self._update_size_labels()
+
+            # Debounced save: wait 300ms after last modification to reduce I/O during drag
+            self._save_config_timer.start(300)

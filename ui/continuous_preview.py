@@ -1854,7 +1854,7 @@ class ContinuousPreviewWidget(QWidget):
         self._pages: List[np.ndarray] = []  # Original pages
         self._processed_pages: List[np.ndarray] = []  # Processed pages
         self._zones: List[Zone] = []
-        self._processor = StapleRemover(protect_red=True)
+        self._processor = StapleRemover(protect_red=False)
         self._text_protection_enabled = False
         self._text_protection_margin = 10  # Default margin for protected regions overlay
         self._cached_regions: Dict[int, list] = {}  # Cache protected regions per page
@@ -2718,7 +2718,13 @@ class ContinuousPreviewWidget(QWidget):
                 return zones
 
         # Fallback: return zones from _zones (definitions)
-        return [z for z in self._zones if z.enabled]
+        # Zones from definitions are already in percent mode, so safe to use directly
+        fallback_zones = [z for z in self._zones if z.enabled]
+        # Ensure all fallback zones use percent mode for DPI-independence
+        for z in fallback_zones:
+            if not hasattr(z, 'size_mode') or z.size_mode != 'percent':
+                z.size_mode = 'percent'
+        return fallback_zones
     
     def _sync_zoom(self, zoom: float):
         """Sync zoom"""
