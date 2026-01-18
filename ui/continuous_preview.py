@@ -1447,27 +1447,24 @@ class ContinuousPreviewPanel(QFrame):
 
         elif zone_id.startswith('margin_') and len(zone_coords) == 2:
             # Edge: (length_pct, depth_px)
+            # Match Zone.to_pixels() logic: left/top aligned (no centering)
             length_pct, depth_px = zone_coords
             if zone_id == 'margin_top':
-                # Top: width=length%, height=depth_px, at top
+                # Top: width=length%, height=depth_px, at top-left
                 w = int(length_pct * img_w)
-                x = (img_w - w) // 2  # center if not 100%
-                return (x, 0, w, depth_px)
+                return (0, 0, w, depth_px)
             elif zone_id == 'margin_bottom':
-                # Bottom: width=length%, height=depth_px, at bottom
+                # Bottom: width=length%, height=depth_px, at bottom-left
                 w = int(length_pct * img_w)
-                x = (img_w - w) // 2
-                return (x, img_h - depth_px, w, depth_px)
+                return (0, img_h - depth_px, w, depth_px)
             elif zone_id == 'margin_left':
-                # Left: width=depth_px, height=length%, at left
+                # Left: width=depth_px, height=length%, at top-left
                 h = int(length_pct * img_h)
-                y = (img_h - h) // 2
-                return (0, y, depth_px, h)
+                return (0, 0, depth_px, h)
             elif zone_id == 'margin_right':
-                # Right: width=depth_px, height=length%, at right
+                # Right: width=depth_px, height=length%, at top-right
                 h = int(length_pct * img_h)
-                y = (img_h - h) // 2
-                return (img_w - depth_px, y, depth_px, h)
+                return (img_w - depth_px, 0, depth_px, h)
             else:
                 return (0, 0, int(length_pct * img_w), depth_px)
 
@@ -2627,6 +2624,7 @@ class ContinuousPreviewWidget(QWidget):
 
                 if convert_to_percent:
                     # Convert to percent for DPI-independent output
+                    # Match Zone.to_pixels() logic: left/top aligned (no centering)
                     if zone_id_lower in ('margin_top', 'margin_bottom'):
                         w_pct = length_pct
                         h_pct = depth_px / img_h if img_h > 0 else 0.08
