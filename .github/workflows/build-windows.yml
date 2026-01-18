@@ -25,7 +25,7 @@ jobs:
         run: |
           # Extract version from tag (remove 'v' prefix)
           $version = "${{ github.ref_name }}" -replace '^v', ''
-          if (-not $version) { $version = "1.1.20" }  # Default for workflow_dispatch
+          if (-not $version) { $version = "1.1.21" }  # Default for workflow_dispatch
           echo "VERSION=$version" >> $env:GITHUB_OUTPUT
           echo "Version: $version"
 
