@@ -115,12 +115,23 @@ class ProcessThread(QThread):
     progress = pyqtSignal(int, int)  # current_page, total_pages
     finished = pyqtSignal(bool, str)
 
-    def __init__(self, input_path: str, output_path: str, zones: List[Zone], settings: dict):
+    def __init__(self, input_path: str, output_path: str, zones: List[Zone], settings: dict,
+                 zone_getter=None):
+        """Initialize ProcessThread.
+
+        Args:
+            input_path: Input PDF path
+            output_path: Output PDF path
+            zones: Default zones (used when zone_getter is None)
+            settings: Processing settings
+            zone_getter: Optional callable(page_idx) -> List[Zone] for per-page zones
+        """
         super().__init__()
         self.input_path = input_path
         self.output_path = output_path
         self.zones = zones
         self.settings = settings
+        self.zone_getter = zone_getter  # For per-page zone support
         self._cancelled = False
         self._total_pages = 0
 
@@ -139,7 +150,17 @@ class ProcessThread(QThread):
                     return image
                 # Log format: Trang X/Y: full_path
                 print(f"Trang {page_num}/{self._total_pages}: {self.input_path}")
-                return processor.process_image(image, self.zones)
+
+                # Get zones for this page (per-page or global)
+                if self.zone_getter:
+                    page_zones = self.zone_getter(page_num)  # page_num is 0-based from exporter
+                else:
+                    page_zones = self.zones
+
+                if not page_zones:
+                    return image  # No zones for this page
+
+                return processor.process_image(image, page_zones)
 
             def progress_callback(current, total):
                 self._total_pages = total
@@ -439,6 +460,7 @@ class MainWindow(QMainWindow):
         self.preview.zone_changed.connect(self._on_zone_changed_from_preview)
         self.preview.zone_selected.connect(self._on_zone_selected_from_preview)
         self.preview.zone_delete.connect(self._on_zone_delete_from_preview)
+        self.preview.zone_drag_save_requested.connect(self._on_zone_drag_save_requested)
         self.preview.undo_zone_removed.connect(self._on_undo_zone_removed)
         self.preview.undo_zone_restored.connect(self._on_undo_zone_restored)
         self.preview.undo_preset_zone_toggled.connect(self._on_undo_preset_zone_toggled)
@@ -960,7 +982,17 @@ class MainWindow(QMainWindow):
         bar_layout = QHBoxLayout(bottom_bar)
         bar_layout.setContentsMargins(12, 0, 12, 0)
         bar_layout.setSpacing(6)
-        
+
+        # Zone count status (left side)
+        self.zone_count_label = QLabel("Zone chung: <b>0</b>; Zone riêng: <b>0/0</b>")
+        self.zone_count_label.setStyleSheet("""
+            QLabel {
+                color: #6B7280;
+                font-size: 12px;
+            }
+        """)
+        bar_layout.addWidget(self.zone_count_label)
+
         # Left stretch for centering
         bar_layout.addStretch(1)
         
@@ -1124,10 +1156,10 @@ class MainWindow(QMainWindow):
         self.zoom_in_btn.setFixedSize(38, btn_height)
         self.zoom_in_btn.clicked.connect(self._on_zoom_in)
         bar_layout.addWidget(self.zoom_in_btn)
-        
+
         # Right stretch for centering
         bar_layout.addStretch(1)
-        
+
         self.bottom_bar = bottom_bar
         parent_layout.addWidget(self.bottom_bar)
     
@@ -1306,12 +1338,25 @@ class MainWindow(QMainWindow):
     def _load_files_batch(self, pdf_files: list, base_dir: str):
         """Load multiple PDF files for batch processing"""
         # Check if this is a NEW folder (different from current)
-        is_new_folder = self._batch_base_dir != base_dir
+        is_new_folder = self._batch_base_dir != base_dir and self._batch_base_dir != ""
+
+        # If opening a DIFFERENT folder, clear the old batch zones file
+        if is_new_folder:
+            from core.config_manager import get_config_manager
+            get_config_manager().clear_batch_zones()
 
         # Switch to batch mode
         self._batch_mode = True
         self._batch_base_dir = base_dir
         self._batch_files = pdf_files
+
+        # Set batch base dir for crash recovery persistence
+        self.preview.set_batch_base_dir(base_dir)
+        self.settings_panel.set_batch_base_dir(base_dir)
+
+        # Load persisted zones for this batch (crash recovery)
+        self.preview.load_persisted_zones(base_dir)
+        self.settings_panel.load_persisted_custom_zones(base_dir)
 
         # Zones persist across folders (saved in config)
         # No longer reset zones when opening new folder
@@ -1380,12 +1425,25 @@ class MainWindow(QMainWindow):
         pdf_files.sort()
 
         # Check if this is a NEW folder (different from current)
-        is_new_folder = self._batch_base_dir != folder_path
+        is_new_folder = self._batch_base_dir != folder_path and self._batch_base_dir != ""
+
+        # If opening a DIFFERENT folder, clear the old batch zones file
+        if is_new_folder:
+            from core.config_manager import get_config_manager
+            get_config_manager().clear_batch_zones()
 
         # Switch to batch mode
         self._batch_mode = True
         self._batch_base_dir = folder_path
         self._batch_files = pdf_files
+
+        # Set batch base dir for crash recovery persistence
+        self.preview.set_batch_base_dir(folder_path)
+        self.settings_panel.set_batch_base_dir(folder_path)
+
+        # Load persisted zones for this batch (crash recovery)
+        self.preview.load_persisted_zones(folder_path)
+        self.settings_panel.load_persisted_custom_zones(folder_path)
 
         # Zones persist across folders (saved in config)
         # No longer reset zones when opening new folder
@@ -1430,11 +1488,22 @@ class MainWindow(QMainWindow):
 
     def _on_sidebar_file_selected(self, file_path: str, original_idx: int):
         """Handle file selection from sidebar"""
+        # Save zones from current file before switching
+        self.preview.save_per_file_zones()
+        self.settings_panel.save_per_file_custom_zones()
+
         self._batch_current_index = original_idx
-        # Clear custom zones with 'none' filter (Tự do) - not inherited between files
+        # Clear custom zones with 'none' filter (Tự do) - will be restored from per-file storage
         self.settings_panel.clear_custom_zones_with_free_filter()
         self._load_pdf(file_path)
+
+        # Restore zones for this file
+        self.settings_panel.load_per_file_custom_zones(file_path)
+        self.preview.load_per_file_zones(file_path)
         self.preview.set_file_index(original_idx, len(self._batch_files))
+
+        # Update zone counts display
+        self._update_zone_counts()
 
     def _on_sidebar_selection_changed(self, checked_files: List[str]):
         """Handle checkbox selection change in sidebar"""
@@ -1486,24 +1555,46 @@ class MainWindow(QMainWindow):
     def _on_prev_file(self):
         """Navigate to previous file in batch mode"""
         if self._batch_current_index > 0:
+            # Save zones from current file before switching
+            self.preview.save_per_file_zones()
+            self.settings_panel.save_per_file_custom_zones()
+
             self._batch_current_index -= 1
             file_path = self._batch_files[self._batch_current_index]
             self.batch_sidebar.select_by_original_index(self._batch_current_index)
-            # Clear custom zones with 'none' filter (Tự do) - not inherited between files
+            # Clear custom zones with 'none' filter (Tự do) - will be restored from per-file storage
             self.settings_panel.clear_custom_zones_with_free_filter()
             self._load_pdf(file_path)
+
+            # Restore zones for this file
+            self.settings_panel.load_per_file_custom_zones(file_path)
+            self.preview.load_per_file_zones(file_path)
             self.preview.set_file_index(self._batch_current_index, len(self._batch_files))
+
+            # Update zone counts display
+            self._update_zone_counts()
 
     def _on_next_file(self):
         """Navigate to next file in batch mode"""
         if self._batch_current_index < len(self._batch_files) - 1:
+            # Save zones from current file before switching
+            self.preview.save_per_file_zones()
+            self.settings_panel.save_per_file_custom_zones()
+
             self._batch_current_index += 1
             file_path = self._batch_files[self._batch_current_index]
             self.batch_sidebar.select_by_original_index(self._batch_current_index)
-            # Clear custom zones with 'none' filter (Tự do) - not inherited between files
+            # Clear custom zones with 'none' filter (Tự do) - will be restored from per-file storage
             self.settings_panel.clear_custom_zones_with_free_filter()
             self._load_pdf(file_path)
+
+            # Restore zones for this file
+            self.settings_panel.load_per_file_custom_zones(file_path)
+            self.preview.load_per_file_zones(file_path)
             self.preview.set_file_index(self._batch_current_index, len(self._batch_files))
+
+            # Update zone counts display
+            self._update_zone_counts()
 
     def _on_close_file(self):
         """Close currently opened file or folder"""
@@ -1515,6 +1606,13 @@ class MainWindow(QMainWindow):
             self._batch_files = []
             self._batch_current_index = 0
             self._is_first_file_in_batch = True  # Reset for next batch
+
+            # Clear per-file zone storage in MEMORY only
+            # DON'T clear disk file - zones will be restored when reopening same folder
+            self.preview.clear_per_file_zones()
+            self.settings_panel.clear_per_file_custom_zones()
+            # NOTE: Removed clear_batch_zones() call - zones persist on disk
+            # They will be overwritten when opening a different folder
 
             # Hide sidebar and disable batch mode in preview
             self.batch_sidebar.setVisible(False)
@@ -1605,8 +1703,10 @@ class MainWindow(QMainWindow):
             # Update preview panel titles with file paths
             self.preview.set_file_paths(str(file_path), str(dest_path))
             
-            # Set pages
+            # Set pages and track current file for per-file zone storage
             self.preview.set_pages(self._all_pages)
+            self.preview.set_current_file_path(str(file_path))
+            self.settings_panel.set_current_file_path(str(file_path))
             zones = self.settings_panel.get_zones()
             self.preview.set_zones(zones)
 
@@ -1781,7 +1881,54 @@ class MainWindow(QMainWindow):
     
     def _on_zones_changed(self, zones: List[Zone]):
         self.preview.set_zones(zones)
-    
+        self._update_zone_counts()
+
+    def _update_zone_counts(self):
+        """Update zone count display in bottom bar
+
+        Zone chung: x (preset zones + custom zones with page_filter != 'none')
+        Zone riêng: y/z (y = current file, z = total all files)
+        """
+        # Count Zone chung (global, counted once)
+        zone_chung = 0
+        # Preset zones (corners, edges)
+        for zone in self.settings_panel._zones.values():
+            if zone.enabled:
+                zone_chung += 1
+        # Custom zones with page_filter != 'none'
+        for zone in self.settings_panel._custom_zones.values():
+            if zone.enabled and getattr(zone, 'page_filter', 'all') != 'none':
+                zone_chung += 1
+
+        # Count Zone riêng for current file (unique custom zone IDs, not corner_*/margin_*)
+        zone_rieng_file = 0
+        per_page_zones = getattr(self.preview.before_panel, '_per_page_zones', {})
+        unique_zone_ids = set()
+        for page_zones in per_page_zones.values():
+            for zone_id in page_zones.keys():
+                if not zone_id.startswith('corner_') and not zone_id.startswith('margin_'):
+                    unique_zone_ids.add(zone_id)
+        zone_rieng_file = len(unique_zone_ids)
+
+        # Count total Zone riêng across all files
+        zone_rieng_total = zone_rieng_file  # Start with current file
+        per_file_zones = getattr(self.preview.before_panel, '_per_file_zones', {})
+        current_file = getattr(self, '_current_file_path', '')
+        for file_path, file_zones in per_file_zones.items():
+            if file_path == current_file:
+                continue  # Already counted above
+            file_unique_ids = set()
+            for page_zones in file_zones.values():
+                for zone_id in page_zones.keys():
+                    if not zone_id.startswith('corner_') and not zone_id.startswith('margin_'):
+                        file_unique_ids.add(zone_id)
+            zone_rieng_total += len(file_unique_ids)
+
+        # Update bottom bar label (bold numbers)
+        self.zone_count_label.setText(
+            f"Zone chung: <b>{zone_chung}</b>; Zone riêng: <b>{zone_rieng_file}/{zone_rieng_total}</b>"
+        )
+
     def _on_settings_changed(self, settings: dict):
         pass
 
@@ -1794,9 +1941,9 @@ class MainWindow(QMainWindow):
         self._current_draw_mode = mode
         self.preview.set_draw_mode(mode)
 
-    def _on_rect_drawn_from_preview(self, x: float, y: float, w: float, h: float, mode: str):
-        """Handle rectangle drawn on preview - create custom zone"""
-        self.settings_panel.add_custom_zone_from_rect(x, y, w, h, mode)
+    def _on_rect_drawn_from_preview(self, x: float, y: float, w: float, h: float, mode: str, page_idx: int):
+        """Handle rectangle drawn on preview - create custom zone on specific page"""
+        self.settings_panel.add_custom_zone_from_rect(x, y, w, h, mode, page_idx)
         # Record undo action for the newly added zone
         # Get the last added zone id from settings panel
         zones = self.settings_panel.get_zones()
@@ -1804,7 +1951,9 @@ class MainWindow(QMainWindow):
             last_zone = zones[-1]  # Most recently added
             zone_data = (last_zone.x, last_zone.y, last_zone.width, last_zone.height)
             zone_type = getattr(last_zone, 'zone_type', 'remove')
-            self.preview.record_zone_add(last_zone.id, -1, zone_data, zone_type)
+            self.preview.record_zone_add(last_zone.id, page_idx, zone_data, zone_type)
+        # Immediate persist
+        self._persist_all_zones()
 
     def _on_output_settings_changed(self, output_dir: str, filename_pattern: str):
         """Handle output settings change"""
@@ -1816,13 +1965,64 @@ class MainWindow(QMainWindow):
         """Handle page filter change from settings"""
         self.preview.set_page_filter(filter_mode)
 
-    def _on_zones_reset(self):
-        """Handle zones reset from settings - clear all per_page_zones"""
-        self.preview.clear_all_zones()
+    def _on_zones_reset(self, scope: str = 'folder', reset_type: str = 'manual'):
+        """Handle zones reset from settings - clear zones based on scope
 
-    def _on_zone_changed_from_preview(self, zone_id: str, x: float, y: float, w: float, h: float):
-        self.settings_panel.update_zone_from_preview(zone_id, x, y, w, h)
-    
+        Args:
+            scope: 'file' for current file only, 'folder' for entire folder
+            reset_type: 'manual', 'rieng', 'chung', or 'all'
+        """
+        if reset_type == 'rieng':
+            if scope == 'file':
+                # Clear Zone riêng for current file only (keep Zone chung)
+                self.preview.clear_zone_rieng()
+                # Save immediately
+                if hasattr(self, '_batch_mode') and self._batch_mode:
+                    self.preview.save_per_file_zones()
+            else:
+                # Clear Zone riêng for all files in folder
+                self.preview.before_panel.clear_per_file_zones()
+                self.preview.clear_zone_rieng()
+                # Save immediately (empty)
+                if hasattr(self, '_batch_mode') and self._batch_mode:
+                    self.preview.save_per_file_zones()
+        elif reset_type == 'chung':
+            # Clear Zone chung for all pages (keep Zone riêng)
+            self.preview.clear_zone_chung()
+        elif scope == 'file':
+            # Clear zones only for current file
+            self.preview.clear_all_zones()
+        else:
+            # Clear all zones (folder scope)
+            self.preview.clear_all_zones()
+
+        # Persist zone removal to batch_zones.json
+        if hasattr(self, '_batch_mode') and self._batch_mode:
+            self.preview.save_per_file_zones()
+            self.settings_panel.save_per_file_custom_zones()
+
+        # Update zone counts display
+        self._update_zone_counts()
+
+    def _on_zone_changed_from_preview(self, zone_id: str, x: float, y: float, w: float, h: float,
+                                       w_px: int = 0, h_px: int = 0):
+        self.settings_panel.update_zone_from_preview(zone_id, x, y, w, h, w_px, h_px)
+        # Immediate persist
+        self._persist_all_zones()
+
+    def _on_zone_drag_save_requested(self):
+        """Trigger immediate save after zone drag ends (crash recovery)"""
+        self._persist_all_zones()
+
+    def _persist_all_zones(self):
+        """Persist all zones immediately to memory and disk (crash recovery)"""
+        # Save Zone chung (preset + custom with filter != 'none') to config.json
+        self.settings_panel._save_zone_config()
+        # Save Zone riêng (Tự do zones) to batch_zones.json (if in batch mode)
+        if hasattr(self, '_batch_mode') and self._batch_mode:
+            self.preview.save_per_file_zones()
+            self.settings_panel.save_per_file_custom_zones()
+
     def _on_zone_selected_from_preview(self, zone_id: str):
         """Khi click vào zone trong preview → chuyển filter theo zone"""
         # Tìm zone và lấy page_filter của nó
@@ -1849,11 +2049,24 @@ class MainWindow(QMainWindow):
         if zone_data:
             self.preview.record_zone_delete(zone_id, -1, zone_data, zone_type)
 
+        # Remove zone from _per_page_zones directly (for immediate visual update)
+        for page_idx in list(per_page_zones.keys()):
+            if zone_id in per_page_zones[page_idx]:
+                del per_page_zones[page_idx][zone_id]
+
+        # Force visual update
+        self.preview.before_panel.scene.update()
+
         self.settings_panel.delete_custom_zone(zone_id)
         # Refresh preview with updated zones
         zones = self.settings_panel.get_zones()
         self.preview.set_zones(zones)
-    
+        # Persist zone removal to batch_zones.json (Tự do zones)
+        if hasattr(self, '_batch_mode') and self._batch_mode:
+            self.preview.save_per_file_zones()
+        # Update zone counts
+        self._update_zone_counts()
+
     def _on_clean_shortcut(self):
         """Handle Ctrl+Enter shortcut - only trigger if button is enabled"""
         if self.run_btn.isEnabled() and self.run_btn.isVisible():
@@ -1867,10 +2080,14 @@ class MainWindow(QMainWindow):
     def _on_undo_zone_removed(self, zone_id: str):
         """Handle undo zone removed - sync with settings_panel"""
         self.settings_panel.delete_custom_zone(zone_id)
+        # Immediate persist
+        self._persist_all_zones()
 
     def _on_undo_zone_restored(self, zone_id: str, x: float, y: float, w: float, h: float, zone_type: str):
         """Handle undo zone restored - sync with settings_panel"""
         self.settings_panel.restore_custom_zone(zone_id, x, y, w, h, zone_type)
+        # Immediate persist
+        self._persist_all_zones()
 
     def _on_preset_zone_toggled(self, zone_id: str, enabled: bool, zone_data: tuple):
         """Handle preset zone (corner/edge) toggle - record undo"""
@@ -1880,10 +2097,14 @@ class MainWindow(QMainWindow):
         else:
             # Zone was removed (disabled) -> record delete action
             self.preview.record_zone_delete(zone_id, -1, zone_data, 'remove')
+        # Immediate persist
+        self._persist_all_zones()
 
     def _on_undo_preset_zone_toggled(self, zone_id: str, enabled: bool):
         """Handle undo for preset zone toggle - toggle zone in settings_panel"""
         self.settings_panel.toggle_preset_zone(zone_id, enabled)
+        # Immediate persist
+        self._persist_all_zones()
 
     def _on_process(self):
         """Bắt đầu xử lý"""
@@ -1927,9 +2148,12 @@ class MainWindow(QMainWindow):
         # Get zones from preview (with user-modified coordinates)
         zones = self.preview.get_zones_for_processing()
 
+        # Create zone_getter for per-page zone support
+        zone_getter = self.preview.get_zones_for_page_processing
+
         # Show progress dialog like batch mode
         self._show_single_progress_dialog(
-            self._pdf_handler.pdf_path, output_path, zones, settings
+            self._pdf_handler.pdf_path, output_path, zones, settings, zone_getter
         )
     
     def _on_process_batch(self):
@@ -2024,7 +2248,7 @@ class MainWindow(QMainWindow):
         self._process_thread = None
 
     def _show_single_progress_dialog(self, input_path: str, output_path: str,
-                                     zones: List[Zone], settings: dict):
+                                     zones: List[Zone], settings: dict, zone_getter=None):
         """Show progress dialog for single file processing"""
         self._single_dialog = QDialog(self)
         self._single_dialog.setWindowTitle("Đang xử lý...")
@@ -2092,8 +2316,8 @@ class MainWindow(QMainWindow):
         self._single_timer.timeout.connect(self._update_single_timer)
         self._single_timer.start(1000)
 
-        # Start processing
-        self._process_thread = ProcessThread(input_path, output_path, zones, settings)
+        # Start processing (with per-page zone support)
+        self._process_thread = ProcessThread(input_path, output_path, zones, settings, zone_getter)
         self._process_thread.progress.connect(self._on_single_progress)
         self._process_thread.finished.connect(self._on_single_finished)
 
@@ -2616,6 +2840,15 @@ Thời gian: {time_str}"""
                 event.ignore()
                 return
 
+        # Save per-file zones before closing (crash recovery)
+        if self._batch_mode:
+            # First save current file zones to memory
+            self.preview.save_per_file_zones(persist=False)
+            self.settings_panel.save_per_file_custom_zones(persist=False)
+            # Then force persist ALL per-file zones to disk
+            self.preview._persist_zones_to_disk()
+            self.settings_panel._persist_custom_zones_to_disk()
+
         # Save window size and sidebar width
         self._save_window_state()
 
@@ -2700,32 +2933,30 @@ Thời gian: {time_str}"""
             self.preview_splitter.setSizes([self._saved_sidebar_width, remaining])
 
     def eventFilter(self, obj, event):
-        """Cancel draw mode when clicking outside the preview before_panel"""
+        """Cancel draw mode when clicking on corner/edge icons only"""
         from PyQt5.QtCore import QEvent
 
         if event.type() == QEvent.MouseButtonPress and self._current_draw_mode is not None:
-            # Check if click is inside the before_panel of preview
             click_pos = event.globalPos()
-            before_panel = self.preview.before_panel
 
-            # Get before_panel's global geometry
-            panel_rect = before_panel.rect()
-            panel_global_pos = before_panel.mapToGlobal(panel_rect.topLeft())
-            panel_global_rect = panel_rect.translated(panel_global_pos)
+            # Only cancel draw mode when clicking on corner or edge icons
+            # (clicking on custom icon is handled by zone_selector toggle)
+            corner_icon = self.settings_panel.zone_selector.corner_icon
+            edge_icon = self.settings_panel.zone_selector.edge_icon
 
-            if not panel_global_rect.contains(click_pos):
-                # Click is outside before_panel - cancel draw mode
-                # But don't cancel if clicking on the custom icon itself
-                custom_icon = self.settings_panel.zone_selector.custom_icon
-                icon_rect = custom_icon.rect()
-                icon_global_pos = custom_icon.mapToGlobal(icon_rect.topLeft())
-                icon_global_rect = icon_rect.translated(icon_global_pos)
+            corner_rect = corner_icon.rect()
+            corner_global_pos = corner_icon.mapToGlobal(corner_rect.topLeft())
+            corner_global_rect = corner_rect.translated(corner_global_pos)
 
-                if not icon_global_rect.contains(click_pos):
-                    # Cancel draw mode
-                    self._current_draw_mode = None
-                    self.preview.set_draw_mode(None)
-                    self.settings_panel.set_draw_mode(None)
+            edge_rect = edge_icon.rect()
+            edge_global_pos = edge_icon.mapToGlobal(edge_rect.topLeft())
+            edge_global_rect = edge_rect.translated(edge_global_pos)
+
+            if corner_global_rect.contains(click_pos) or edge_global_rect.contains(click_pos):
+                # Cancel draw mode when clicking on corners or edges
+                self._current_draw_mode = None
+                self.preview.set_draw_mode(None)
+                self.settings_panel.set_draw_mode(None)
 
         return super().eventFilter(obj, event)
 

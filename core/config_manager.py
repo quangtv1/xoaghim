@@ -37,6 +37,11 @@ def get_config_path() -> Path:
     return get_config_dir() / 'config.json'
 
 
+def get_batch_zones_path() -> Path:
+    """Get full path to batch zones file (separate from main config)"""
+    return get_config_dir() / 'batch_zones.json'
+
+
 class ConfigManager:
     """Manages zone configuration persistence"""
 
@@ -109,6 +114,112 @@ class ConfigManager:
         """Set a config value and save"""
         self._config[key] = value
         self._save()
+
+    # === Batch zones persistence (for crash recovery) ===
+
+    def _get_batch_zones_path(self) -> Path:
+        """Get path to batch zones file"""
+        return get_batch_zones_path()
+
+    def _load_batch_zones(self) -> Dict[str, Any]:
+        """Load batch zones from file"""
+        try:
+            path = self._get_batch_zones_path()
+            if path.exists():
+                with open(path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"[Config] Failed to load batch zones: {e}")
+        return {}
+
+    def _save_batch_zones(self, data: Dict[str, Any]):
+        """Save batch zones to file"""
+        try:
+            path = self._get_batch_zones_path()
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())  # Force write to disk before closing
+        except Exception as e:
+            print(f"[Config] Failed to save batch zones: {e}")
+
+    def save_per_file_zones(self, batch_base_dir: str, per_file_zones: Dict[str, Dict[int, Dict[str, tuple]]]):
+        """Save per-file zones for crash recovery
+
+        Args:
+            batch_base_dir: Base directory of current batch
+            per_file_zones: {file_path: {page_idx: {zone_id: zone_data}}}
+        """
+        data = self._load_batch_zones()
+        data['batch_base_dir'] = batch_base_dir
+
+        # Convert page indices from int to str for JSON
+        zones_serializable = {}
+        for file_path, page_zones in per_file_zones.items():
+            zones_serializable[file_path] = {
+                str(page_idx): zone_data
+                for page_idx, zone_data in page_zones.items()
+            }
+        data['per_page_zones'] = zones_serializable
+        self._save_batch_zones(data)
+
+    def get_per_file_zones(self, batch_base_dir: str) -> Dict[str, Dict[int, Dict[str, tuple]]]:
+        """Load per-file zones for batch recovery
+
+        Args:
+            batch_base_dir: Base directory to match
+
+        Returns:
+            {file_path: {page_idx: {zone_id: zone_data}}} or empty dict if no match
+        """
+        data = self._load_batch_zones()
+        if data.get('batch_base_dir') != batch_base_dir:
+            return {}  # Different batch, don't restore
+
+        # Convert page indices from str back to int
+        raw_zones = data.get('per_page_zones', {})
+        result = {}
+        for file_path, page_zones in raw_zones.items():
+            result[file_path] = {
+                int(page_idx): zone_data
+                for page_idx, zone_data in page_zones.items()
+            }
+        return result
+
+    def save_per_file_custom_zones(self, batch_base_dir: str, per_file_custom_zones: Dict[str, Dict[str, Any]]):
+        """Save per-file custom Zone objects for crash recovery
+
+        Args:
+            batch_base_dir: Base directory of current batch
+            per_file_custom_zones: {file_path: {zone_id: zone_dict}}
+        """
+        data = self._load_batch_zones()
+        data['batch_base_dir'] = batch_base_dir
+        data['custom_zones'] = per_file_custom_zones
+        self._save_batch_zones(data)
+
+    def get_per_file_custom_zones(self, batch_base_dir: str) -> Dict[str, Dict[str, Any]]:
+        """Load per-file custom zones for batch recovery
+
+        Args:
+            batch_base_dir: Base directory to match
+
+        Returns:
+            {file_path: {zone_id: zone_dict}} or empty dict if no match
+        """
+        data = self._load_batch_zones()
+        if data.get('batch_base_dir') != batch_base_dir:
+            return {}  # Different batch, don't restore
+        return data.get('custom_zones', {})
+
+    def clear_batch_zones(self):
+        """Clear batch zones file (called when opening a different folder)"""
+        try:
+            path = self._get_batch_zones_path()
+            if path.exists():
+                path.unlink()
+        except Exception as e:
+            print(f"[Config] Failed to clear batch zones: {e}")
 
 
 # Global instance

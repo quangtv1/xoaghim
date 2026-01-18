@@ -14,6 +14,7 @@ from PyQt5.QtCore import Qt, pyqtSignal, QSize, QPoint, QPropertyAnimation, QEas
 from PyQt5.QtGui import QColor, QPixmap, QPainter, QPolygon
 
 from typing import List, Dict, Set
+from dataclasses import replace as dataclass_replace
 from core.processor import Zone, PRESET_ZONES, TextProtectionOptions, DEFAULT_EDGE_DEPTH_PX
 from core.config_manager import get_config_manager
 from ui.zone_selector import ZoneSelectorWidget
@@ -66,7 +67,7 @@ class SettingsPanel(QWidget):
     text_protection_changed = pyqtSignal(object)  # TextProtectionOptions
     # Draw mode signal: None = off, 'remove' = draw removal zone, 'protect' = draw protection zone
     draw_mode_changed = pyqtSignal(object)  # str or None
-    zones_reset = pyqtSignal()  # Emitted when all zones are reset
+    zones_reset = pyqtSignal(str, str)  # scope, reset_type - 'page'/'folder', 'manual'/'auto'/'all'
     # Undo signal for preset zones (corners/edges): zone_id, enabled, zone_data (w_px, h_px) or (length_pct, depth_px)
     zone_preset_toggled = pyqtSignal(str, bool, tuple)
 
@@ -80,6 +81,10 @@ class SettingsPanel(QWidget):
         self._zone_selection_history: List[str] = []  # Track order of zone selections
         self._collapsed = False
         self._current_draw_mode = None  # Track current draw mode
+        # Per-file storage for custom zones with 'none' filter (Tự do mode)
+        self._per_file_custom_zones: Dict[str, Dict[str, Zone]] = {}  # {file_path: {zone_id: Zone}}
+        self._current_file_path: str = ""
+        self._batch_base_dir: str = ""  # Batch folder for persistence
 
         # Debounce timer for saving zone config (reduce I/O during drag operations)
         self._save_config_timer = QTimer()
@@ -116,6 +121,35 @@ class SettingsPanel(QWidget):
                     self._zones[zone_id].height_px = size['height_px']
                 if 'size_mode' in size:
                     self._zones[zone_id].size_mode = size['size_mode']
+
+        # Restore custom zones (Tùy biến Chung - non-'none' filter)
+        custom_zones_config = config.get('custom_zones', {})
+        for zone_id, zone_data in custom_zones_config.items():
+            # Find the highest custom zone counter
+            if zone_id.startswith('custom_') or zone_id.startswith('protect_'):
+                try:
+                    num = int(zone_id.split('_')[1])
+                    if num > self._custom_zone_counter:
+                        self._custom_zone_counter = num
+                except (IndexError, ValueError):
+                    pass
+
+            # Recreate Zone object
+            self._custom_zones[zone_id] = Zone(
+                id=zone_data['id'],
+                name=zone_data['name'],
+                x=zone_data['x'],
+                y=zone_data['y'],
+                width=zone_data['width'],
+                height=zone_data['height'],
+                threshold=zone_data.get('threshold', 5),
+                enabled=zone_data.get('enabled', True),
+                zone_type=zone_data.get('zone_type', 'remove'),
+                page_filter=zone_data.get('page_filter', 'all'),
+            )
+            # Add to selection history
+            if zone_id not in enabled_zones:
+                enabled_zones.append(zone_id)
 
         # Restore threshold
         threshold = config.get('threshold', 5)
@@ -169,9 +203,28 @@ class SettingsPanel(QWidget):
                 'size_mode': zone.size_mode,
             }
 
+        # Save custom zones with non-'none' filter (Tùy biến Chung)
+        # Zones with 'none' filter are per-file and saved separately
+        custom_zones_config = {}
+        for zone_id, zone in self._custom_zones.items():
+            if zone.page_filter != 'none':  # Only save global custom zones
+                custom_zones_config[zone_id] = {
+                    'id': zone.id,
+                    'name': zone.name,
+                    'x': zone.x,
+                    'y': zone.y,
+                    'width': zone.width,
+                    'height': zone.height,
+                    'threshold': zone.threshold,
+                    'enabled': zone.enabled,
+                    'zone_type': zone.zone_type,
+                    'page_filter': zone.page_filter,
+                }
+
         config = {
             'enabled_zones': enabled_zones,
             'zone_sizes': zone_sizes,
+            'custom_zones': custom_zones_config,  # Add custom zones
             'threshold': self.threshold_slider.value(),
             'filter_mode': self._get_current_filter(),
             'text_protection': self.text_protection_cb.isChecked(),
@@ -782,10 +835,16 @@ class SettingsPanel(QWidget):
             self._on_apply_filter_changed(filter_map[filter_mode])
 
     def _on_compact_draw_mode_changed(self, mode):
-        """Handle draw mode change from compact toolbar"""
+        """Handle draw mode change from compact toolbar
+
+        When entering draw mode (Tùy biến), auto-switch to "Tự do" filter.
+        """
         self._current_draw_mode = mode
         # Sync with zone selector draw buttons
         self.zone_selector.set_draw_mode(mode)
+        if mode is not None:
+            # Entering draw mode → auto-switch to "Tự do" filter
+            self.apply_free_rb.setChecked(True)
         self.draw_mode_changed.emit(mode)
 
     def _on_compact_ai_detect_toggled(self, enabled: bool):
@@ -989,15 +1048,24 @@ class SettingsPanel(QWidget):
         self.height_label.setText(f"{self.height_slider.value()}%")
     
     def _on_draw_mode_changed(self, mode):
-        """Forward draw mode signal to MainWindow (mode: 'remove', 'protect', or None)"""
+        """Forward draw mode signal to MainWindow (mode: 'remove', 'protect', or None)
+
+        When entering draw mode (Tùy biến), auto-switch to "Tự do" filter.
+        """
+        self._current_draw_mode = mode
+        if mode is not None:
+            # Entering draw mode → auto-switch to "Tự do" filter
+            self.apply_free_rb.setChecked(True)
         self.draw_mode_changed.emit(mode)
 
-    def add_custom_zone_from_rect(self, x: float, y: float, width: float, height: float, zone_type: str = 'remove'):
+    def add_custom_zone_from_rect(self, x: float, y: float, width: float, height: float,
+                                   zone_type: str = 'remove', page_idx: int = -1):
         """Add custom zone from drawn rectangle (coordinates as % 0.0-1.0)
 
         Args:
             x, y, width, height: Zone coordinates as percentages (0.0-1.0)
             zone_type: 'remove' for removal zone, 'protect' for protection zone
+            page_idx: Target page index (0-based). -1 means use page_filter
         """
         self._custom_zone_counter += 1
 
@@ -1007,6 +1075,8 @@ class SettingsPanel(QWidget):
         else:
             zone_id = f'custom_{self._custom_zone_counter}'
             zone_name = f'Xóa ghim {self._custom_zone_counter}'
+
+        current_filter = self._get_current_filter()
 
         self._custom_zones[zone_id] = Zone(
             id=zone_id,
@@ -1018,7 +1088,8 @@ class SettingsPanel(QWidget):
             threshold=self.threshold_slider.value(),
             enabled=True,
             zone_type=zone_type,  # 'remove' or 'protect'
-            page_filter=self._get_current_filter()
+            page_filter=current_filter,
+            target_page=page_idx if current_filter == 'none' else -1  # Use target_page in 'none' mode
         )
 
         # Add to selection history
@@ -1032,6 +1103,14 @@ class SettingsPanel(QWidget):
         if idx >= 0:
             self.zone_combo.setCurrentIndex(idx)
         # Keep draw mode active - user can continue drawing more zones
+
+        # Save immediately for crash recovery
+        if current_filter == 'none':
+            # Tự do mode: save per-file zones
+            self.save_per_file_custom_zones()
+        else:
+            # Global custom zone: save to config
+            self._save_zone_config()
 
     def set_draw_mode(self, mode):
         """Set draw mode state (mode: 'remove', 'protect', or None)"""
@@ -1048,6 +1127,8 @@ class SettingsPanel(QWidget):
 
         if base_id.startswith('custom') or base_id.startswith('protect'):
             # Custom/Protect zone - remove from custom_zones dict
+            zone = self._custom_zones.get(base_id)
+            zone_filter = zone.page_filter if zone else 'all'
             if base_id in self._custom_zones:
                 del self._custom_zones[base_id]
             # Update combo and emit for custom zones
@@ -1055,6 +1136,11 @@ class SettingsPanel(QWidget):
             if self._zone_selection_history:
                 self._select_zone_in_combo(self._zone_selection_history[-1])
             self._emit_zones()
+            # Save immediately for crash recovery
+            if zone_filter == 'none':
+                self.save_per_file_custom_zones()
+            else:
+                self._save_zone_config()
         elif base_id.startswith('corner_') or base_id.startswith('margin_'):
             # Corner/Margin zone - uncheck in zone selector
             # This will trigger zones_changed signal which updates everything
@@ -1156,11 +1242,15 @@ class SettingsPanel(QWidget):
                     zone_data = (zone.width, zone.height_px)
                 self.zone_preset_toggled.emit(zone_id, enabled, zone_data)
 
-    def clear_custom_zones_with_free_filter(self):
+    def clear_custom_zones_with_free_filter(self, emit_signal: bool = False):
         """Clear custom zones that have page_filter='none' (Tự do mode).
 
-        Called when switching files in batch mode to prevent per-page zones
-        from being applied to files with different page counts.
+        Called when switching files in batch mode. Zones are saved to per-file
+        storage before clearing, so they can be restored when switching back.
+
+        Args:
+            emit_signal: If True, emit zones_changed signal. Default False since
+                        caller will typically call set_zones() after loading new file.
         """
         zones_to_remove = [
             zone_id for zone_id, zone in self._custom_zones.items()
@@ -1179,9 +1269,154 @@ class SettingsPanel(QWidget):
         self._update_zone_combo()
         if self._zone_selection_history:
             self._select_zone_in_combo(self._zone_selection_history[-1])
-        self._emit_zones()
+
+        if emit_signal:
+            self._emit_zones()
 
         return True  # Zones were removed
+
+    def set_batch_base_dir(self, batch_base_dir: str):
+        """Set batch base directory for persistence."""
+        self._batch_base_dir = batch_base_dir
+
+    def save_per_file_custom_zones(self, file_path: str = None, persist: bool = True):
+        """Save custom zones with 'none' filter for a specific file.
+
+        Args:
+            file_path: File path to save zones for. Uses _current_file_path if None.
+            persist: If True, also persist to disk for crash recovery.
+        """
+        path = file_path or self._current_file_path
+        if not path:
+            return
+
+        # Get zones with 'none' filter - deep copy each Zone to avoid reference issues
+        zones_to_save = {
+            zone_id: dataclass_replace(zone)
+            for zone_id, zone in self._custom_zones.items()
+            if zone.page_filter == 'none'
+        }
+
+        if zones_to_save:
+            self._per_file_custom_zones[path] = zones_to_save
+        elif path in self._per_file_custom_zones:
+            # Remove entry if no Tự do zones remain (important for deletion)
+            del self._per_file_custom_zones[path]
+
+        # Persist to disk for crash recovery
+        if persist and self._batch_base_dir:
+            self._persist_custom_zones_to_disk()
+
+    def load_per_file_custom_zones(self, file_path: str) -> bool:
+        """Load custom zones with 'none' filter for a specific file.
+
+        Args:
+            file_path: File path to load zones for.
+
+        Returns:
+            True if zones were loaded.
+        """
+        if file_path not in self._per_file_custom_zones:
+            return False
+
+        saved_zones = self._per_file_custom_zones[file_path]
+
+        # Restore zones - deep copy to avoid reference issues
+        for zone_id, zone in saved_zones.items():
+            self._custom_zones[zone_id] = dataclass_replace(zone)
+            if zone_id not in self._zone_selection_history:
+                self._zone_selection_history.append(zone_id)
+
+        # Update UI
+        self._update_zone_combo()
+        self._emit_zones()
+
+        return True
+
+    def set_current_file_path(self, file_path: str):
+        """Set current file path for per-file zone tracking."""
+        self._current_file_path = file_path
+
+    def clear_per_file_custom_zones(self):
+        """Clear all per-file custom zone storage."""
+        self._per_file_custom_zones.clear()
+        self._current_file_path = ""
+        self._batch_base_dir = ""
+
+    def _persist_custom_zones_to_disk(self):
+        """Persist per-file custom zones to disk for crash recovery."""
+        if not self._batch_base_dir:
+            return
+        # Don't overwrite with empty data (would lose persisted zones on fresh open)
+        if not self._per_file_custom_zones:
+            return
+        from core.config_manager import get_config_manager
+        # Convert Zone objects to serializable dicts
+        serializable = {}
+        for file_path, zones in self._per_file_custom_zones.items():
+            serializable[file_path] = {
+                zone_id: self._zone_to_dict(zone)
+                for zone_id, zone in zones.items()
+            }
+        get_config_manager().save_per_file_custom_zones(
+            self._batch_base_dir,
+            serializable
+        )
+
+    def _zone_to_dict(self, zone: Zone) -> dict:
+        """Convert Zone to serializable dict."""
+        return {
+            'id': zone.id,
+            'name': zone.name,
+            'x': zone.x,
+            'y': zone.y,
+            'width': zone.width,
+            'height': zone.height,
+            'threshold': zone.threshold,
+            'enabled': zone.enabled,
+            'zone_type': zone.zone_type,
+            'page_filter': zone.page_filter,
+            'target_page': zone.target_page,
+            'width_px': zone.width_px,
+            'height_px': zone.height_px,
+        }
+
+    def _dict_to_zone(self, d: dict) -> Zone:
+        """Convert dict back to Zone object."""
+        return Zone(
+            id=d['id'],
+            name=d['name'],
+            x=d['x'],
+            y=d['y'],
+            width=d['width'],
+            height=d['height'],
+            threshold=d.get('threshold', 5),
+            enabled=d.get('enabled', True),
+            zone_type=d.get('zone_type', 'remove'),
+            page_filter=d.get('page_filter', 'all'),
+            target_page=d.get('target_page', -1),
+            width_px=d.get('width_px', 0),
+            height_px=d.get('height_px', 0),
+        )
+
+    def load_persisted_custom_zones(self, batch_base_dir: str):
+        """Load persisted custom zones from disk for crash recovery.
+
+        Called when opening a batch folder to restore previous work.
+
+        Args:
+            batch_base_dir: Batch folder to load zones for.
+        """
+        self._batch_base_dir = batch_base_dir
+        from core.config_manager import get_config_manager
+        persisted = get_config_manager().get_per_file_custom_zones(batch_base_dir)
+        if persisted:
+            # Convert dicts back to Zone objects
+            for file_path, zones in persisted.items():
+                self._per_file_custom_zones[file_path] = {
+                    zone_id: self._dict_to_zone(zone_dict)
+                    for zone_id, zone_dict in zones.items()
+                }
 
     def _on_settings_changed(self):
         """Khi thay đổi settings"""
@@ -1312,107 +1547,164 @@ class SettingsPanel(QWidget):
         self._save_zone_config()  # Save config when filter changes
 
     def _on_reset_zones_clicked(self):
-        """Handle reset zones button - show popup with 3 options"""
-        from PyQt5.QtWidgets import QDialog
+        """Handle reset zones button - show popup with zone type options"""
+        from PyQt5.QtWidgets import QDialog, QGroupBox, QFrame
 
-        # Check what zones exist
-        # Thủ công = preset (corners, edges) + custom zones
-        has_preset = any(z.enabled for z in self._zones.values())
-        has_custom = bool(self._custom_zones)
-        has_manual = has_preset or has_custom
-        # Tự động = auto detection (text protection)
-        has_auto = self.text_protection_cb.isChecked()
+        # Styles
+        group_style = """
+            QGroupBox {
+                font-size: 12px; font-weight: 600; color: #374151;
+                border: 1px solid #E5E7EB; border-radius: 8px;
+                margin-top: 8px; padding: 8px; background-color: #FAFAFA;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin; left: 12px;
+                padding: 0 6px; background-color: #FAFAFA;
+            }
+        """
+        btn_style = """
+            QPushButton {
+                background-color: #FFFFFF; color: #374151;
+                border: 1px solid #D1D5DB; border-radius: 6px;
+                padding: 6px 12px; font-size: 12px;
+            }
+            QPushButton:hover { background-color: #DBEAFE; color: #1D4ED8; border-color: #93C5FD; }
+            QPushButton:pressed { background-color: #BFDBFE; }
+            QPushButton:disabled { background-color: #F3F4F6; color: #9CA3AF; border-color: #E5E7EB; }
+        """
+        btn_danger_style = """
+            QPushButton {
+                background-color: #FEF2F2; color: #DC2626;
+                border: 1px solid #FECACA; border-radius: 6px;
+                padding: 6px 12px; font-size: 12px;
+            }
+            QPushButton:hover { background-color: #FEE2E2; border-color: #F87171; }
+            QPushButton:pressed { background-color: #FECACA; }
+            QPushButton:disabled { background-color: #F3F4F6; color: #9CA3AF; border-color: #E5E7EB; }
+        """
+        desc_style = "font-size: 11px; color: #6B7280; margin-bottom: 4px;"
 
-        if not has_manual and not has_auto:
-            return  # Nothing to reset
-
-        # Create custom dialog
+        # Create dialog
         dialog = QDialog(self)
-        dialog.setWindowTitle("Xóa vùng")
+        dialog.setWindowTitle("Xóa vùng chọn")
+        dialog.setMinimumWidth(320)
 
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        # Title label
-        title = QLabel("Chọn loại vùng cần xóa:")
-        title.setStyleSheet("font-size: 13px; font-weight: 500; color: #374151;")
-        layout.addWidget(title)
+        # Helper to check Zone chung custom zones (page_filter != 'none')
+        def has_zone_chung_custom():
+            return any(
+                getattr(z, 'page_filter', 'all') != 'none'
+                for z in self._custom_zones.values()
+            )
 
-        # Button style - blue theme
-        btn_style = """
-            QPushButton {
-                background-color: #FFFFFF;
-                color: #374151;
-                border: 1px solid #D1D5DB;
-                border-radius: 6px;
-                padding: 8px 16px;
-                font-size: 13px;
-                min-width: 80px;
-            }
-            QPushButton:hover {
-                background-color: #DBEAFE;
-                color: #1D4ED8;
-                border-color: #93C5FD;
-            }
-            QPushButton:pressed {
-                background-color: #BFDBFE;
-                color: #1E40AF;
-            }
-            QPushButton:disabled {
-                background-color: #F9FAFB;
-                color: #9CA3AF;
-                border-color: #E5E7EB;
-            }
-        """
+        # State tracking
+        state = {
+            'has_zone_chung': any(z.enabled for z in self._zones.values()) or has_zone_chung_custom(),
+            'has_zone_rieng': self._has_per_file_zones()
+        }
+        buttons = {}
 
-        cancel_style = """
-            QPushButton {
-                background-color: #FFFFFF;
-                color: #6B7280;
-                border: 1px solid #D1D5DB;
-                border-radius: 6px;
-                padding: 8px 16px;
-                font-size: 13px;
-                min-width: 60px;
-            }
-            QPushButton:hover {
-                background-color: #F3F4F6;
-                border-color: #9CA3AF;
-            }
-        """
+        def update_buttons():
+            """Update button states after deletion"""
+            state['has_zone_chung'] = any(z.enabled for z in self._zones.values()) or has_zone_chung_custom()
+            state['has_zone_rieng'] = self._has_per_file_zones()
+            has_any = state['has_zone_chung'] or state['has_zone_rieng']
 
-        # Horizontal button row
+            buttons['btn_chung'].setEnabled(state['has_zone_chung'])
+            buttons['btn_file'].setEnabled(state['has_zone_rieng'])
+            buttons['btn_folder'].setEnabled(state['has_zone_rieng'])
+            buttons['btn_all'].setEnabled(has_any)
+
+        def on_reset_chung():
+            self._reset_zone_chung()
+            update_buttons()
+
+        def on_reset_rieng(scope):
+            self._reset_zone_rieng(scope)
+            update_buttons()
+
+        def on_reset_all():
+            self._reset_all_zone_types()
+            update_buttons()
+
+        # Zone chung section
+        chung_group = QGroupBox("Zone chung")
+        chung_group.setStyleSheet(group_style)
+        chung_layout = QVBoxLayout(chung_group)
+        chung_layout.setContentsMargins(8, 12, 8, 8)
+        chung_layout.setSpacing(6)
+
+        desc = QLabel("Góc, Cạnh, Tùy biến chung (áp dụng cho tất cả)")
+        desc.setStyleSheet(desc_style)
+        chung_layout.addWidget(desc)
+
+        buttons['btn_chung'] = QPushButton("Xóa Zone chung")
+        buttons['btn_chung'].setStyleSheet(btn_style)
+        buttons['btn_chung'].setEnabled(state['has_zone_chung'])
+        buttons['btn_chung'].clicked.connect(on_reset_chung)
+        chung_layout.addWidget(buttons['btn_chung'])
+        layout.addWidget(chung_group)
+
+        # Zone riêng section
+        rieng_group = QGroupBox("Zone riêng")
+        rieng_group.setStyleSheet(group_style)
+        rieng_layout = QVBoxLayout(rieng_group)
+        rieng_layout.setContentsMargins(8, 12, 8, 8)
+        rieng_layout.setSpacing(6)
+
+        desc = QLabel("Vùng vẽ riêng theo từng file")
+        desc.setStyleSheet(desc_style)
+        rieng_layout.addWidget(desc)
+
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
 
-        btn_manual = QPushButton("Thủ công")
-        btn_manual.setToolTip("Xóa Góc, Cạnh và Tùy biến")
-        btn_manual.setStyleSheet(btn_style)
-        btn_manual.setEnabled(has_manual)
-        btn_manual.clicked.connect(lambda: (self._reset_manual_zones(), dialog.accept()))
-        btn_row.addWidget(btn_manual)
+        buttons['btn_file'] = QPushButton("File hiện tại")
+        buttons['btn_file'].setStyleSheet(btn_style)
+        buttons['btn_file'].setEnabled(state['has_zone_rieng'])
+        buttons['btn_file'].clicked.connect(lambda: on_reset_rieng('file'))
+        btn_row.addWidget(buttons['btn_file'])
 
-        btn_auto = QPushButton("Tự động")
-        btn_auto.setToolTip("Tắt nhận diện vùng bảo vệ tự động")
-        btn_auto.setStyleSheet(btn_style)
-        btn_auto.setEnabled(has_auto)
-        btn_auto.clicked.connect(lambda: (self._reset_auto_detection(), dialog.accept()))
-        btn_row.addWidget(btn_auto)
+        buttons['btn_folder'] = QPushButton("Cả thư mục")
+        buttons['btn_folder'].setStyleSheet(btn_style)
+        buttons['btn_folder'].setEnabled(state['has_zone_rieng'])
+        buttons['btn_folder'].clicked.connect(lambda: on_reset_rieng('folder'))
+        btn_row.addWidget(buttons['btn_folder'])
 
-        btn_both = QPushButton("Tất cả")
-        btn_both.setToolTip("Xóa cả thủ công và tự động")
-        btn_both.setStyleSheet(btn_style)
-        btn_both.setEnabled(has_manual or has_auto)
-        btn_both.clicked.connect(lambda: (self._reset_all_zones(), dialog.accept()))
-        btn_row.addWidget(btn_both)
+        rieng_layout.addLayout(btn_row)
+        layout.addWidget(rieng_group)
 
-        btn_cancel = QPushButton("Hủy")
-        btn_cancel.setStyleSheet(cancel_style)
-        btn_cancel.clicked.connect(dialog.reject)
-        btn_row.addWidget(btn_cancel)
+        # Separator
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setStyleSheet("background-color: #E5E7EB;")
+        separator.setFixedHeight(1)
+        layout.addWidget(separator)
 
-        layout.addLayout(btn_row)
+        # Bottom row
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(8)
+
+        has_any = state['has_zone_chung'] or state['has_zone_rieng']
+        buttons['btn_all'] = QPushButton("Xóa tất cả")
+        buttons['btn_all'].setToolTip("Zone chung + Zone riêng")
+        buttons['btn_all'].setStyleSheet(btn_danger_style)
+        buttons['btn_all'].setEnabled(has_any)
+        buttons['btn_all'].clicked.connect(on_reset_all)
+        bottom_row.addWidget(buttons['btn_all'])
+
+        bottom_row.addStretch()
+
+        btn_close = QPushButton("Đóng")
+        btn_close.setStyleSheet(btn_style)
+        btn_close.clicked.connect(dialog.reject)
+        bottom_row.addWidget(btn_close)
+
+        layout.addLayout(bottom_row)
+
         dialog.exec_()
 
     def _reset_manual_zones(self):
@@ -1438,8 +1730,11 @@ class SettingsPanel(QWidget):
         # Emit signal to update preview
         self._emit_zones()
 
-        # Emit signal to clear per_page_zones in preview
-        self.zones_reset.emit()
+        # Emit signal to clear per_page_zones in preview (folder scope, manual type)
+        self.zones_reset.emit('folder', 'manual')
+
+        # Save config to persist zone removal
+        self._save_zone_config()
 
     def _reset_auto_detection(self):
         """Reset auto detection (tự động - nhận diện vùng bảo vệ)"""
@@ -1458,6 +1753,152 @@ class SettingsPanel(QWidget):
         # Disable auto detection
         if self.text_protection_cb.isChecked():
             self.text_protection_cb.setChecked(False)
+
+    def _has_per_file_zones(self) -> bool:
+        """Check if there are per-file zones (Zone riêng)
+
+        Zone riêng = custom_* zones with page_filter == 'none'
+        NOT Zone chung (corner_*, margin_*, custom zones with page_filter != 'none')
+        """
+        # Check via parent main_window's preview
+        parent = self.parent()
+        while parent:
+            if hasattr(parent, 'preview') and hasattr(parent.preview, 'before_panel'):
+                before_panel = parent.preview.before_panel
+
+                # Check current file's Zone riêng from _per_page_zones
+                per_page_zones = getattr(before_panel, '_per_page_zones', {})
+                for page_zones in per_page_zones.values():
+                    for zone_id in page_zones.keys():
+                        # Zone riêng = custom_* or protect_* (not preset zones)
+                        if not zone_id.startswith('corner_') and not zone_id.startswith('margin_'):
+                            return True
+
+                # Check other files' Zone riêng from _per_file_zones
+                per_file_zones = getattr(before_panel, '_per_file_zones', {})
+                for file_zones in per_file_zones.values():
+                    for page_zones in file_zones.values():
+                        for zone_id in page_zones.keys():
+                            if not zone_id.startswith('corner_') and not zone_id.startswith('margin_'):
+                                return True
+
+                return False
+            parent = parent.parent() if hasattr(parent, 'parent') else None
+        return False
+
+    def _reset_zone_chung(self):
+        """Reset Zone chung (Góc, Cạnh, Tùy biến chung)
+
+        Zone chung = preset zones + custom zones with page_filter != 'none'
+        Zone riêng = custom zones with page_filter == 'none' (Tự do mode)
+        """
+        # Disable all preset zones (corners, edges)
+        for zone in self._zones.values():
+            zone.enabled = False
+
+        # Only clear Zone chung custom zones (page_filter != 'none')
+        # Keep Zone riêng (Tự do zones with page_filter == 'none')
+        zone_rieng_ids = [
+            zone_id for zone_id, zone in self._custom_zones.items()
+            if getattr(zone, 'page_filter', 'all') == 'none'
+        ]
+        zone_chung_ids = [
+            zone_id for zone_id in self._custom_zones.keys()
+            if zone_id not in zone_rieng_ids
+        ]
+
+        # Remove only Zone chung custom zones
+        for zone_id in zone_chung_ids:
+            del self._custom_zones[zone_id]
+
+        # Clear selection history for removed zones
+        self._zone_selection_history = [
+            z for z in self._zone_selection_history if z in self._custom_zones
+        ]
+        if self._selected_zone_id not in self._custom_zones:
+            self._selected_zone_id = None
+
+        # Update zone selector UI
+        self.zone_selector.reset_all()
+
+        # Update zone combo
+        self._update_zone_combo()
+
+        # Emit signal to update preview
+        self._emit_zones()
+
+        # Save config to persist zone removal
+        self._save_zone_config()
+
+        # Emit signal to clear Zone chung overlays in preview
+        self.zones_reset.emit('folder', 'chung')
+
+    def _reset_zone_rieng(self, scope: str = 'folder'):
+        """Reset Zone riêng (per-file zones)
+
+        Args:
+            scope: 'file' for current file, 'folder' for entire folder
+        """
+        # Clear Zone riêng from _custom_zones (zones with page_filter == 'none')
+        zone_rieng_ids = [
+            zone_id for zone_id, zone in self._custom_zones.items()
+            if getattr(zone, 'page_filter', 'all') == 'none'
+        ]
+        for zone_id in zone_rieng_ids:
+            del self._custom_zones[zone_id]
+
+        # Clear from selection history
+        self._zone_selection_history = [
+            z for z in self._zone_selection_history if z in self._custom_zones or z in self._zones
+        ]
+        if self._selected_zone_id not in self._custom_zones and self._selected_zone_id not in self._zones:
+            self._selected_zone_id = None
+
+        # Update UI
+        self._update_zone_combo()
+        self._emit_zones()
+
+        # Clear from per-file storage
+        if scope == 'file' and self._current_file_path:
+            if self._current_file_path in self._per_file_custom_zones:
+                del self._per_file_custom_zones[self._current_file_path]
+        elif scope == 'folder':
+            self._per_file_custom_zones.clear()
+
+        # Persist to disk
+        if self._batch_base_dir:
+            self._persist_custom_zones_to_disk()
+
+        # Emit signal for main_window to clear per-page zones in preview
+        self.zones_reset.emit(scope, 'rieng')
+
+    def _reset_all_zone_types(self):
+        """Reset all zone types (Zone chung + Zone riêng)"""
+        self._reset_zone_chung()
+        self._reset_zone_rieng()
+
+    def _reset_zones_with_scope(self, scope: str, reset_type: str):
+        """Reset zones with specified scope and type
+
+        Args:
+            scope: 'page' for current page only, 'folder' for entire folder
+            reset_type: 'manual' for Thủ công, 'all' for Tất cả
+        """
+        if scope == 'folder':
+            # Folder scope - reset all (current behavior)
+            if reset_type == 'manual':
+                self._reset_manual_zones()
+            else:  # 'all'
+                self._reset_all_zones()
+        else:
+            # Page scope - emit signal for main_window to handle
+            # For page scope, we don't reset global settings (preset zones, auto detection)
+            # We only clear per-page zones via the signal
+            self.zones_reset.emit(scope, reset_type)
+
+            # For 'all' reset type, also disable auto detection
+            if reset_type == 'all' and self.text_protection_cb.isChecked():
+                self.text_protection_cb.setChecked(False)
 
     def reset_to_default_zones(self):
         """Reset zones to default state:
@@ -1506,14 +1947,27 @@ class SettingsPanel(QWidget):
     def set_output_path(self, path: str):
         self.output_path.setText(path)
     
-    def update_zone_from_preview(self, zone_id: str, x: float, y: float, w: float, h: float):
-        """Cập nhật zone từ preview (khi kéo thả)"""
+    def update_zone_from_preview(self, zone_id: str, x: float, y: float, w: float, h: float,
+                                   w_px: int = 0, h_px: int = 0):
+        """Cập nhật zone từ preview (khi kéo thả)
+
+        Args:
+            zone_id: Zone ID
+            x, y, w, h: Percentage values (0.0-1.0)
+            w_px, h_px: Pixel values for corners/edges (0 means not applicable)
+        """
         zone = self._zones.get(zone_id) or self._custom_zones.get(zone_id)
         if zone:
             zone.x = x
             zone.y = y
             zone.width = w
             zone.height = h
+
+            # Update pixel values for corners/edges
+            if w_px > 0:
+                zone.width_px = w_px
+            if h_px > 0:
+                zone.height_px = h_px
 
             if zone_id == self._selected_zone_id:
                 self.width_slider.blockSignals(True)
@@ -1527,5 +1981,5 @@ class SettingsPanel(QWidget):
 
                 self._update_size_labels()
 
-            # Debounced save: wait 300ms after last modification to reduce I/O during drag
+            # Debounced save for all zones (reduces I/O during drag)
             self._save_config_timer.start(300)
