@@ -2556,10 +2556,22 @@ class ContinuousPreviewWidget(QWidget):
             return []
 
         # Get preview page dimensions for pixel-to-percent conversion
-        img_w, img_h = 1, 1  # Defaults
-        if convert_to_percent and page_idx < len(self.before_panel._page_items):
-            page_rect = self.before_panel._page_items[page_idx].boundingRect()
-            img_w, img_h = int(page_rect.width()), int(page_rect.height())
+        img_w, img_h = 1, 1  # Defaults for non-convert mode (not used in calculations)
+        if convert_to_percent:
+            img_w, img_h = 0, 0  # Reset to detect if we got valid dimensions
+            # Try to get dimensions from page_items first (QGraphicsPixmapItem)
+            if page_idx < len(self.before_panel._page_items):
+                page_rect = self.before_panel._page_items[page_idx].boundingRect()
+                img_w, img_h = int(page_rect.width()), int(page_rect.height())
+            # Fallback to _pages numpy array if page_items not available
+            elif page_idx < len(self._pages):
+                img_h, img_w = self._pages[page_idx].shape[:2]
+
+            # Safety check: if we can't get valid dimensions, return empty
+            # This prevents garbage percentage values like 10000%
+            if img_w <= 0 or img_h <= 0:
+                print(f"[WARNING] Cannot get page dimensions for page {page_idx}, skipping zone conversion")
+                return []
 
         for zone_id, zone_data in per_page_zones[page_idx].items():
             # Find zone_def for this zone_id to get threshold and other properties
