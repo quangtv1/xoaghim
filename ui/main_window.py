@@ -129,6 +129,11 @@ class ProcessThread(QThread):
             start_time = time.time()
             processor = StapleRemover(protect_red=False)
 
+            # Apply text protection settings if provided
+            text_protection = self.settings.get('text_protection')
+            if text_protection:
+                processor.set_text_protection(text_protection)
+
             def process_func(image, page_num):
                 if self._cancelled:
                     return image
@@ -204,6 +209,11 @@ class BatchProcessThread(QThread):
         try:
             start_time = time.time()
             processor = StapleRemover(protect_red=False)
+
+            # Apply text protection settings if provided
+            text_protection = self.settings.get('text_protection')
+            if text_protection:
+                processor.set_text_protection(text_protection)
 
             for i, input_path in enumerate(self.files):
                 if self._cancelled:
