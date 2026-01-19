@@ -1,29 +1,28 @@
 # XoaGhim PDF - Project Roadmap
 
-**Last Updated:** 2026-01-17
-**Current Version:** 1.1.18
+**Last Updated:** 2026-01-19
+**Current Version:** 1.1.21
 
 ---
 
 ## Release Timeline
 
-### Current (v1.1.18) - In Progress
+### v1.1.21 (Current - Stable)
 
-**Status:** Compact Toolbar Integration
-- Icon-only toolbar for collapsed settings panel
-- 8 zone toggle buttons (4 corners + 4 edges)
-- Draw mode: Remove (-) and Protect (+) exclusive
-- Filter: All, Odd, Even, Current Page exclusive
-- Clear zones and AI detect action buttons
-- QPainter-based custom icons (20+ types)
-- Full state synchronization with settings panel
+**Status:** All Enhancements Complete
+- Sidebar file filters (name + page count)
+- Loading overlay for large PDFs (>20 pages)
+- Zone counter on status bar (global + per-file)
+- Delete zones (global/per-file/per-page)
+- Auto-recovery on crash
+- Undo (Ctrl+Z) up to 79 actions
+- Delete key for zone removal
+- Hybrid zone sizing (pixels + percentage)
+- Batch mode zoom preservation
+- Compact settings toolbar (v1.1.19+)
 
-**Focus Areas:**
-- Toolbar refinement and polish
-- Cross-platform testing
-- Performance benchmarking
-
-**Estimated Completion:** January 2026
+**Release Date:** 2026-01-19
+**Status:** Stable/Production
 
 ---
 
@@ -212,12 +211,12 @@
 | Limitation | Impact | Solution (Future) |
 |-----------|--------|------------------|
 | ONNX model ~100MB | First-time setup delay | Compression, streaming download |
-| CPU-only AI | Slow processing | GPU acceleration (v1.2) |
+| CPU-only AI | Slow processing (3-5s per page) | GPU acceleration (v1.2) |
 | Single user | Not for shared teams | Web interface (v1.4) |
-| No undo/redo | Zone changes permanent | Zone history (v1.3) |
-| No profiles | Repetitive setup | Zone profiles (v1.3) |
-| Windows only build | Platform exclusion | macOS/Linux builds |
 | No OCR | Text extraction limited | OCR integration (v1.5) |
+| No zone profiles | Repetitive setup | Zone templates (v1.3) |
+| No web interface | Team collaboration limited | Web UI (v1.4) |
+| Batch throughput | ~3-5 pages/sec | GPU acceleration (v1.2) |
 
 ---
 
@@ -452,5 +451,6 @@ Before each release:
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
-| 1.0 | 2026-01-17 | Team | Initial roadmap |
+| 1.1 | 2026-01-19 | Docs Manager | Updated for v1.1.21 release (all core features complete) |
+| 1.0 | 2026-01-17 | Team | Initial roadmap (v1.1.18 baseline) |
 

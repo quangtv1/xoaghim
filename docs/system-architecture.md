@@ -1,7 +1,7 @@
 # XoaGhim PDF - System Architecture
 
-**Last Updated:** 2026-01-17
-**Version:** 1.1.18
+**Last Updated:** 2026-01-19
+**Version:** 1.1.21
 
 ---
 

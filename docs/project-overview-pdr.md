@@ -1,330 +1,228 @@
-# XoaGhim PDF - Project Overview & PDR
+# Xóa Vết Ghim PDF - Project Overview & PDR
 
-**Project Name:** Xóa Vết Ghim PDF (Remove Staple Marks PDF)
-**Version:** 1.1.18
+## Project Summary
+
+**Project Name:** Xóa Vết Ghim PDF (PDF Staple Mark Remover)
+**Version:** 1.1.21
 **Organization:** HUCE
-**Last Updated:** 2026-01-17
-**Status:** Active Development
+**Framework:** PyQt5 (Python 3.8+)
+**Platform:** Windows, macOS, Linux
+**Repository:** [GitHub](https://github.com/quangtv1/xoaghim)
 
----
-
-## Executive Summary
-
-XoaGhim is a desktop application that removes staple marks and damage from scanned PDF documents using advanced image processing and AI-powered layout detection. Built with PyQt5 and Python, it provides both single-file and batch processing capabilities with real-time preview and configurable protection zones.
-
-**Target Users:** Document management teams, archivists, administrative staff processing scanned PDFs
-
-**Key Value Proposition:** Automate staple mark removal while intelligently protecting important document content (text, signatures, tables)
-
----
+A professional desktop application using AI-powered layout detection to intelligently remove staple marks and artifacts from scanned PDF documents while preserving content integrity.
 
 ## Product Development Requirements (PDR)
 
-### 1. Functional Requirements
+### Functional Requirements
 
-#### 1.1 File Processing
-- **FR1.1** Support single PDF file processing via file dialog
-- **FR1.2** Support batch processing of multiple PDFs from directory
-- **FR1.3** Implement drag & drop file input for Windows and macOS
-- **FR1.4** Display file metadata: filename, page count, file size
-- **FR1.5** Implement page filtering: all pages / odd pages only / even pages only / current page
+#### F1. File Management
+- **F1.1** Support single file and batch folder processing
+- **F1.2** Drag & drop file handling (macOS/Windows support)
+- **F1.3** Sidebar file filters (by name and page count in batch mode)
+- **F1.4** Loading overlay with spinner for large PDFs (>20 pages)
+- **F1.5** Auto-recovery of files, folders, and zone selections on crash
+- **F1.6** DPI adjustment (72-300) with optional JPEG compression
 
-#### 1.2 Zone Selection & Configuration
-- **FR2.1** Provide 8 preset zones: 4 corners (top-left, top-right, bottom-left, bottom-right) + 4 edges (top, bottom, left, right)
-- **FR2.2** Implement custom zone drawing mode for flexible region definition
-- **FR2.3** Support multi-page zone application (apply same zone to multiple pages)
-- **FR2.4** Persist zone configuration to disk (JSON) across app sessions
-- **FR2.5** Provide zone reset options: manual zones only / auto-detected zones / all zones
-- **FR2.6** Display visual zone representation on paper icon
-- **FR2.7** Support draggable zone boundaries with 8 resize handles
+#### F2. Zone Selection & Management
+- **F2.1** 8 preset zones: 4 corners (TL, TR, BL, BR) + 4 edges (top, bottom, left, right)
+- **F2.2** Custom draw mode for arbitrary zone shapes
+- **F2.3** Hybrid zone sizing: fixed pixels for corners, percentage for edges
+- **F2.4** Global zones (apply to all files) and per-file zones
+- **F2.5** Per-page zone filtering (all, odd, even, current page)
+- **F2.6** Undo/Redo with up to 79 action history (Ctrl+Z)
+- **F2.7** Delete zones via Delete key or UI controls
+- **F2.8** Zone counter display on bottom status bar (global + per-file counts)
+- **F2.9** Persistent zone configuration across application restarts
 
-#### 1.3 Content Protection
-- **FR3.1** Automatically detect and protect red/blue colored pixels (signatures, marks)
-- **FR3.2** Implement AI-powered layout detection using YOLO DocLayNet (ONNX)
-- **FR3.3** Support 11 layout categories: text, title, list, table, figure, caption, header, footer, page-number, footnote, section-header
-- **FR3.4** Exclude detected protected regions from staple removal processing
-- **FR3.5** Allow toggle of AI protection on/off
+#### F3. Content Protection
+- **F3.1** Automatic color preservation for red/blue signatures and marks
+- **F3.2** AI-powered layout detection using YOLO DocLayNet (ONNX Runtime)
+- **F3.3** Automatic detection of text regions, tables, figures, captions
+- **F3.4** Exclusion of protected regions from staple removal processing
+- **F3.5** Optional toggle for text protection (enable/disable per batch)
+- **F3.6** Sensitivity adjustment slider for artifact detection
 
-#### 1.4 Preview & Visualization
-- **FR4.1** Implement side-by-side preview: original | processed (synchronized)
-- **FR4.2** Support synchronized zoom and scroll between preview panels
-- **FR4.3** Implement continuous (multi-page) and single-page preview modes
-- **FR4.4** Display zones as overlay on preview with visual handles
-- **FR4.5** Real-time preview update as zone/threshold settings change
+#### F4. Preview & Visualization
+- **F4.1** Synchronized split-view preview (original | processed)
+- **F4.2** Real-time preview updates as zones are modified
+- **F4.3** Synchronized scrolling between left and right panels
+- **F4.4** Synchronized zoom between panels
+- **F4.5** Zoom preservation in batch mode (maintains zoom when switching files)
+- **F4.6** Multi-page continuous preview with draggable/resizable zone overlays
+- **F4.7** Visual zone item rendering with selection feedback
 
-#### 1.5 Output & Export
-- **FR5.1** Export processed PDF with configurable DPI (72-300)
-- **FR5.2** Implement JPEG compression for color pages, TIFF for B/W
-- **FR5.3** Support output file naming: original name + "_clean" suffix
-- **FR5.4** Allow custom output directory selection
-- **FR5.5** Display export progress for batch operations
+#### F5. Output & Export
+- **F5.1** Batch processing with multiple file output
+- **F5.2** Smart PDF compression options
+- **F5.3** Configurable output directory
+- **F5.4** Progress indication during export
+- **F5.5** Support for single-page and multi-page PDF output modes
 
-#### 1.6 User Interface
-- **FR6.1** Implement menu bar with File, Edit, View, Help menus
-- **FR6.2** Provide collapsible/expandable settings panel with detail and compact modes
-- **FR6.3** Display bottom status bar with page info and zoom controls
-- **FR6.4** Support keyboard shortcuts: Ctrl+O (open), Ctrl+Enter (run), Ctrl+/- (zoom)
-- **FR6.5** Implement compact icon-only toolbar for collapsed settings panel
-- **FR6.6** Auto-save window size and sidebar width on close
+### Non-Functional Requirements
 
-### 2. Non-Functional Requirements
+#### N1. Performance
+- **N1.1** Large PDF handling (>100 pages) with progressive loading
+- **N1.2** Real-time zone manipulation without lag
+- **N1.3** <500ms response time for zone selection/modification
+- **N1.4** Memory-efficient image caching with smart purging
+- **N1.5** ONNX inference optimization with hardware acceleration support
 
-#### 2.1 Performance
-- **NFR1.1** Page caching: maintain 10 pages in memory for quick navigation
-- **NFR1.2** AI inference latency: <5 seconds per page (on CPU)
-- **NFR1.3** Preview rendering: <500ms per page update
-- **NFR1.4** Batch processing: handle 100+ files without memory leaks
-- **NFR1.5** Support PDFs up to 1000+ pages efficiently
+#### N2. Reliability
+- **N2.1** Automatic crash recovery with state persistence
+- **N2.2** Graceful error handling for corrupted PDFs
+- **N2.3** Validation of user inputs before processing
+- **N2.4** Comprehensive exception logging
 
-#### 2.2 Compatibility
-- **NFR2.1** Python 3.8+ support
-- **NFR2.2** Cross-platform: Windows, macOS, Linux
-- **NFR2.3** Windows high-DPI display support
-- **NFR2.4** Bundled ONNX Runtime and VC++ Runtime DLLs for Windows
+#### N3. Maintainability
+- **N3.1** Modular architecture with clear separation of concerns
+- **N3.2** Signal/slot pattern for UI-core communication
+- **N3.3** Comprehensive unit test coverage (99+ tests)
+- **N3.4** Type hints throughout codebase
+- **N3.5** Consistent code formatting and naming conventions
 
-#### 2.3 Reliability
-- **NFR3.1** Handle corrupted PDF gracefully with error messages
-- **NFR3.2** Validate zone coordinates before processing
-- **NFR3.3** Implement background processing threads to prevent UI freezing
-- **NFR3.4** Maintain configuration backups automatically
+#### N4. Usability
+- **N4.1** Intuitive UI following modern design principles (minimal gray theme)
+- **N4.2** Keyboard shortcuts (Ctrl+Z for undo, Delete for zone removal)
+- **N4.3** Contextual help and tooltips
+- **N4.4** Multi-language support (Vietnamese/English)
 
-#### 2.4 Security
-- **NFR4.1** No external network calls (all processing local)
-- **NFR4.2** Preserve original PDFs (always create new output)
-- **NFR4.3** No sensitive data logging
+#### N5. Security
+- **N5.1** No external API calls for processing (all local)
+- **N5.2** Safe file handling with permission checks
+- **N5.3** Input validation for all user-provided paths and parameters
+- **N5.4** Secure temporary file cleanup
 
-#### 2.5 Maintainability
-- **NFR5.1** Modular architecture: core processing separated from UI
-- **NFR5.2** Comprehensive test coverage (6 test files, 124+ test cases)
-- **NFR5.3** Configuration in JSON for easy user customization
-- **NFR5.4** Clear class separation: Zone dataclass, StapleRemover, PDFHandler, LayoutDetector
+### Technical Constraints
 
----
+#### T1. Dependencies
+- **T1.1** PyQt5 5.15+ for UI framework
+- **T1.2** OpenCV 4.5+ for image processing
+- **T1.3** Pillow 8.0+ for image format handling
+- **T1.4** PyMuPDF or pypdf for PDF manipulation
+- **T1.5** ONNX Runtime 1.11+ for ML inference
+- **T1.6** NumPy for numerical operations
 
-## Architecture Overview
+#### T2. Architecture
+- **T2.1** PyQt5 threading model (QThread for background tasks)
+- **T2.2** Model-View-Controller (MVC) separation
+- **T2.3** Signal/Slot pattern for inter-component communication
+- **T2.4** Configuration persistence via QSettings
 
-### Layered Architecture
-
-```
-┌─────────────────────────────────────┐
-│   Presentation Layer (PyQt5 UI)     │
-│  main_window.py, settings_panel.py  │
-└────────────────┬────────────────────┘
-                 │
-┌────────────────▼────────────────────┐
-│   Application Layer                 │
-│  continuous_preview.py, zone_item.py│
-└────────────────┬────────────────────┘
-                 │
-┌────────────────▼────────────────────┐
-│   Business Logic Layer (core/)      │
-│  processor, layout_detector,        │
-│  zone_optimizer, pdf_handler        │
-└────────────────┬────────────────────┘
-                 │
-┌────────────────▼────────────────────┐
-│   Data Layer                        │
-│  config_manager, PDF files          │
-└─────────────────────────────────────┘
-```
-
-### Core Components
-
-**Processor Module** (670 lines)
-- Zone dataclass: coordinates (%), threshold, enabled flag
-- StapleRemover class: background color detection, red/blue pixel protection
-- 8 PRESET_ZONES for corners and edges
-
-**PDF Handler Module** (645 lines)
-- PDFHandler: page rendering with caching
-- PDFExporter: compression with format selection (JPEG/TIFF)
-- Lazy loading for memory efficiency
-
-**Layout Detector Module** (1,602 lines)
-- 6 backend support: YOLO DocLayNet (primary), PyTorch, PaddleOCR, legacy, Detectron2, GPU server
-- ProtectedRegion dataclass with 11 categories
-- Lazy model loading for first-use optimization
-
-**Zone Optimizer Module** (315 lines)
-- Shapely-based polygon safe zone calculation
-- Text protection integration
-
-**Config Manager Module** (124 lines)
-- Platform-specific paths: ~/Library (macOS), %APPDATA% (Windows), ~/.config (Linux)
-- JSON persistence for zones, thresholds, settings
-
----
-
-## Feature Breakdown
-
-### v1.1.18 (Current)
-- Compact toolbar with icon-only settings (detail/compact toggle)
-- 8 zone toggle buttons + draw mode buttons
-- Page filter buttons (all/odd/even/current)
-- Enhanced toolbar state synchronization
-- Window size & sidebar width auto-save
-
-### v1.1.17
-- Zone config persistence (JSON)
-- 2-click zone reset
-- Auto-save on app close
-
-### v1.1.16
-- Custom zone draw mode
-- AI layout detection (ONNX)
-- Multi-page zone selection
-- 3-option reset popup
-
-### v1.1.15 and Earlier
-- Preset zones (8)
-- Batch processing
-- Drag & drop support
-- Red/blue pixel protection
-- Synchronized dual preview
-
----
-
-## Technical Stack
-
-| Component | Technology | Version |
-|-----------|-----------|---------|
-| Language | Python | 3.8+ |
-| GUI | PyQt5 | ≥5.15.0 |
-| PDF Processing | PyMuPDF (fitz) | ≥1.20.0 |
-| Image Processing | OpenCV | ≥4.5.0 |
-| AI Inference | ONNX Runtime | ≥1.22.0 |
-| Geometry | Shapely | ≥2.0.0 |
-| Arrays | NumPy | ≥1.20.0 |
-| Testing | unittest/pytest | - |
-
-### Optional Dependencies
-- ultralytics (YOLO training)
-- torch (PyTorch backend)
-- PaddleOCR (alternative layout detection)
-- detectron2 (Detectron2 backend)
-
----
-
-## Success Metrics & KPIs
-
-### Functional Metrics
-- **FR Coverage:** 100% of required features implemented
-- **Test Coverage:** ≥80% of core modules
-- **Platform Support:** Passes on Windows, macOS, Linux
-
-### Performance Metrics
-- **Processing Speed:** <5 sec/page on CPU
-- **Memory Usage:** <500MB for 100-page document
-- **UI Responsiveness:** <200ms max freeze time
-
-### Reliability Metrics
-- **Error Handling:** 0 uncaught exceptions on invalid input
-- **Configuration Persistence:** 100% recovery on app restart
-- **Batch Success Rate:** ≥99% of files processed without crash
-
-### User Satisfaction
-- **Setup Time:** <5 minutes from download to first use
-- **Learning Curve:** First document processed in <10 minutes
-- **User Retention:** Track version adoption
-
----
+#### T3. Compatibility
+- **T3.1** Windows 10+ (x64)
+- **T3.2** macOS 10.14+ (Intel & Apple Silicon via universal binary)
+- **T3.3** Linux CentOS 7+ / Rocky / RHEL
+- **T3.4** Python 3.8, 3.9, 3.10, 3.11, 3.12
 
 ## Acceptance Criteria
 
-### Acceptance for v1.1.18
-- [ ] Compact toolbar displays correctly in collapsed mode
-- [ ] All 8 zone buttons toggle zones independently
-- [ ] Draw mode buttons (add/remove) are mutually exclusive
-- [ ] Filter buttons (all/odd/even/current) are mutually exclusive
-- [ ] Clear zones button empties all zones
-- [ ] AI detect button triggers layout detection
-- [ ] Toolbar state syncs with settings panel in real-time
-- [ ] Window size saved and restored on restart
-- [ ] Sidebar width saved and restored on restart
-- [ ] All 124 tests pass
-- [ ] No regressions on v1.1.17 features
+### For Zone Management Feature
+- [ ] All 8 preset zones display correctly on preview
+- [ ] Custom draw mode creates arbitrary polygon zones
+- [ ] Hybrid sizing works for corner (fixed pixels) and edge (percentage) zones
+- [ ] Undo history maintains up to 79 actions without memory leaks
+- [ ] Zone configuration persists across application restarts
 
-### General Acceptance
-- [ ] Single file processing: select → zone → run → export
-- [ ] Batch processing: select folder → zone → run → export all
-- [ ] Preview renders correctly at all zoom levels
-- [ ] Zone overlay updates in real-time
-- [ ] AI protection mode works (red/blue + layout detection)
-- [ ] Output PDFs match quality expectations
-- [ ] Cross-platform builds succeed (Windows/macOS)
-- [ ] No file corruption on any supported PDF type
+### For Batch Processing
+- [ ] Sidebar filters correctly by filename and page count
+- [ ] Loading overlay displays for PDFs >20 pages
+- [ ] Processing completes without data loss
+- [ ] Output files match processing parameters
 
----
+### For Content Protection
+- [ ] AI detection correctly identifies text, tables, figures, captions
+- [ ] Red/blue signature colors are preserved
+- [ ] Protected regions are excluded from artifact removal
+- [ ] Performance degradation <15% with text protection enabled
 
-## Known Limitations & Future Considerations
+### For UI/UX
+- [ ] All elements render correctly at 100%, 125%, 150%, 200% DPI scaling
+- [ ] Drag & drop works on target platforms
+- [ ] Keyboard navigation fully functional
+- [ ] Responsive layout adapts to window resizing
 
-### Current Limitations
-1. ONNX layout detection requires CPU download on first use (~100MB)
-2. AI detection slower on older hardware (<2GHz CPU)
-3. Very large PDFs (1000+ pages) may require multiple sessions
-4. Custom zones not automatically exported to other users
+## Success Metrics
 
-### Future Enhancements
-1. GPU acceleration for layout detection
-2. Batch zone templates for common document types
-3. User-defined zone profiles (save/load)
-4. Server-side GPU processing option
-5. Web UI for remote processing
-6. Advanced OCR for text extraction/protection
-7. Undo/redo for zone modifications
-8. Advanced filters (noise reduction, deskew)
+### User Experience
+- **Metric 1:** Time to process single file: <2s for 10-page document
+- **Metric 2:** Zone creation/modification response: <200ms
+- **Metric 3:** User satisfaction on ease of zone selection: >4.0/5.0
+- **Metric 4:** Staple mark removal accuracy: >95% without content damage
 
----
+### System Performance
+- **Metric 5:** Memory usage for 100-page PDF: <500MB
+- **Metric 6:** CPU utilization during preview: <30% (single core)
+- **Metric 7:** Batch processing throughput: 3-5 pages/second
 
-## Dependencies & Deployment
+### Code Quality
+- **Metric 8:** Test coverage: >85% for core modules
+- **Metric 9:** Code duplication: <5%
+- **Metric 10:** Average cyclomatic complexity per function: <8
 
-### Build & Release
-- GitHub Actions workflow: `.github/workflows/build-windows.yml`
-- PyInstaller: onedir mode for Windows
-- Bundled: ONNX Runtime DLLs, VC++ Runtime DLLs
-- Output: `XoaGhim-{version}-Windows.zip`
+## Version History
 
-### Installation Methods
-1. **Source:** Clone + `pip install -r requirements.txt`
-2. **Windows Build:** Download ZIP from releases
-3. **Future:** Conda package, installer
+### v1.1.21 (Current)
+- Added sidebar file filters (name + pages)
+- Loading overlay for large PDFs
+- Zone counter on status bar
+- Delete zones globally/per-file/per-page
+- Auto-recovery on crash
+- Undo (Ctrl+Z) support
+- Delete key for zone removal
+- Hybrid zone sizing
+- Batch mode zoom preservation
 
----
+### v1.1.18-v1.1.20
+- Compact settings toolbar (collapsed mode)
+- Zone persistence across restarts
+- Batch preview container
+- Text protection AI integration
 
-## Risk Assessment
+### v1.0.0
+- Core staple removal engine
+- Basic UI with preview
+- Zone management (preset + custom)
+- PDF I/O and export
 
-| Risk | Severity | Mitigation |
-|------|----------|-----------|
-| ONNX model download failure | Medium | Fallback to PyTorch backend or disable AI |
-| PDF corruption during export | High | Test with diverse PDF types, validate output |
-| Performance on large files | Medium | Implement streaming, page caching |
-| Cross-platform UI inconsistency | Low | Test on all platforms, PyQt5 handles most |
-| Zone config file corruption | Low | Auto-backup, validation on load |
+## Development Roadmap
 
----
+### Next Releases (v1.2.x)
+- [ ] UI/UX refinements based on user feedback
+- [ ] Performance optimization for >500 page documents
+- [ ] Additional ML models (document rotation, quality assessment)
+- [ ] Batch export with detailed progress reporting
+- [ ] Plugin architecture for custom processors
 
-## Roadmap & Timeline
+### Future Considerations (v2.0)
+- [ ] Web-based interface
+- [ ] API server for integration
+- [ ] Cloud processing option
+- [ ] Multi-threaded batch processing
+- [ ] Advanced document analysis tools
 
-### Q1 2026 (In Progress)
-- Compact toolbar refinement
-- GPU acceleration exploration
-- Performance benchmarking
+## Dependencies & Integrations
 
-### Q2 2026 (Planned)
-- Advanced zone templates
-- User-defined zone profiles
-- Web preview integration
+### External Libraries
+- **PyQt5:** UI framework and event handling
+- **OpenCV (cv2):** Image processing and artifact detection
+- **Pillow:** Image format conversion and optimization
+- **ONNX Runtime:** ML model inference for layout detection
+- **PyMuPDF/pypdf:** PDF reading and manipulation
+- **NumPy:** Array operations for image processing
 
-### Q3 2026 (Future)
-- Server-side GPU processing
-- Batch job scheduling
-- Advanced OCR features
+### Configuration Storage
+- **QSettings:** Cross-platform application settings
+- **File-based:** Zone configurations stored in JSON format
 
----
+## Team & Responsibilities
 
-## Revision History
+- **Developer:** Quang TV
+- **Organization:** HUCE
+- **Support:** GitHub Issues
 
-| Version | Date | Changes |
-|---------|------|---------|
-| 1.0 | 2026-01-17 | Initial PDR document |
+## Document Control
 
+- **Last Updated:** 2026-01-19
+- **Version:** 1.1
+- **Status:** Current (v1.1.21)
+- **Generated by:** Documentation manager
