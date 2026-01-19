@@ -400,13 +400,13 @@ class StapleRemover:
 
         # Lấy tọa độ vùng (với edge padding cho góc/cạnh)
         zx, zy, zw, zh = zone.to_pixels_with_edge_padding(w, h, padding=10, render_dpi=render_dpi)
-        
+
         # Đảm bảo không vượt quá biên
         zx = max(0, min(zx, w - 1))
         zy = max(0, min(zy, h - 1))
         zw = min(zw, w - zx)
         zh = min(zh, h - zy)
-        
+
         if zw <= 0 or zh <= 0:
             return result
         
@@ -427,18 +427,30 @@ class StapleRemover:
         # Tìm pixel tối hơn nền
         diff = bg_gray - gray_region.astype(np.int16)
         artifact_mask = diff > zone.threshold
-        
-        # Bảo vệ chữ đen (gray < 80)
-        text_mask = gray_region < 80
-        artifact_mask = artifact_mask & ~text_mask
+        artifact_count_initial = artifact_mask.sum()
+
+        # Bảo vệ chữ đen - chỉ khi text protection được bật
+        text_protected = 0
+        if self._text_protection.enabled:
+            zone_id_lower = zone.id.lower()
+            is_edge_or_corner = zone_id_lower.startswith('margin_') or zone_id_lower.startswith('corner_')
+            text_threshold = 50 if is_edge_or_corner else 80  # Giảm cho cạnh/góc
+            text_mask = gray_region < text_threshold
+            text_protected = (artifact_mask & text_mask).sum()
+            artifact_mask = artifact_mask & ~text_mask
+
         
         # Bảo vệ màu đỏ/xanh nếu được bật
         if self.protect_red and is_color:
             color_mask = self.is_red_or_blue(region, artifact_mask)
             artifact_mask = artifact_mask & ~color_mask
         
-        # Morphological operations
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        # Morphological operations - scale kernel size with DPI
+        dpi_scale = render_dpi / 120.0
+        kernel_size = max(5, int(5 * dpi_scale))
+        if kernel_size % 2 == 0:
+            kernel_size += 1  # Ensure odd size
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
         artifact_mask = artifact_mask.astype(np.uint8) * 255
         artifact_mask = cv2.morphologyEx(artifact_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
         artifact_mask = cv2.dilate(artifact_mask, kernel, iterations=3)
@@ -683,6 +695,7 @@ class StapleRemover:
                 ))
             else:
                 removal_zones.append(zone)
+
 
         # Combine AI-detected regions with custom protect regions
         all_protected = list(protected_regions or []) + custom_protect_regions

@@ -2921,6 +2921,7 @@ class ContinuousPreviewWidget(QWidget):
 
         for zone_id, zone_data in per_page_zones[page_idx].items():
             # Find zone_def for this zone_id to get threshold and other properties
+            # self._zones contains both preset (corners, edges) and custom zones
             zone_def = None
             for z in self._zones:
                 if z.id == zone_id:
@@ -3035,6 +3036,8 @@ class ContinuousPreviewWidget(QWidget):
 
             else:
                 # Custom/protect or legacy format: (x_pct, y_pct, w_pct, h_pct)
+                threshold_val = zone_def.threshold if zone_def else 7
+                zone_type_val = getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove'
                 page_zone = Zone(
                     id=zone_id,
                     name=zone_def.name if zone_def else zone_id,
@@ -3042,9 +3045,9 @@ class ContinuousPreviewWidget(QWidget):
                     y=zone_data[1],
                     width=zone_data[2],
                     height=zone_data[3],
-                    threshold=zone_def.threshold if zone_def else 7,
+                    threshold=threshold_val,
                     enabled=True,
-                    zone_type=getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove',
+                    zone_type=zone_type_val,
                     size_mode='percent'
                 )
 
@@ -3059,28 +3062,20 @@ class ContinuousPreviewWidget(QWidget):
         all pages share the same zone coordinates after user modifications.
         This ensures Clean uses the exact same zones shown in preview Đích.
 
-        Uses convert_to_percent=True to ensure DPI-independent output:
-        - Preview renders at 120 DPI
-        - Clean export renders at 200 DPI
-        - By converting pixel-based zones to percentages, the zones scale correctly
+        Uses convert_to_percent=False to preserve hybrid mode with width_px/height_px.
+        DPI scaling is handled in processor.py via render_dpi parameter.
         """
         per_page_zones = self.before_panel._per_page_zones
 
         # Find first page with zones
         for page_idx in sorted(per_page_zones.keys()):
-            # convert_to_percent=True ensures zones scale correctly at export DPI
-            zones = self._get_zones_for_page(page_idx, convert_to_percent=True)
+            # convert_to_percent=False preserves hybrid mode for DPI scaling
+            zones = self._get_zones_for_page(page_idx, convert_to_percent=False)
             if zones:
                 return zones
 
         # Fallback: return zones from _zones (definitions)
-        # Zones from definitions are already in percent mode, so safe to use directly
-        fallback_zones = [z for z in self._zones if z.enabled]
-        # Ensure all fallback zones use percent mode for DPI-independence
-        for z in fallback_zones:
-            if not hasattr(z, 'size_mode') or z.size_mode != 'percent':
-                z.size_mode = 'percent'
-        return fallback_zones
+        return [z for z in self._zones if z.enabled]
 
     def get_page_filter(self) -> str:
         """Get current page filter mode: 'all', 'odd', 'even', 'none'"""
@@ -3105,8 +3100,10 @@ class ContinuousPreviewWidget(QWidget):
             if not self.before_panel._should_apply_to_page(page_idx):
                 return []
 
-        # Always use per-page zones - each page only gets zones explicitly added to it
-        return self._get_zones_for_page(page_idx, convert_to_percent=True)
+        # Always use per-page zones - preserve hybrid mode for DPI scaling
+        per_page_zones = self.before_panel._per_page_zones
+        zones = self._get_zones_for_page(page_idx, convert_to_percent=False)
+        return zones
     
     def _sync_zoom(self, zoom: float):
         """Sync zoom"""
