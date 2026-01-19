@@ -2,7 +2,7 @@
 
 Ứng dụng desktop dùng AI để xóa vết ghim (staple marks) từ tài liệu PDF scan.
 
-**Phiên bản:** 1.1.18 | **Tổ chức:** HUCE | **Framework:** PyQt5 | **Python 3.8+**
+**Phiên bản:** 1.1.21 | **Tổ chức:** HUCE | **Framework:** PyQt5 | **Python 3.8+**
 
 ## Tính Năng Nổi Bật
 
@@ -10,12 +10,20 @@
 - **Đơn/Batch** - Xử lý file riêng lẻ hoặc hàng loạt từ thư mục
 - **Drag & Drop** - Hỗ trợ kéo thả trên macOS/Windows
 - **Lọc trang** - Tất cả/lẻ/chẵn/trang hiện tại
+- **Bộ lọc Sidebar** - Lọc file theo tên và số trang (batch mode)
+- **Loading overlay** - Spinner khi mở file PDF lớn (>20 trang)
+- **Auto-recovery** - Tự động khôi phục file/folder và vùng chọn khi crash
 
 ### Chọn Vùng Xử Lý
 - **8 Preset Zones** - 4 góc + 4 cạnh
 - **Custom Draw Mode** - Vẽ vùng tùy chỉnh trên preview
-- **Multi-page** - Áp dụng vùng cho nhiều trang cùng lúc
-- **Persistent Config** - Lưu cấu hình qua các lần mở app
+- **Hybrid Zone Sizing** - Góc dùng pixel cố định, cạnh dùng % chiều dài
+- **Zone chung/riêng** - Vùng chung cho tất cả hoặc riêng từng file/trang
+- **Undo (Ctrl+Z)** - Hoàn tác thao tác vùng chọn (tối đa 79 lần)
+- **Phím Delete** - Xóa vùng chọn đang được chọn
+- **Xóa vùng chọn** - Xóa chung/riêng, từng trang/cả thư mục
+- **Bộ đếm Zone** - Hiển thị số zone chung và riêng trên thanh bottom
+- **Persistent Config** - Lưu cấu hình và vùng chọn qua các lần mở app
 
 ### Bảo Vệ Nội Dung
 - **Dấu/Chữ ký** - Giữ nguyên màu đỏ/xanh
@@ -26,6 +34,7 @@
 ### Preview & Xuất File
 - **Song song** - Gốc | Đích (realtime sync)
 - **Sync scroll/zoom** - Đồng bộ giữa 2 panel
+- **Giữ zoom** - Batch mode giữ nguyên zoom khi chuyển file
 - **Liên tiếp/Trang** - Chế độ xem lựa chọn
 - **DPI 72-300** - Nén JPEG tùy chọn
 
@@ -41,7 +50,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-**Windows Build:** [XoaGhim-1.1.18-Windows.zip](https://github.com/quangtv1/xoaghim/releases/latest)
+**Windows Build:** [XoaGhim-1.1.21-Windows.zip](https://github.com/quangtv1/xoaghim/releases/latest)
 
 ## Sử Dụng
 
