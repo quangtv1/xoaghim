@@ -39,21 +39,30 @@ class Zone:
     height_px: int = 0  # Fixed pixel height (for corners, edge depth)
     size_mode: str = 'percent'  # 'percent', 'fixed', 'hybrid'
 
-    def to_pixels(self, img_width: int, img_height: int) -> Tuple[int, int, int, int]:
+    def to_pixels(self, img_width: int, img_height: int, render_dpi: int = 120) -> Tuple[int, int, int, int]:
         """Chuyển đổi sang pixels dựa trên size_mode.
 
         - percent: width/height as % of page dimensions
         - fixed: width_px/height_px as fixed pixels (corners - position adjusted)
         - hybrid: one dimension %, other fixed pixels (edges)
 
+        Args:
+            img_width: Image width in pixels
+            img_height: Image height in pixels
+            render_dpi: DPI used to render the image (default 120 for preview)
+                        Pixel values are scaled proportionally for different DPIs
+
         Returns: (x, y, w, h) in pixels
         """
         zone_id = self.id.lower()
+        # Scale pixel values based on DPI (base DPI = 120 for preview)
+        dpi_scale = render_dpi / 120.0
 
         if self.size_mode == 'fixed':
             # Fixed pixel size (corners) - position based on corner type
-            w = self.width_px if self.width_px > 0 else int(self.width * img_width)
-            h = self.height_px if self.height_px > 0 else int(self.height * img_height)
+            # Scale pixel values by DPI ratio
+            w = int(self.width_px * dpi_scale) if self.width_px > 0 else int(self.width * img_width)
+            h = int(self.height_px * dpi_scale) if self.height_px > 0 else int(self.height * img_height)
 
             # Calculate exact corner positions
             if zone_id == 'corner_tl':
@@ -72,27 +81,28 @@ class Zone:
         elif self.size_mode == 'hybrid':
             # Hybrid: one dimension %, other fixed (edges)
             # Edges: 100% along edge, fixed depth into page
+            # Scale pixel values by DPI ratio
             if zone_id == 'margin_top':
                 # Top edge: width=100%, height=fixed
                 w = int(self.width * img_width)
-                h = self.height_px if self.height_px > 0 else int(self.height * img_height)
+                h = int(self.height_px * dpi_scale) if self.height_px > 0 else int(self.height * img_height)
                 x = 0
                 y = 0
             elif zone_id == 'margin_bottom':
                 # Bottom edge: width=100%, height=fixed
                 w = int(self.width * img_width)
-                h = self.height_px if self.height_px > 0 else int(self.height * img_height)
+                h = int(self.height_px * dpi_scale) if self.height_px > 0 else int(self.height * img_height)
                 x = 0
                 y = img_height - h
             elif zone_id == 'margin_left':
                 # Left edge: width=fixed, height=100%
-                w = self.width_px if self.width_px > 0 else int(self.width * img_width)
+                w = int(self.width_px * dpi_scale) if self.width_px > 0 else int(self.width * img_width)
                 h = int(self.height * img_height)
                 x = 0
                 y = 0
             elif zone_id == 'margin_right':
                 # Right edge: width=fixed, height=100%
-                w = self.width_px if self.width_px > 0 else int(self.width * img_width)
+                w = int(self.width_px * dpi_scale) if self.width_px > 0 else int(self.width * img_width)
                 h = int(self.height * img_height)
                 x = img_width - w
                 y = 0
@@ -100,8 +110,8 @@ class Zone:
                 # Custom zones in hybrid mode
                 x = int(self.x * img_width)
                 y = int(self.y * img_height)
-                w = self.width_px if self.width_px > 0 else int(self.width * img_width)
-                h = self.height_px if self.height_px > 0 else int(self.height * img_height)
+                w = int(self.width_px * dpi_scale) if self.width_px > 0 else int(self.width * img_width)
+                h = int(self.height_px * dpi_scale) if self.height_px > 0 else int(self.height * img_height)
         else:
             # Default: percent mode (backward compatible)
             x = int(self.x * img_width)
@@ -117,12 +127,12 @@ class Zone:
 
         return (x, y, w, h)
 
-    def to_bbox(self, img_width: int, img_height: int) -> Tuple[int, int, int, int]:
+    def to_bbox(self, img_width: int, img_height: int, render_dpi: int = 120) -> Tuple[int, int, int, int]:
         """Chuyển đổi sang bbox format: (x1, y1, x2, y2)"""
-        x, y, w, h = self.to_pixels(img_width, img_height)
+        x, y, w, h = self.to_pixels(img_width, img_height, render_dpi)
         return (x, y, x + w, y + h)
 
-    def to_bbox_with_edge_padding(self, img_width: int, img_height: int, padding: int = 10) -> Tuple[int, int, int, int]:
+    def to_bbox_with_edge_padding(self, img_width: int, img_height: int, padding: int = 10, render_dpi: int = 120) -> Tuple[int, int, int, int]:
         """Chuyển đổi sang bbox với padding mở rộng ra ngoài đường viền trang.
 
         - Góc (corner_*): mở rộng padding ở 2 cạnh giao nhau
@@ -132,11 +142,12 @@ class Zone:
             img_width: Chiều rộng ảnh
             img_height: Chiều cao ảnh
             padding: Số pixel mở rộng ra ngoài viền (default 10px)
+            render_dpi: DPI used to render the image (default 120 for preview)
 
         Returns:
             (x1, y1, x2, y2) đã được mở rộng và clip vào bounds
         """
-        x1, y1, x2, y2 = self.to_bbox(img_width, img_height)
+        x1, y1, x2, y2 = self.to_bbox(img_width, img_height, render_dpi)
 
         # Xác định hướng mở rộng dựa trên zone ID
         zone_id = self.id.lower()
@@ -173,16 +184,22 @@ class Zone:
 
         return (x1, y1, x2, y2)
 
-    def to_pixels_with_edge_padding(self, img_width: int, img_height: int, padding: int = 10) -> Tuple[int, int, int, int]:
+    def to_pixels_with_edge_padding(self, img_width: int, img_height: int, padding: int = 10, render_dpi: int = 120) -> Tuple[int, int, int, int]:
         """Chuyển đổi sang pixels với padding mở rộng ra ngoài đường viền trang.
 
         - Góc (corner_*): mở rộng padding ở 2 cạnh giao nhau
         - Cạnh (margin_*): mở rộng padding ở 1 cạnh
 
+        Args:
+            img_width: Image width in pixels
+            img_height: Image height in pixels
+            padding: Pixel padding for edge extension
+            render_dpi: DPI used to render the image (default 120 for preview)
+
         Returns:
             (x, y, w, h) đã được mở rộng và clip vào bounds
         """
-        x1, y1, x2, y2 = self.to_bbox_with_edge_padding(img_width, img_height, padding)
+        x1, y1, x2, y2 = self.to_bbox_with_edge_padding(img_width, img_height, padding, render_dpi)
         return (x1, y1, x2 - x1, y2 - y1)
 
 
@@ -366,17 +383,23 @@ class StapleRemover:
         
         return red_mask | blue_mask
     
-    def process_zone(self, image: np.ndarray, zone: Zone) -> np.ndarray:
-        """Xử lý một vùng cụ thể"""
+    def process_zone(self, image: np.ndarray, zone: Zone, render_dpi: int = 120) -> np.ndarray:
+        """Xử lý một vùng cụ thể
+
+        Args:
+            image: Image to process
+            zone: Zone to process
+            render_dpi: DPI used to render the image (default 120 for preview)
+        """
         if not zone.enabled:
             return image
-        
+
         result = image.copy()
         h, w = image.shape[:2]
         is_color = len(image.shape) == 3
-        
+
         # Lấy tọa độ vùng (với edge padding cho góc/cạnh)
-        zx, zy, zw, zh = zone.to_pixels_with_edge_padding(w, h, padding=10)
+        zx, zy, zw, zh = zone.to_pixels_with_edge_padding(w, h, padding=10, render_dpi=render_dpi)
         
         # Đảm bảo không vượt quá biên
         zx = max(0, min(zx, w - 1))
@@ -512,7 +535,8 @@ class StapleRemover:
         return result
 
     def _process_zone_with_protection(self, image: np.ndarray, zone: Zone,
-                                        protected_regions: List, w: int, h: int) -> np.ndarray:
+                                        protected_regions: List, w: int, h: int,
+                                        render_dpi: int = 120) -> np.ndarray:
         """
         Xử lý zone với bảo vệ các vùng protected (fallback khi không có zone_optimizer).
 
@@ -522,6 +546,7 @@ class StapleRemover:
             protected_regions: Danh sách ProtectedRegion cần bảo vệ
             w: Chiều rộng ảnh
             h: Chiều cao ảnh
+            render_dpi: DPI used to render the image (default 120 for preview)
 
         Returns:
             Ảnh đã xử lý
@@ -533,7 +558,7 @@ class StapleRemover:
         is_color = len(image.shape) == 3
 
         # Lấy tọa độ vùng (với edge padding cho góc/cạnh)
-        zx, zy, zw, zh = zone.to_pixels_with_edge_padding(w, h, padding=10)
+        zx, zy, zw, zh = zone.to_pixels_with_edge_padding(w, h, padding=10, render_dpi=render_dpi)
 
         # Đảm bảo không vượt quá biên
         zx = max(0, min(zx, w - 1))
@@ -614,7 +639,8 @@ class StapleRemover:
         return result
 
     def process_image(self, image: np.ndarray, zones: List[Zone],
-                      protected_regions: Optional[List] = None) -> np.ndarray:
+                      protected_regions: Optional[List] = None,
+                      render_dpi: int = 120) -> np.ndarray:
         """
         Xử lý ảnh với nhiều vùng.
 
@@ -630,6 +656,7 @@ class StapleRemover:
             image: Ảnh cần xử lý
             zones: Danh sách vùng cần xử lý
             protected_regions: Danh sách vùng protected đã detect (optional, tránh detect lại)
+            render_dpi: DPI used to render the image (default 120 for preview)
 
         Returns:
             Ảnh đã xử lý
@@ -648,7 +675,7 @@ class StapleRemover:
             if getattr(zone, 'zone_type', 'remove') == 'protect':
                 # Custom protect zone -> convert to ProtectedRegion
                 from .layout_detector import ProtectedRegion
-                x, y, zw, zh = zone.to_pixels(w, h)
+                x, y, zw, zh = zone.to_pixels(w, h, render_dpi)
                 custom_protect_regions.append(ProtectedRegion(
                     bbox=(x, y, x + zw, y + zh),
                     label='custom_protect',
@@ -669,7 +696,7 @@ class StapleRemover:
         if all_protected and self.zone_optimizer is not None:
             for zone in removal_zones:
                 # Convert zone to bbox (với edge padding cho góc/cạnh)
-                user_bbox = zone.to_bbox_with_edge_padding(w, h, padding=10)
+                user_bbox = zone.to_bbox_with_edge_padding(w, h, padding=10, render_dpi=render_dpi)
 
                 # Optimize zone to get safe zones (avoiding protected regions)
                 safe_zones = self.zone_optimizer.optimize(user_bbox, all_protected)
@@ -680,17 +707,23 @@ class StapleRemover:
         elif all_protected:
             # Fallback: subtract protected regions from removal zones manually
             for zone in removal_zones:
-                result = self._process_zone_with_protection(result, zone, all_protected, w, h)
+                result = self._process_zone_with_protection(result, zone, all_protected, w, h, render_dpi)
         else:
             # Original behavior - no protection
             for zone in removal_zones:
-                result = self.process_zone(result, zone)
+                result = self.process_zone(result, zone, render_dpi)
 
         return result
 
-    def process_image_with_regions(self, image: np.ndarray, zones: List[Zone]):
+    def process_image_with_regions(self, image: np.ndarray, zones: List[Zone],
+                                     render_dpi: int = 120):
         """
         Xử lý ảnh và trả về cả protected regions (cho preview overlay).
+
+        Args:
+            image: Ảnh cần xử lý
+            zones: Danh sách vùng cần xử lý
+            render_dpi: DPI used to render the image (default 120 for preview)
 
         Returns:
             Tuple[np.ndarray, List[ProtectedRegion]]: (ảnh đã xử lý, danh sách vùng protected)
@@ -700,7 +733,7 @@ class StapleRemover:
             protected_regions = self.detect_protected_regions(image)
 
         # Truyền regions đã detect để tránh detect lại trong process_image
-        result = self.process_image(image, zones, protected_regions=protected_regions)
+        result = self.process_image(image, zones, protected_regions=protected_regions, render_dpi=render_dpi)
         return result, protected_regions
 
 

@@ -145,6 +145,9 @@ class ProcessThread(QThread):
             if text_protection:
                 processor.set_text_protection(text_protection)
 
+            # Get DPI for zone coordinate scaling
+            export_dpi = self.settings.get('dpi', 300)
+
             def process_func(image, page_num):
                 if self._cancelled:
                     return image
@@ -160,7 +163,7 @@ class ProcessThread(QThread):
                 if not page_zones:
                     return image  # No zones for this page
 
-                return processor.process_image(image, page_zones)
+                return processor.process_image(image, page_zones, render_dpi=export_dpi)
 
             def progress_callback(current, total):
                 self._total_pages = total
@@ -171,7 +174,7 @@ class ProcessThread(QThread):
                 self.input_path,
                 self.output_path,
                 process_func,
-                dpi=self.settings.get('dpi', 200),
+                dpi=export_dpi,
                 jpeg_quality=self.settings.get('jpeg_quality', 90),
                 optimize_size=self.settings.get('optimize_size', False),
                 progress_callback=progress_callback
@@ -236,6 +239,9 @@ class BatchProcessThread(QThread):
             if text_protection:
                 processor.set_text_protection(text_protection)
 
+            # Get DPI for zone coordinate scaling
+            export_dpi = self.settings.get('dpi', 300)
+
             for i, input_path in enumerate(self.files):
                 if self._cancelled:
                     break
@@ -270,7 +276,7 @@ class BatchProcessThread(QThread):
                             return image
                         # Log format: STT/Tổng: full_path >> Trang X
                         print(f"{file_idx}/{total_files}: {pdf_path} >> Trang {page_num}")
-                        return processor.process_image(image, zones_list)
+                        return processor.process_image(image, zones_list, render_dpi=export_dpi)
 
                     # Track pages for total progress
                     file_pages_before = self._pages_processed
@@ -286,7 +292,7 @@ class BatchProcessThread(QThread):
                         input_path,
                         output_path,
                         process_func,
-                        dpi=self.settings.get('dpi', 200),
+                        dpi=export_dpi,
                         jpeg_quality=self.settings.get('jpeg_quality', 90),
                         optimize_size=self.settings.get('optimize_size', False),
                         progress_callback=page_progress

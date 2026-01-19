@@ -1525,7 +1525,7 @@ class SettingsPanel(QWidget):
 
         return {
             'threshold': self.threshold_slider.value(),
-            'dpi': dpi_map.get(self.quality_combo.currentIndex(), 200),
+            'dpi': dpi_map.get(self.quality_combo.currentIndex(), 300),
             'jpeg_quality': jpeg_quality_map.get(self.jpeg_quality_combo.currentIndex(), 90),
             'optimize_size': self.optimize_size_cb.isChecked(),
             'output_path': self.output_path.text(),

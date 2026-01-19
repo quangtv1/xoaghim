@@ -123,8 +123,8 @@ class PDFExporter:
         input_path: str,
         output_path: str,
         process_func: Callable[[np.ndarray, int], np.ndarray],
-        dpi: int = 200,
-        jpeg_quality: int = 85,
+        dpi: int = 300,
+        jpeg_quality: int = 90,
         optimize_size: bool = False,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> bool:
