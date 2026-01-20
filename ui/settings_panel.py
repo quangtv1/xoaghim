@@ -423,7 +423,7 @@ class SettingsPanel(QWidget):
         self.apply_group.addButton(self.apply_even_rb, 2)
         apply_layout.addWidget(self.apply_even_rb)
 
-        self.apply_free_rb = QRadioButton("Tự do")
+        self.apply_free_rb = QRadioButton("Từng trang")
         self.apply_free_rb.setToolTip("Vùng vẽ mới chỉ thêm vào trang đang xem")
         self.apply_free_rb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
         self.apply_group.addButton(self.apply_free_rb, 3)

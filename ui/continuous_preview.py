@@ -2139,6 +2139,8 @@ class ContinuousPreviewWidget(QWidget):
 
         # Track last emitted page to avoid duplicate signals
         self._last_emitted_page = -1
+        # Flag to skip page detection when programmatically scrolling
+        self._skip_page_detection = False
 
         # Undo manager for zone operations
         self._undo_manager = UndoManager()
@@ -2404,8 +2406,13 @@ class ContinuousPreviewWidget(QWidget):
     
     def set_current_page(self, index: int):
         """Set current page index - scroll in continuous mode, rebuild in single mode"""
+        # Skip page detection during programmatic scroll to prevent jumping
+        self._skip_page_detection = True
+        self._last_emitted_page = index
         self.before_panel.set_current_page(index)
         self.after_panel.set_current_page(index)
+        # Reset flag after scroll completes (use timer to allow scroll event to finish)
+        QTimer.singleShot(100, lambda: setattr(self, '_skip_page_detection', False))
     
     def get_current_page(self) -> int:
         """Get current page index"""
@@ -3122,6 +3129,9 @@ class ContinuousPreviewWidget(QWidget):
 
     def _detect_and_emit_page_change(self):
         """Detect current visible page from scroll position and emit page_changed if changed"""
+        # Skip detection when programmatically scrolling (e.g., user input page number)
+        if self._skip_page_detection:
+            return
         if not self._pages or not self.before_panel._page_positions:
             return
 
