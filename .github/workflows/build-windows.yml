@@ -146,6 +146,12 @@ jobs:
             ### Sửa lỗi
             - **Fix nhập số trang nhảy số** - Nhập số trang ở bottom bar giờ chính xác
             - **Fix Preview/Clean mismatch** - Vùng chọn giờ khớp giữa Preview Đích và file Clean
+            - **Fix Zone Riêng batch mode** - Zone Riêng (Từng trang) giờ hoạt động đúng trong chế độ thư mục
+            - **Fix double file loading** - Khắc phục lỗi số trang bị nhân đôi khi chuyển file
+            - **Fix sidebar không kéo được** - Thanh sidebar giờ có thể kéo rộng/thu hẹp
+
+            ### Cải tiến giao diện
+            - **Zone Riêng màu xanh lá** - Phân biệt Zone Riêng (xanh lá) với Zone Chung (xanh dương)
 
             ### Tải về
             - **XoaGhim-Windows.zip** - Giải nén và chạy `XoaGhim.exe`
