@@ -102,14 +102,18 @@ class ZoneItem(QGraphicsRectItem):
         self._update_handles()
     
     def _update_appearance(self):
-        """Cập nhật màu sắc dựa trên zone_type"""
-        # Colors based on zone_type
+        """Cập nhật màu sắc dựa trên zone_type và zone_id"""
+        # Colors based on zone_type and zone_id
         if self.zone_type == 'protect':
             # Pink for protection zones
             color_normal = QColor(244, 114, 182)      # #F472B6
             color_selected = QColor(219, 39, 119)     # #DB2777 (darker pink)
+        elif self.zone_id.startswith('custom_'):
+            # Green for Zone Riêng (custom removal zones)
+            color_normal = QColor(34, 197, 94)        # #22C55E (green-500)
+            color_selected = QColor(22, 163, 74)      # #16A34A (green-600, darker)
         else:
-            # Blue for removal zones (default)
+            # Blue for Zone Chung (corners, margins)
             color_normal = QColor(59, 130, 246)       # #3B82F6
             color_selected = QColor(29, 78, 216)      # #1D4ED8 (darker blue)
 

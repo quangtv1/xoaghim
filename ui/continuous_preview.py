@@ -377,13 +377,13 @@ class ContinuousGraphicsView(QGraphicsView):
     def _get_draw_colors(self):
         """Get pen and brush colors based on draw mode"""
         if self._draw_mode == 'protect':
-            # Pink/Red for protection
+            # Pink for protection zones
             pen = QPen(QColor(244, 114, 182), 1)  # Pink #F472B6
             brush = QBrush(QColor(244, 114, 182, 50))
         else:
-            # Blue for removal (default)
-            pen = QPen(QColor(59, 130, 246), 1)  # Blue #3B82F6
-            brush = QBrush(QColor(59, 130, 246, 50))
+            # Green for Zone Riêng (custom removal zones)
+            pen = QPen(QColor(34, 197, 94), 1)  # Green #22C55E
+            brush = QBrush(QColor(34, 197, 94, 50))
         return pen, brush
 
     def mousePressEvent(self, event):

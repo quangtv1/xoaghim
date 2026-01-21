@@ -496,10 +496,10 @@ class MainWindow(QMainWindow):
         # === MAIN CONTENT AREA (Sidebar + Right Panel) ===
         # Horizontal splitter: Sidebar | Right content
         self.preview_splitter = QSplitter(Qt.Horizontal)
+        self.preview_splitter.setHandleWidth(6)  # Wider handle for easier dragging
         self.preview_splitter.setStyleSheet("""
             QSplitter::handle {
                 background-color: #D1D5DB;
-                width: 4px;
             }
             QSplitter::handle:hover {
                 background-color: #9CA3AF;
@@ -564,6 +564,9 @@ class MainWindow(QMainWindow):
         self._setup_bottom_bar(right_layout)
 
         self.preview_splitter.addWidget(right_container)
+        self.preview_splitter.setCollapsible(1, False)  # Prevent right panel from collapsing
+        self.preview_splitter.setStretchFactor(0, 0)    # Sidebar: fixed size when window resizes
+        self.preview_splitter.setStretchFactor(1, 1)    # Right panel: stretch to fill
         self.preview_splitter.setSizes([200, 800])
 
         layout.addWidget(self.preview_splitter, stretch=1)
