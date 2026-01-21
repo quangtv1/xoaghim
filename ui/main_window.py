@@ -200,12 +200,13 @@ class ProcessThread(QThread):
 
 
 class BatchProcessThread(QThread):
-    """Thread xử lý batch PDF"""
+    """Thread xử lý batch PDF với parallel processing (auto-scale theo CPU/RAM, max 80%)"""
 
     progress = pyqtSignal(int, int, str)  # current_file, total_files, current_filename
     file_progress = pyqtSignal(int, int)  # current_page, total_pages_in_file
     total_progress = pyqtSignal(int, int)  # pages_processed, total_pages_all_files
     finished = pyqtSignal(bool, dict)  # success, stats {total, success, failed, errors}
+    worker_info = pyqtSignal(int)  # number of parallel workers being used
 
     def __init__(self, files: List[str], base_dir: str, output_dir: str,
                  zones: List[Zone], settings: dict, page_counts: dict = None):
@@ -219,8 +220,13 @@ class BatchProcessThread(QThread):
         self._cancelled = False
         self._pages_processed = 0
         self._total_pages = sum(self.page_counts.get(f, 0) for f in files)
-    
+
     def run(self):
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+        from multiprocessing import Manager
+        from core.resource_manager import ResourceManager
+        from core.parallel_processor import process_single_pdf, serialize_zones, ProcessTask
+
         stats = {
             'total': len(self.files),
             'success': 0,
@@ -230,111 +236,142 @@ class BatchProcessThread(QThread):
             'output_size': 0
         }
 
+        if not self.files:
+            self.finished.emit(True, stats)
+            return
+
         try:
             start_time = time.time()
-            processor = StapleRemover(protect_red=False)
 
-            # Apply text protection settings if provided
-            text_protection = self.settings.get('text_protection')
-            if text_protection:
-                processor.set_text_protection(text_protection)
+            # Calculate optimal workers based on CPU/RAM (max 80%)
+            config = ResourceManager.calculate_optimal_workers(
+                cpu_limit=0.80,
+                ram_limit=0.80,
+                file_count=len(self.files)
+            )
+            max_workers = config.max_workers
 
-            # Get DPI for zone coordinate scaling
-            export_dpi = self.settings.get('dpi', 300)
+            # Emit worker count
+            self.worker_info.emit(max_workers)
+            print(f"[Parallel] Sử dụng {max_workers} processes (CPU/RAM max 80%)")
 
+            # Serialize zones for multiprocessing
+            zone_dicts = serialize_zones(self.zones)
+
+            # Create tasks
+            tasks = []
             for i, input_path in enumerate(self.files):
-                if self._cancelled:
-                    break
+                output_path = self._get_output_path(input_path)
+                task = ProcessTask(
+                    input_path=input_path,
+                    output_path=output_path,
+                    zones=zone_dicts,
+                    settings=self.settings,
+                    file_index=i,
+                    total_files=len(self.files)
+                )
+                tasks.append(task)
 
-                filename = os.path.basename(input_path)
-                self.progress.emit(i + 1, len(self.files), filename)
+            # Process with parallel executor
+            with Manager() as manager:
+                progress_queue = manager.Queue()
 
-                try:
-                    # Generate output path
-                    output_path = self._get_output_path(input_path)
+                with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                    # Submit all tasks
+                    futures = {
+                        executor.submit(process_single_pdf, task, progress_queue): task
+                        for task in tasks
+                    }
 
-                    # Create output directory if needed
-                    output_dir = os.path.dirname(output_path)
-                    if output_dir:
-                        os.makedirs(output_dir, exist_ok=True)
+                    # Track progress
+                    files_completed = 0
+                    pages_by_file = {}  # Track pages per file
 
-                    # Get file sizes
-                    stats['input_size'] += os.path.getsize(input_path)
-
-                    # Closure để capture file index và full path cho logging
-                    file_idx = i + 1
-                    total_files = len(self.files)
-                    pdf_path = input_path
-                    zones_list = self.zones
-
-                    # Blank line giữa các file (trừ file đầu)
-                    if i > 0:
-                        print()
-
-                    def process_func(image, page_num):
+                    while files_completed < len(futures):
                         if self._cancelled:
-                            return image
-                        # Log format: STT/Tổng: full_path >> Trang X
-                        print(f"{file_idx}/{total_files}: {pdf_path} >> Trang {page_num}")
-                        return processor.process_image(image, zones_list, render_dpi=export_dpi)
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            break
 
-                    # Track pages for total progress
-                    file_pages_before = self._pages_processed
+                        # Process progress updates from queue
+                        while not progress_queue.empty():
+                            try:
+                                msg = progress_queue.get_nowait()
+                                if msg['type'] == 'page':
+                                    file_idx = msg['file_index']
+                                    page_num = msg['page_num']
+                                    total_pages = msg['total_pages']
+                                    filename = os.path.basename(msg['input_path'])
 
-                    def page_progress(current, total):
-                        if not self._cancelled:
-                            self.file_progress.emit(current, total)
-                            # Emit total progress (pages across all files)
-                            pages_done = file_pages_before + current
-                            self.total_progress.emit(pages_done, self._total_pages)
+                                    # Update per-file progress
+                                    pages_by_file[file_idx] = page_num
 
-                    success = PDFExporter.export(
-                        input_path,
-                        output_path,
-                        process_func,
-                        dpi=export_dpi,
-                        jpeg_quality=self.settings.get('jpeg_quality', 90),
-                        optimize_size=self.settings.get('optimize_size', False),
-                        progress_callback=page_progress
-                    )
+                                    # Emit signals
+                                    self.progress.emit(file_idx + 1, len(self.files), filename)
+                                    self.file_progress.emit(page_num, total_pages)
 
-                    # Update pages processed for next file
-                    self._pages_processed += self.page_counts.get(input_path, 0)
+                                    # Calculate total pages processed
+                                    total_done = sum(pages_by_file.values())
+                                    self.total_progress.emit(total_done, self._total_pages)
 
-                    # Log elapsed time after each file
-                    elapsed = int(time.time() - start_time)
-                    h, m, s = elapsed // 3600, (elapsed % 3600) // 60, elapsed % 60
-                    print(f">> Thời gian: {h:02d}:{m:02d}:{s:02d}")
+                                    # Log (only non-skipped pages)
+                                    if not msg.get('skipped'):
+                                        print(f"{file_idx + 1}/{len(self.files)}: {msg['input_path']} >> Trang {page_num}")
 
-                    if success and os.path.exists(output_path):
-                        stats['success'] += 1
-                        stats['output_size'] += os.path.getsize(output_path)
-                    else:
-                        stats['failed'] += 1
-                        stats['errors'].append(f"{filename}: Lỗi xuất file")
+                                elif msg['type'] == 'file_complete':
+                                    files_completed += 1
+                                    elapsed = msg['elapsed']
+                                    h = int(elapsed // 3600)
+                                    m = int((elapsed % 3600) // 60)
+                                    s = int(elapsed % 60)
+                                    status = "OK" if msg['success'] else f"FAILED: {msg.get('error', 'Unknown')}"
+                                    print(f">> {os.path.basename(msg['input_path'])}: {status} ({h:02d}:{m:02d}:{s:02d})")
 
-                except Exception as e:
-                    stats['failed'] += 1
-                    stats['errors'].append(f"{filename}: {str(e)}")
-            
+                            except Exception:
+                                break
+
+                        # Small delay to prevent busy-wait
+                        time.sleep(0.05)
+
+                    # Collect results from futures
+                    for future in as_completed(futures):
+                        try:
+                            result = future.result()
+                            stats['input_size'] += result.input_size
+                            stats['output_size'] += result.output_size
+
+                            if result.success:
+                                stats['success'] += 1
+                            else:
+                                stats['failed'] += 1
+                                if result.error:
+                                    stats['errors'].append(f"{os.path.basename(result.input_path)}: {result.error}")
+                        except Exception as e:
+                            stats['failed'] += 1
+                            task = futures[future]
+                            stats['errors'].append(f"{os.path.basename(task.input_path)}: {str(e)}")
+
+            # Log total time
+            total_elapsed = int(time.time() - start_time)
+            h, m, s = total_elapsed // 3600, (total_elapsed % 3600) // 60, total_elapsed % 60
+            print(f"\n[Parallel] Tổng thời gian: {h:02d}:{m:02d}:{s:02d}")
+
             if self._cancelled:
                 self.finished.emit(False, stats)
             else:
                 self.finished.emit(True, stats)
-                
+
         except Exception as e:
             stats['errors'].append(str(e))
             self.finished.emit(False, stats)
-    
+
     def _get_output_path(self, input_path: str) -> str:
         """Generate output path for input file - matches batch_preview logic"""
         rel_path = os.path.relpath(input_path, self.base_dir)
         name, _ = os.path.splitext(rel_path)
         pattern = self.settings.get('filename_pattern', '{gốc}_clean.pdf')
-        # Always apply filename pattern
         output_name = pattern.replace('{gốc}', name)
         return os.path.join(self.output_dir, output_name)
-    
+
     def cancel(self):
         self._cancelled = True
 
@@ -2670,6 +2707,11 @@ class MainWindow(QMainWindow):
         self._batch_time_label = QLabel("Thời gian: 00:00:00")
         layout.addWidget(self._batch_time_label)
 
+        # Worker info label
+        self._batch_worker_label = QLabel("Processes: đang tính...")
+        self._batch_worker_label.setStyleSheet("color: #6B7280; font-size: 12px;")
+        layout.addWidget(self._batch_worker_label)
+
         layout.addStretch()
 
         # Cancel button
@@ -2696,6 +2738,7 @@ class MainWindow(QMainWindow):
         self._batch_process_thread.file_progress.connect(self._on_batch_page_progress)
         self._batch_process_thread.total_progress.connect(self._on_batch_total_progress)
         self._batch_process_thread.finished.connect(self._on_batch_finished)
+        self._batch_process_thread.worker_info.connect(self._on_batch_worker_info)
 
         self._batch_process_thread.start()
         self._batch_dialog.exec_()
@@ -2723,6 +2766,10 @@ class MainWindow(QMainWindow):
         file_info = f"{getattr(self, '_batch_current_file', 0)}/{self._batch_total_files} files"
         page_info = f"{pages_done}/{total_pages} trang"
         self._batch_stats_label.setText(f"Đã xử lý: {file_info} ({page_info})")
+
+    def _on_batch_worker_info(self, num_workers: int):
+        """Update worker count display"""
+        self._batch_worker_label.setText(f"Đang dùng {num_workers} processes song song (CPU/RAM ≤80%)")
     
     def _on_batch_cancel(self):
         """Cancel batch processing"""
