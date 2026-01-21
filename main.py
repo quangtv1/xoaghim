@@ -5,6 +5,12 @@ Xóa Vết Ghim PDF - Ứng dụng xóa vết ghim từ tài liệu scan
 
 import sys
 import os
+import multiprocessing
+
+# Required for Windows + PyInstaller multiprocessing support
+# Must be called before any other code
+if __name__ == "__main__":
+    multiprocessing.freeze_support()
 
 # Add parent to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
