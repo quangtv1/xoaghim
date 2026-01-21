@@ -2,7 +2,7 @@
 
 Ứng dụng desktop dùng AI để xóa vết ghim (staple marks) từ tài liệu PDF scan.
 
-**Phiên bản:** 1.1.21 | **Tổ chức:** HUCE | **Framework:** PyQt5 | **Python 3.8+**
+**Phiên bản:** 1.1.22 | **Tổ chức:** HUCE | **Framework:** PyQt5 | **Python 3.8+**
 
 ## Tính Năng Nổi Bật
 
@@ -51,7 +51,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-**Windows Build:** [XoaGhim-1.1.21-Windows.zip](https://github.com/quangtv1/xoaghim/releases/latest)
+**Windows Build:** [XoaGhim-1.1.22-Windows.zip](https://github.com/quangtv1/xoaghim/releases/latest)
 
 ## Sử Dụng
 

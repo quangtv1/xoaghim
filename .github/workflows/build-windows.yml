@@ -28,7 +28,7 @@ jobs:
           if ($ref -match '^v\d') {
             $version = $ref -replace '^v', ''
           } else {
-            $version = "1.1.21"  # Default for workflow_dispatch on branch
+            $version = "1.1.22"  # Default for workflow_dispatch on branch
           }
           echo "VERSION=$version" >> $env:GITHUB_OUTPUT
           echo "Version: $version"
