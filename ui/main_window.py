@@ -496,7 +496,7 @@ class MainWindow(QMainWindow):
         # === MAIN CONTENT AREA (Sidebar + Right Panel) ===
         # Horizontal splitter: Sidebar | Right content
         self.preview_splitter = QSplitter(Qt.Horizontal)
-        self.preview_splitter.setHandleWidth(6)  # Wider handle for easier dragging
+        self.preview_splitter.setHandleWidth(1)  # Thin handle
         self.preview_splitter.setStyleSheet("""
             QSplitter::handle {
                 background-color: #D1D5DB;
@@ -1000,7 +1000,7 @@ class MainWindow(QMainWindow):
         bottom_bar.setStyleSheet(f"""
             QFrame {{
                 background-color: #F3F4F6;
-                border-top: 1px solid #D1D5DB;
+                border: none;
             }}
             QLabel {{
                 color: #374151;

@@ -33,6 +33,7 @@
 
 ### Preview & Xuất File
 - **Song song** - Gốc | Đích (realtime sync)
+- **Trang thu nhỏ** - Thumbnail sidebar với highlight trang hiện tại
 - **Sync scroll/zoom** - Đồng bộ giữa 2 panel
 - **Giữ zoom** - Batch mode giữ nguyên zoom khi chuyển file
 - **Liên tiếp/Trang** - Chế độ xem lựa chọn
@@ -70,9 +71,10 @@ core/          (6 files, ~2,930 lines)
   ├── zone_optimizer.py    # Polygon algorithms
   └── config_manager.py    # Config persistence
 
-ui/            (12 files, ~10,313 lines)
+ui/            (13 files, ~10,800 lines)
   ├── main_window.py       # Main orchestrator
   ├── continuous_preview.py # Multi-page preview
+  ├── page_thumbnail_sidebar.py # Thumbnail navigation
   ├── settings_panel.py    # Zone config UI
   ├── compact_settings_toolbar.py # Icon toolbar
   └── ... (other UI components)

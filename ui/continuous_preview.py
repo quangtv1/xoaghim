@@ -5,6 +5,7 @@ Continuous Preview - Preview liên tục nhiều trang với nền đen
 import os
 
 from .undo_manager import UndoManager, UndoAction
+from .page_thumbnail_sidebar import ThumbnailPanel
 
 from PyQt5.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel,
@@ -539,7 +540,10 @@ class ContinuousPreviewPanel(QFrame):
     # Batch mode navigation signals
     prev_file_requested = pyqtSignal()  # Navigate to previous file
     next_file_requested = pyqtSignal()  # Navigate to next file
-    
+    # Thumbnail panel signals
+    thumbnail_page_clicked = pyqtSignal(int)  # page_index - when thumbnail is clicked
+    thumbnail_collapsed_changed = pyqtSignal(bool)  # collapsed state changed
+
     PAGE_SPACING = 20  # Khoảng cách giữa các trang
     
     def __init__(self, title: str, show_overlay: bool = False, parent=None):
@@ -724,11 +728,26 @@ class ContinuousPreviewPanel(QFrame):
             title_layout.addWidget(self.collapse_btn)
         
         layout.addWidget(title_bar)
-        
+
+        # Content area: [ThumbnailPanel (Gốc only)] + [GraphicsView]
+        self._content_widget = QWidget()
+        self._content_widget.setStyleSheet("background-color: #E5E7EB;")
+        self._content_layout = QHBoxLayout(self._content_widget)
+        self._content_layout.setContentsMargins(0, 0, 0, 0)
+        self._content_layout.setSpacing(0)
+
+        # Thumbnail panel (only for Gốc panel = show_overlay=True)
+        self._thumbnail_panel = None
+        if show_overlay:
+            self._thumbnail_panel = ThumbnailPanel()
+            self._thumbnail_panel.page_clicked.connect(self._on_thumbnail_page_clicked)
+            self._thumbnail_panel.collapsed_changed.connect(self._on_thumbnail_collapsed_changed)
+            self._content_layout.addWidget(self._thumbnail_panel)
+
         # Graphics view - gray background
         self.scene = QGraphicsScene()
         self.scene.setBackgroundBrush(QBrush(QColor(229, 231, 235)))  # Gray #E5E7EB
-        
+
         self.view = ContinuousGraphicsView()
         self.view.setScene(self.scene)
         self.view.setStyleSheet("background-color: #E5E7EB; border: none;")
@@ -736,8 +755,10 @@ class ContinuousPreviewPanel(QFrame):
         self.view.file_dropped.connect(self.file_dropped.emit)
         self.view.folder_dropped.connect(self.folder_dropped.emit)
         self.view.files_dropped.connect(self.files_dropped.emit)
-        layout.addWidget(self.view)
-        
+        self._content_layout.addWidget(self.view)
+
+        layout.addWidget(self._content_widget)
+
         # Show placeholder only for before panel (show_overlay=True)
         if show_overlay:
             self._add_placeholder()
@@ -762,6 +783,32 @@ class ContinuousPreviewPanel(QFrame):
     def _on_collapse_clicked(self):
         """Handle collapse button click"""
         self.collapse_requested.emit()
+
+    def _on_thumbnail_page_clicked(self, page_index: int):
+        """Handle thumbnail click - scroll to page and emit signal"""
+        self.set_current_page(page_index)
+        self.thumbnail_page_clicked.emit(page_index)
+
+    def _on_thumbnail_collapsed_changed(self, collapsed: bool):
+        """Handle thumbnail panel collapse state change"""
+        self.thumbnail_collapsed_changed.emit(collapsed)
+
+    def update_thumbnail_highlight(self, page_index: int):
+        """Update thumbnail highlight for current visible page"""
+        if self._thumbnail_panel is not None:
+            self._thumbnail_panel.set_current_page(page_index)
+
+    def is_thumbnail_collapsed(self) -> bool:
+        """Check if thumbnail panel is collapsed"""
+        if self._thumbnail_panel is not None:
+            return self._thumbnail_panel.is_collapsed()
+        return True  # No panel = collapsed
+
+    def get_thumbnail_width(self) -> int:
+        """Get current thumbnail panel width"""
+        if self._thumbnail_panel is not None:
+            return self._thumbnail_panel.get_width()
+        return 0
 
     def set_collapse_button_icon(self, collapsed: bool):
         """Update collapse button icon based on state"""
@@ -1064,6 +1111,10 @@ class ContinuousPreviewPanel(QFrame):
         # This ensures zones will be re-added by set_zone_definitions
         self._per_page_zones.clear()
         self._rebuild_scene()
+
+        # Update thumbnail panel if exists (Gốc panel only)
+        if self._thumbnail_panel is not None:
+            self._thumbnail_panel.set_pages(pages)
     
     def _rebuild_scene(self):
         """Xây dựng lại scene với tất cả các trang hoặc 1 trang"""
@@ -2113,6 +2164,8 @@ class ContinuousPreviewWidget(QWidget):
     # Batch mode navigation signals
     prev_file_requested = pyqtSignal()  # Navigate to previous file
     next_file_requested = pyqtSignal()  # Navigate to next file
+    # Thumbnail panel signals
+    thumbnail_collapsed_changed = pyqtSignal(bool)  # collapsed state changed
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2200,6 +2253,9 @@ class ContinuousPreviewWidget(QWidget):
         # Batch mode navigation signals
         self.before_panel.prev_file_requested.connect(self.prev_file_requested.emit)
         self.before_panel.next_file_requested.connect(self.next_file_requested.emit)
+        # Thumbnail panel signals - click thumbnail to scroll both panels
+        self.before_panel.thumbnail_page_clicked.connect(self._on_thumbnail_page_clicked)
+        self.before_panel.thumbnail_collapsed_changed.connect(self._on_thumbnail_collapsed_changed)
         self.splitter.addWidget(self.before_panel)
         
         # Panel SAU (chỉ kết quả)
@@ -2258,16 +2314,31 @@ class ContinuousPreviewWidget(QWidget):
         self._loading_overlay.hide()
 
     def _reset_splitter_sizes(self):
-        """Reset splitter to equal sizes - prevents manual dragging"""
+        """Reset splitter so that Preview Gốc (main area) = Preview Đích width
+
+        Formula:
+        - thumbnail_width = before_panel thumbnail panel width (80 or 24)
+        - total_width = Gốc + Đích
+        - Đích = (total_width - thumbnail_width) / 2
+        - Gốc = Đích + thumbnail_width
+        """
         # Skip if after panel is collapsed
         if self._after_panel_collapsed:
             return
-        # Use stretch factors instead - this is called when user tries to drag the handle
+
         sizes = self.splitter.sizes()
-        if sizes[0] != sizes[1]:
-            total = sum(sizes)
-            half = total // 2
-            self.splitter.setSizes([half, half])
+        total = sum(sizes)
+
+        # Get thumbnail panel width
+        thumbnail_width = self.before_panel.get_thumbnail_width()
+
+        # Calculate sizes so that Gốc main area = Đích width
+        dest_width = (total - thumbnail_width) // 2
+        source_width = dest_width + thumbnail_width
+
+        # Only update if changed
+        if sizes[0] != source_width or sizes[1] != dest_width:
+            self.splitter.setSizes([source_width, dest_width])
 
     def _toggle_after_panel(self):
         """Toggle collapse/expand of after panel (Đích)"""
@@ -2275,10 +2346,12 @@ class ContinuousPreviewWidget(QWidget):
         total_width = sum(sizes)
 
         if self._after_panel_collapsed:
-            # Expand - restore to half width
-            half = total_width // 2
+            # Expand - restore with correct width ratio
+            thumbnail_width = self.before_panel.get_thumbnail_width()
+            dest_width = (total_width - thumbnail_width) // 2
+            source_width = dest_width + thumbnail_width
             self.after_panel.setVisible(True)
-            self.splitter.setSizes([half, half])
+            self.splitter.setSizes([source_width, dest_width])
             self._expand_btn.hide()
             self._after_panel_collapsed = False
         else:
@@ -2312,6 +2385,12 @@ class ContinuousPreviewWidget(QWidget):
             new_zoom = current_zoom * ratio
             new_zoom = max(0.1, min(5.0, new_zoom))
             QTimer.singleShot(10, lambda: self.set_zoom(new_zoom))
+
+    def showEvent(self, event):
+        """Set correct splitter sizes when widget becomes visible"""
+        super().showEvent(event)
+        # Delay to ensure widget has proper size
+        QTimer.singleShot(0, self._reset_splitter_sizes)
 
     def _update_loading_overlay_geometry(self):
         """Position loading overlay centered on before_panel (Gốc)"""
@@ -2418,6 +2497,8 @@ class ContinuousPreviewWidget(QWidget):
         self._last_emitted_page = index
         self.before_panel.set_current_page(index)
         self.after_panel.set_current_page(index)
+        # Update thumbnail highlight to match current page
+        self.before_panel.update_thumbnail_highlight(index)
         # Reset flag after scroll completes (use timer to allow scroll event to finish)
         QTimer.singleShot(100, lambda: setattr(self, '_skip_page_detection', False))
     
@@ -3172,6 +3253,27 @@ class ContinuousPreviewWidget(QWidget):
         # Detect visible page and emit signal if changed
         self._detect_and_emit_page_change()
 
+    def _on_thumbnail_page_clicked(self, page_index: int):
+        """Handle thumbnail click - scroll both panels to page and update page number"""
+        # Scroll after panel (Đích) to same page
+        self.after_panel.set_current_page(page_index)
+        # Emit page_changed to update bottom bar page number
+        self.page_changed.emit(page_index)
+
+    def _on_thumbnail_collapsed_changed(self, collapsed: bool):
+        """Handle thumbnail panel collapse state change - reset splitter sizes"""
+        # Reset splitter sizes to maintain equal main preview widths
+        self._reset_splitter_sizes()
+        self.thumbnail_collapsed_changed.emit(collapsed)
+
+    def is_thumbnail_collapsed(self) -> bool:
+        """Check if thumbnail panel is collapsed (Gốc panel only)"""
+        return self.before_panel.is_thumbnail_collapsed()
+
+    def get_thumbnail_width(self) -> int:
+        """Get current thumbnail panel width"""
+        return self.before_panel.get_thumbnail_width()
+
     def _detect_and_emit_page_change(self):
         """Detect current visible page from scroll position and emit page_changed if changed"""
         # Skip detection when programmatically scrolling (e.g., user input page number)
@@ -3211,6 +3313,8 @@ class ContinuousPreviewWidget(QWidget):
             self._last_emitted_page = current_page
             self.before_panel._current_page = current_page  # Update internal state
             self.after_panel._current_page = current_page
+            # Update thumbnail highlight
+            self.before_panel.update_thumbnail_highlight(current_page)
             self.page_changed.emit(current_page)
     
     def zoom_in(self):
@@ -3249,7 +3353,9 @@ class ContinuousPreviewWidget(QWidget):
         page_index = max(0, min(page_index, len(self._pages) - 1))
 
         # Đảm bảo page items đã được tạo
-        if page_index >= len(self.before_panel._page_items):
+        if not self.before_panel._page_items or page_index >= len(self.before_panel._page_items):
+            # Retry after short delay if page items not ready
+            QTimer.singleShot(50, lambda: self.zoom_fit_width(page_index, scroll_to_page))
             return
 
         # Lấy page item và vị trí trong scene
@@ -3278,6 +3384,8 @@ class ContinuousPreviewWidget(QWidget):
         viewport_width -= 4
 
         if viewport_width <= 0:
+            # Retry if viewport not ready
+            QTimer.singleShot(50, lambda: self.zoom_fit_width(page_index, scroll_to_page))
             return
 
         # Tính zoom để fit chiều rộng trang vào viewport
@@ -3363,7 +3471,9 @@ class ContinuousPreviewWidget(QWidget):
         page_index = max(0, min(page_index, len(self._pages) - 1))
 
         # Đảm bảo page items đã được tạo
-        if page_index >= len(self.before_panel._page_items):
+        if not self.before_panel._page_items or page_index >= len(self.before_panel._page_items):
+            # Retry after short delay if page items not ready
+            QTimer.singleShot(50, lambda: self.zoom_fit_height(page_index))
             return
 
         # Lấy page item và kích thước
@@ -3391,6 +3501,8 @@ class ContinuousPreviewWidget(QWidget):
         viewport_height -= 4
 
         if viewport_height <= 0:
+            # Retry if viewport not ready
+            QTimer.singleShot(50, lambda: self.zoom_fit_height(page_index))
             return
 
         # Tính zoom để fit chiều cao trang vào viewport
