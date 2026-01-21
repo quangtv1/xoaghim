@@ -550,6 +550,7 @@ class ContinuousPreviewPanel(QFrame):
         self._page_items: List[QGraphicsPixmapItem] = []  # Graphics items
         self._zones: List[ZoneItem] = []
         self._zone_definitions: List[Zone] = []  # Zone definitions (shared across pages)
+        self._last_zone_ids: set = set()  # Track zone IDs from previous set_zone_definitions call
         self._page_positions: List[float] = []  # Y position of each page
         self._has_placeholder = False  # Track if placeholder is shown
         self._placeholder_file_rect = None  # Click area for "Mở file"
@@ -1535,13 +1536,15 @@ class ContinuousPreviewPanel(QFrame):
         IMPORTANT: Only manages Zone chung (global zones). Zone riêng (per-file zones)
         are managed separately and should not be affected by this method.
         """
-        # Get ENABLED Zone chung IDs from previous definitions
-        # Must compare enabled states to detect newly enabled zones
-        old_zone_chung_ids = {z.id for z in self._zone_definitions if z.enabled} if self._zone_definitions else set()
-        new_zone_ids = {z.id for z in zones if z.enabled}
+        # Use stored IDs from previous call (not z.enabled check, since Zone objects are shared references)
+        # _emit_zones() only passes enabled zones, so all zones in the list are "enabled"
+        old_zone_chung_ids = getattr(self, '_last_zone_ids', set())
+        new_zone_ids = {z.id for z in zones}  # All zones passed are enabled (filtered by _emit_zones)
         newly_added = new_zone_ids - old_zone_chung_ids
         # Only remove zones that were previously enabled Zone chung (not Zone riêng)
         newly_removed = old_zone_chung_ids - new_zone_ids
+        # Store current zone IDs for next comparison
+        self._last_zone_ids = new_zone_ids.copy()
 
         # Get zones already in _per_page_zones (to detect zones missing after file switch)
         existing_zone_ids = set()
@@ -1611,7 +1614,7 @@ class ContinuousPreviewPanel(QFrame):
         if zone_id.startswith('corner_'):
             # Corners: store pixel size only (w_px, h_px)
             w_px = zone.width_px if zone.width_px > 0 else 100  # default 100px
-            h_px = zone.height_px if zone.height_px > 0 else 150  # default 150px
+            h_px = zone.height_px if zone.height_px > 0 else 75   # default 75px
             return (w_px, h_px)
 
         elif zone_id.startswith('margin_'):
@@ -1620,10 +1623,10 @@ class ContinuousPreviewPanel(QFrame):
             # depth_px: fixed pixel depth into page
             if zone_id in ('margin_top', 'margin_bottom'):
                 length_pct = zone.width if zone.width > 0 else 1.0  # width is the "length" for top/bottom
-                depth_px = zone.height_px if zone.height_px > 0 else 100
+                depth_px = zone.height_px if zone.height_px > 0 else 50  # default 50px
             else:  # margin_left, margin_right
                 length_pct = zone.height if zone.height > 0 else 1.0  # height is the "length" for left/right
-                depth_px = zone.width_px if zone.width_px > 0 else 100
+                depth_px = zone.width_px if zone.width_px > 0 else 50  # default 50px
             return (length_pct, depth_px)
 
         else:

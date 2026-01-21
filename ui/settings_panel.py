@@ -780,9 +780,6 @@ class SettingsPanel(QWidget):
                 height_px=zone.height_px
             )
         
-        # Enable góc trên trái mặc định
-        self._zones['corner_tl'].enabled = True
-        self._zone_selection_history.append('corner_tl')  # Add to history
         self._update_zone_combo()
 
     def _setup_compact_toolbar(self):
@@ -952,6 +949,9 @@ class SettingsPanel(QWidget):
                 self._zones[zone_id].height = default_zone.height
                 self._zones[zone_id].x = default_zone.x
                 self._zones[zone_id].y = default_zone.y
+                # Reset pixel sizes for corners/edges
+                self._zones[zone_id].width_px = default_zone.width_px
+                self._zones[zone_id].height_px = default_zone.height_px
                 # Emit zones to update preview with reset values
                 # (zones_changed was already emitted with old values)
                 self._emit_zones()

@@ -753,8 +753,8 @@ class StapleRemover:
 # Preset zones
 # Default pixel sizes for staple marks (typical at 150 DPI)
 DEFAULT_CORNER_WIDTH_PX = 100   # Fixed corner width
-DEFAULT_CORNER_HEIGHT_PX = 150  # Fixed corner height
-DEFAULT_EDGE_DEPTH_PX = 100     # Fixed edge depth (into page)
+DEFAULT_CORNER_HEIGHT_PX = 75   # Fixed corner height (halved from 150)
+DEFAULT_EDGE_DEPTH_PX = 50      # Fixed edge depth (into page, halved from 100)
 
 PRESET_ZONES = {
     'corner_tl': Zone(
