@@ -1613,8 +1613,8 @@ class ContinuousPreviewPanel(QFrame):
 
         if zone_id.startswith('corner_'):
             # Corners: store pixel size only (w_px, h_px)
-            w_px = zone.width_px if zone.width_px > 0 else 100  # default 100px
-            h_px = zone.height_px if zone.height_px > 0 else 75   # default 75px
+            w_px = zone.width_px if zone.width_px > 0 else 130  # default 130px
+            h_px = zone.height_px if zone.height_px > 0 else 130  # default 130px
             return (w_px, h_px)
 
         elif zone_id.startswith('margin_'):
