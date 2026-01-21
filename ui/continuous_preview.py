@@ -1096,7 +1096,7 @@ class ContinuousPreviewPanel(QFrame):
             self._rebuild_scene_single()
         else:
             self._rebuild_scene_continuous()
-    
+
     def _rebuild_scene_continuous(self):
         """Build scene with all pages (continuous scroll mode)"""
         y_offset = self.PAGE_SPACING
@@ -2387,6 +2387,10 @@ class ContinuousPreviewWidget(QWidget):
         # Clear undo history when loading new file
         self._undo_manager.clear()
 
+        # Reset page tracking state for new file
+        self._last_emitted_page = -1
+        self._skip_page_detection = False
+
         self.before_panel.set_pages(pages)
         self.after_panel.set_pages(self._processed_pages)
 
@@ -3155,6 +3159,11 @@ class ContinuousPreviewWidget(QWidget):
                 current_page = i
             else:
                 break
+
+        # Clamp to valid page range (defensive)
+        max_page = len(self._pages) - 1
+        if current_page > max_page:
+            current_page = max_page
 
         # Emit signal if page changed
         if current_page != self._last_emitted_page:

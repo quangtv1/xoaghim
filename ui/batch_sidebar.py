@@ -82,6 +82,7 @@ class SidebarFileList(QListWidget):
         self._page_counts: Dict[str, int] = {}
         self._sort_column: str = 'name'  # 'name' or 'pages'
         self._sort_asc: bool = True
+        self._skip_row_change: bool = False  # Prevent double file_selected emit
 
         # Custom delegate for page count display
         self._delegate = FileItemDelegate(self._page_counts, self)
@@ -130,6 +131,8 @@ class SidebarFileList(QListWidget):
 
         # Select first item
         if self.count() > 0:
+            # Block currentRowChanged to avoid double emit
+            self._skip_row_change = True
             self.setCurrentRow(0)
             first_item = self.item(0)
             if first_item:
@@ -218,6 +221,8 @@ class SidebarFileList(QListWidget):
 
     def _on_item_clicked(self, item: QListWidgetItem):
         """Handle item click"""
+        # Set flag to prevent currentRowChanged from also emitting
+        self._skip_row_change = True
         file_path = item.data(Qt.UserRole)
         original_idx = item.data(Qt.UserRole + 1)
         if file_path:
@@ -231,7 +236,16 @@ class SidebarFileList(QListWidget):
         self.selection_changed.emit(self.get_checked_files())
 
     def _on_current_row_changed(self, row: int):
-        """Handle keyboard navigation (up/down arrows)"""
+        """Handle keyboard navigation (up/down arrows)
+
+        Note: Mouse clicks trigger BOTH itemClicked AND currentRowChanged.
+        We use a flag to prevent double file loading.
+        """
+        # Skip if this was triggered by a mouse click (already handled by itemClicked)
+        if getattr(self, '_skip_row_change', False):
+            self._skip_row_change = False
+            return
+
         if row >= 0:
             item = self.item(row)
             if item:
@@ -290,7 +304,9 @@ class SidebarFileList(QListWidget):
         return True
 
     def select_by_original_index(self, original_idx: int):
-        """Select row by original file index"""
+        """Select row by original file index (without emitting file_selected)"""
+        # Block signal to avoid double file loading
+        self._skip_row_change = True
         for i in range(self.count()):
             item = self.item(i)
             if item.data(Qt.UserRole + 1) == original_idx:
