@@ -209,14 +209,16 @@ class BatchProcessThread(QThread):
     worker_info = pyqtSignal(int)  # number of parallel workers being used
 
     def __init__(self, files: List[str], base_dir: str, output_dir: str,
-                 zones: List[Zone], settings: dict, page_counts: dict = None):
+                 zones: List[Zone], settings: dict, page_counts: dict = None,
+                 per_file_zones: dict = None):
         super().__init__()
         self.files = files
         self.base_dir = base_dir
         self.output_dir = output_dir
-        self.zones = zones
+        self.zones = zones  # Default zones (from current file with target_page set)
         self.settings = settings
         self.page_counts = page_counts or {}  # {file_path: page_count}
+        self.per_file_zones = per_file_zones or {}  # {file_path: {page_idx: {zone_id: tuple}}}
         self._cancelled = False
         self._pages_processed = 0
         self._total_pages = sum(self.page_counts.get(f, 0) for f in files)
@@ -255,17 +257,52 @@ class BatchProcessThread(QThread):
             self.worker_info.emit(max_workers)
             print(f"[Parallel] Sử dụng {max_workers} processes (CPU/RAM max 80%)")
 
-            # Serialize zones for multiprocessing
-            zone_dicts = serialize_zones(self.zones)
+            # Serialize default zones (from current file)
+            default_zone_dicts = serialize_zones(self.zones)
 
-            # Create tasks
+            # Extract Zone Chung (corners, margins) from default zones - apply to all files
+            zone_chung_dicts = [
+                z for z in default_zone_dicts
+                if z['id'].startswith('corner_') or z['id'].startswith('margin_')
+            ]
+
+            # Create tasks with file-specific zones
             tasks = []
             for i, input_path in enumerate(self.files):
                 output_path = self._get_output_path(input_path)
+
+                # Start with Zone Chung (global, applies to all files)
+                file_zones = list(zone_chung_dicts)
+
+                # Check if this file has Zone Riêng in per_file_zones
+                if input_path in self.per_file_zones:
+                    # Convert per_file_zones data to zone dicts with target_page set
+                    file_zone_data = self.per_file_zones[input_path]
+                    for page_idx, page_zones in file_zone_data.items():
+                        for zone_id, zone_tuple in page_zones.items():
+                            # Only add Zone Riêng (custom_*, protect_*)
+                            if zone_id.startswith('custom_') or zone_id.startswith('protect_'):
+                                zone_dict = {
+                                    'id': zone_id,
+                                    'name': zone_id,
+                                    'x': zone_tuple[0],
+                                    'y': zone_tuple[1],
+                                    'width': zone_tuple[2],
+                                    'height': zone_tuple[3],
+                                    'threshold': 7,
+                                    'enabled': True,
+                                    'zone_type': 'protect' if zone_id.startswith('protect_') else 'remove',
+                                    'page_filter': 'none',
+                                    'target_page': page_idx,
+                                    'size_mode': 'percent'
+                                }
+                                file_zones.append(zone_dict)
+                # else: No Zone Riêng for this file - only Zone Chung applies
+
                 task = ProcessTask(
                     input_path=input_path,
                     output_path=output_path,
-                    zones=zone_dicts,
+                    zones=file_zones,
                     settings=self.settings,
                     file_index=i,
                     total_files=len(self.files)
@@ -2277,11 +2314,21 @@ class MainWindow(QMainWindow):
         if not self._show_batch_confirm_dialog(checked_count, total_count):
             return
 
-        # Get zones from preview (with user-modified coordinates)
-        zones = self.preview.get_zones_for_processing()
+        # Save current file's zones to per_file_zones before batch processing
+        # This ensures the current file's Zone Riêng is included in per_file_zones
+        current_file = self._pdf_handler.pdf_path if self._pdf_handler else None
+        if current_file:
+            self.preview.before_panel.save_per_file_zones(current_file, persist=False)
+
+        # Get zones from preview - collect ALL zones from ALL pages with target_page set
+        # This ensures Zone Riêng (per-page zones) work correctly in batch mode
+        zones = self.preview.get_all_zones_for_batch_processing()
+
+        # Get per-file zones for batch processing (Zone Riêng for each file)
+        per_file_zones = self.preview.get_per_file_zones_for_batch()
 
         # Show batch progress dialog
-        self._show_batch_progress_dialog(checked_files, output_dir, zones, settings)
+        self._show_batch_progress_dialog(checked_files, output_dir, zones, settings, per_file_zones)
     
     def _on_cancel(self):
         if self._process_thread:
@@ -2648,7 +2695,8 @@ class MainWindow(QMainWindow):
         return dialog.exec_() == QDialog.Accepted
 
     def _show_batch_progress_dialog(self, files: List[str], output_dir: str,
-                                    zones: List[Zone], settings: dict):
+                                    zones: List[Zone], settings: dict,
+                                    per_file_zones: dict = None):
         """Show batch processing progress dialog"""
         self._batch_dialog = QDialog(self)
         self._batch_dialog.setWindowTitle("Đang xử lý...")
@@ -2732,7 +2780,8 @@ class MainWindow(QMainWindow):
 
         # Start batch processing
         self._batch_process_thread = BatchProcessThread(
-            files, self._batch_base_dir, output_dir, zones, settings, self._batch_page_counts
+            files, self._batch_base_dir, output_dir, zones, settings, self._batch_page_counts,
+            per_file_zones
         )
         self._batch_process_thread.progress.connect(self._on_batch_progress)
         self._batch_process_thread.file_progress.connect(self._on_batch_page_progress)

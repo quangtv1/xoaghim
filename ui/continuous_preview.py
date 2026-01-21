@@ -2891,7 +2891,8 @@ class ContinuousPreviewWidget(QWidget):
         """Xóa cache khi cần detect lại (thay đổi settings, load PDF mới)"""
         self._cached_regions.clear()
             
-    def _get_zones_for_page(self, page_idx: int, convert_to_percent: bool = False) -> List[Zone]:
+    def _get_zones_for_page(self, page_idx: int, convert_to_percent: bool = False,
+                            set_target_page: bool = False) -> List[Zone]:
         """Get zones for a specific page from per_page_zones
 
         Returns only zones that exist in per_page_zones[page_idx].
@@ -2903,6 +2904,7 @@ class ContinuousPreviewWidget(QWidget):
         Args:
             page_idx: Page index
             convert_to_percent: If True, convert all zones to percent mode for DPI-independent output
+            set_target_page: If True, set target_page=page_idx and page_filter='none' on each zone
         """
         from core.processor import Zone
 
@@ -3062,6 +3064,11 @@ class ContinuousPreviewWidget(QWidget):
                     size_mode='percent'
                 )
 
+            # Set target_page for per-page zone filtering (used in batch mode)
+            if set_target_page:
+                page_zone.page_filter = 'none'
+                page_zone.target_page = page_idx
+
             page_zones.append(page_zone)
 
         return page_zones
@@ -3115,7 +3122,38 @@ class ContinuousPreviewWidget(QWidget):
         per_page_zones = self.before_panel._per_page_zones
         zones = self._get_zones_for_page(page_idx, convert_to_percent=False)
         return zones
-    
+
+    def get_all_zones_for_batch_processing(self) -> List[Zone]:
+        """Get ALL zones from ALL pages for batch Clean processing.
+
+        Collects zones from all pages in _per_page_zones and sets target_page
+        on each zone so _get_applicable_zones can filter correctly.
+
+        Returns:
+            List of Zone objects with target_page set to their source page
+        """
+        all_zones = []
+        per_page_zones = self.before_panel._per_page_zones
+
+        for page_idx in sorted(per_page_zones.keys()):
+            # Get zones with target_page set
+            page_zones = self._get_zones_for_page(page_idx, convert_to_percent=False,
+                                                   set_target_page=True)
+            all_zones.extend(page_zones)
+
+        return all_zones
+
+    def get_per_file_zones_for_batch(self) -> dict:
+        """Get per-file zones storage for batch processing.
+
+        Returns _per_file_zones dict so batch processing can use
+        file-specific Zone Riêng (custom zones).
+
+        Returns:
+            Dict mapping file_path -> {page_idx: {zone_id: zone_data}}
+        """
+        return self.before_panel._per_file_zones.copy()
+
     def _sync_zoom(self, zoom: float):
         """Sync zoom"""
         self.before_panel.view.set_zoom(zoom)
