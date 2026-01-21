@@ -149,9 +149,13 @@ jobs:
             - **Fix Zone Riêng batch mode** - Zone Riêng (Từng trang) giờ hoạt động đúng trong chế độ thư mục
             - **Fix double file loading** - Khắc phục lỗi số trang bị nhân đôi khi chuyển file
             - **Fix sidebar không kéo được** - Thanh sidebar giờ có thể kéo rộng/thu hẹp
+            - **Fix zone toggle không cập nhật preview** - Bật/tắt zone giờ cập nhật đúng trên preview
+            - **Bỏ mặc định corner_tl** - Nạp trạng thái zone từ file config thay vì hardcode
 
             ### Cải tiến giao diện
             - **Zone Riêng màu xanh lá** - Phân biệt Zone Riêng (xanh lá) với Zone Chung (xanh dương)
+            - **Kích thước zone mặc định mới** - Góc: 130x130px, Cạnh: 50px depth
+            - **Reset zone size khi bật lại** - Tắt/bật zone sẽ reset về kích thước mặc định
 
             ### Tải về
             - **XoaGhim-Windows.zip** - Giải nén và chạy `XoaGhim.exe`
