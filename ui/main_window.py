@@ -1774,6 +1774,9 @@ class MainWindow(QMainWindow):
             self._pdf_handler = PDFHandler(file_path)
             self._current_file_path = file_path
 
+            # Set current file path for per-file zone tracking
+            self.preview.set_current_file_path(file_path)
+
             # Get page count
             self._total_pages = min(self._pdf_handler.page_count, self.MAX_PREVIEW_PAGES)
             num_pages = self._total_pages

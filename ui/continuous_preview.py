@@ -1202,6 +1202,15 @@ class ContinuousPreviewPanel(QFrame):
                     if not zone_id.startswith('corner_') and not zone_id.startswith('margin_'):
                         self._per_page_zones[page_idx][zone_id] = zone_data
 
+        # Recreate visual overlays for loaded zones
+        if self.show_overlay:
+            if self._view_mode == 'single':
+                self._recreate_zone_overlays_single()
+            else:
+                self._recreate_zone_overlays()
+        # Force scene update
+        self.scene.update()
+
         return True
 
     def set_current_file_path(self, file_path: str):
