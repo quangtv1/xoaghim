@@ -30,6 +30,9 @@ class ThumbnailItem(QWidget):
         self._pixmap: Optional[QPixmap] = None
         self._thumbnail_width = thumbnail_width
 
+        # Set fixed width to ensure centering works during loading
+        self.setFixedWidth(thumbnail_width + 14)  # +14 for margins
+
         self._setup_ui()
 
     def _setup_ui(self):
@@ -182,6 +185,8 @@ class ThumbnailPanel(QWidget):
         self._items: List[ThumbnailItem] = []
         self._pages: List[np.ndarray] = []
         self._expanded_width = self.DEFAULT_WIDTH
+        self._loading = False  # True during progressive loading
+        self._total_pages = 0
 
         self._setup_ui()
         self._load_state()
@@ -209,7 +214,7 @@ class ThumbnailPanel(QWidget):
         # Header with title and toggle button
         header_container = QWidget()
         header_container.setFixedHeight(28)
-        header_container.setStyleSheet("background-color: #F3F4F6; border-bottom: 1px solid #E5E7EB;")
+        header_container.setStyleSheet("background-color: #F3F4F6;")
         header_layout = QHBoxLayout(header_container)
         header_layout.setContentsMargins(4, 3, 4, 3)
         header_layout.setSpacing(4)
@@ -238,7 +243,7 @@ class ThumbnailPanel(QWidget):
         self._title_label.setStyleSheet("""
             QLabel {
                 color: #374151;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: normal;
                 background: transparent;
             }
@@ -247,6 +252,25 @@ class ThumbnailPanel(QWidget):
         header_layout.addStretch()
 
         content_layout.addWidget(header_container)
+
+        # Progress bar (1px) - ngay dưới header
+        self._progress_bar = QWidget()
+        self._progress_bar.setFixedHeight(1)
+        self._progress_bar.setStyleSheet("background-color: #E5E7EB;")
+
+        progress_layout = QHBoxLayout(self._progress_bar)
+        progress_layout.setContentsMargins(0, 0, 0, 0)
+        progress_layout.setSpacing(0)
+
+        self._progress_bar_fill = QWidget()
+        self._progress_bar_fill.setFixedHeight(1)
+        self._progress_bar_fill.setStyleSheet("background-color: #3B82F6;")
+        self._progress_bar_fill.setFixedWidth(0)
+        progress_layout.addWidget(self._progress_bar_fill)
+        progress_layout.addStretch()
+
+        # Progress bar luôn hiển thị (đường xám), fill xanh khi loading
+        content_layout.addWidget(self._progress_bar)
 
         # Scroll area for thumbnails
         self._scroll_area = QScrollArea()
@@ -281,7 +305,7 @@ class ThumbnailPanel(QWidget):
         self._thumbnail_layout = QVBoxLayout(self._thumbnail_container)
         self._thumbnail_layout.setContentsMargins(4, 6, 4, 6)
         self._thumbnail_layout.setSpacing(8)
-        self._thumbnail_layout.setAlignment(Qt.AlignTop)
+        self._thumbnail_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)  # Center horizontally
 
         self._scroll_area.setWidget(self._thumbnail_container)
         content_layout.addWidget(self._scroll_area)
@@ -299,8 +323,16 @@ class ThumbnailPanel(QWidget):
         self._collapsed_widget.setStyleSheet("background-color: #F3F4F6;")
         self._collapsed_widget.setFixedWidth(self.COLLAPSED_WIDTH)
         collapsed_layout = QVBoxLayout(self._collapsed_widget)
-        collapsed_layout.setContentsMargins(2, 4, 2, 4)
-        collapsed_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        collapsed_layout.setContentsMargins(0, 0, 0, 0)
+        collapsed_layout.setSpacing(0)
+
+        # Header với chiều cao bằng thumbnail header (28px)
+        collapsed_header = QWidget()
+        collapsed_header.setFixedHeight(28)
+        collapsed_header.setStyleSheet("background-color: #F3F4F6;")
+        collapsed_header_layout = QHBoxLayout(collapsed_header)
+        collapsed_header_layout.setContentsMargins(2, 4, 2, 4)
+        collapsed_header_layout.setAlignment(Qt.AlignCenter)
 
         self._expand_btn = QPushButton("☰")
         self._expand_btn.setFixedSize(20, 20)
@@ -319,7 +351,17 @@ class ThumbnailPanel(QWidget):
             }
         """)
         self._expand_btn.clicked.connect(self._toggle_collapsed)
-        collapsed_layout.addWidget(self._expand_btn)
+        collapsed_header_layout.addWidget(self._expand_btn)
+        collapsed_layout.addWidget(collapsed_header)
+
+        # Line xám 1px (thẳng hàng với line dưới "Trang thu nhỏ")
+        collapsed_line = QWidget()
+        collapsed_line.setFixedHeight(1)
+        collapsed_line.setStyleSheet("background-color: #E5E7EB;")
+        collapsed_layout.addWidget(collapsed_line)
+
+        # Spacer để đẩy nội dung còn lại xuống
+        collapsed_layout.addStretch()
 
         self._collapsed_widget.setVisible(False)
         self._main_layout.addWidget(self._collapsed_widget)
@@ -404,8 +446,74 @@ class ThumbnailPanel(QWidget):
         if self._items:
             self.set_current_page(0)
 
+    def start_loading(self, total_pages: int):
+        """Prepare for progressive thumbnail loading"""
+        self._loading = True
+        self._total_pages = total_pages
+        self._pages = []
+        self._current_page = -1  # Reset to no selection, so first thumbnail will be highlighted
+
+        # Show progress bar
+        self.show_progress_bar()
+
+        # Clear existing items
+        for item in self._items:
+            item.deleteLater()
+        self._items.clear()
+
+        # Clear layout (remove stretch too)
+        while self._thumbnail_layout.count():
+            child = self._thumbnail_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+    def pause_updates(self):
+        """Pause visual updates for bulk loading. Call before loading remaining thumbnails."""
+        self._scroll_area.setUpdatesEnabled(False)
+
+    def add_thumbnail(self, index: int, image: np.ndarray):
+        """Add single thumbnail during progressive loading"""
+        if image is None:
+            return
+
+        item = ThumbnailItem(index, thumbnail_width=self.width() - 20)
+        item.clicked.connect(self._on_item_clicked)
+
+        # Convert numpy array to QPixmap
+        pixmap = self._numpy_to_pixmap(image)
+        item.set_pixmap(pixmap)
+
+        self._thumbnail_layout.addWidget(item)
+        self._items.append(item)
+        self._pages.append(image)
+
+        # Update progress bar
+        if self._total_pages > 0:
+            percent = int((index + 1) * 100 / self._total_pages)
+            self.set_progress(percent)
+
+        # Highlight first page
+        if index == 0:
+            self.set_current_page(0)
+
+    def finish_loading(self):
+        """Mark loading complete, enable full interaction"""
+        self._loading = False
+        # Hide progress bar
+        self.hide_progress_bar()
+        # Add stretch at bottom
+        self._thumbnail_layout.addStretch()
+        # Re-enable visual updates and repaint once (single update instead of flickering)
+        self._scroll_area.setUpdatesEnabled(True)
+        self._scroll_area.update()
+
     def _numpy_to_pixmap(self, img: np.ndarray) -> QPixmap:
-        """Convert numpy array (BGR or RGB) to QPixmap"""
+        """Convert numpy array (BGR or RGB) to QPixmap
+
+        Note: Must copy the QImage to avoid memory issues when numpy array
+        goes out of scope. QImage(data, ...) references the data buffer,
+        so we need .copy() to make QImage own its data.
+        """
         if img is None:
             return QPixmap()
 
@@ -413,32 +521,43 @@ class ThumbnailPanel(QWidget):
         if len(img.shape) == 2:
             # Grayscale
             h, w = img.shape
-            qimg = QImage(img.data, w, h, w, QImage.Format_Grayscale8)
+            img_copy = img.copy()  # Ensure contiguous memory
+            qimg = QImage(img_copy.data, w, h, w, QImage.Format_Grayscale8).copy()
         elif img.shape[2] == 3:
             # BGR -> RGB
             rgb = img[:, :, ::-1].copy()
             h, w, ch = rgb.shape
             bytes_per_line = ch * w
-            qimg = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+            qimg = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
         elif img.shape[2] == 4:
             # BGRA -> RGBA
             rgba = img[:, :, [2, 1, 0, 3]].copy()
             h, w, ch = rgba.shape
             bytes_per_line = ch * w
-            qimg = QImage(rgba.data, w, h, bytes_per_line, QImage.Format_RGBA8888)
+            qimg = QImage(rgba.data, w, h, bytes_per_line, QImage.Format_RGBA8888).copy()
         else:
             return QPixmap()
 
         return QPixmap.fromImage(qimg)
 
     def _on_item_clicked(self, page_index: int):
-        """Handle thumbnail click"""
-        self.set_current_page(page_index)
+        """Handle thumbnail click - highlight only, don't scroll"""
+        self.set_current_page(page_index, scroll=False)
         self.page_clicked.emit(page_index)
 
-    def set_current_page(self, index: int):
-        """Set current page and update highlight"""
+    def set_current_page(self, index: int, scroll: bool = True):
+        """Set current page and update highlight
+
+        Args:
+            index: Page index (0-based)
+            scroll: If True, scroll thumbnail into view. Default True for external calls,
+                   False when user clicks directly on a thumbnail.
+        """
         if 0 <= index < len(self._items):
+            # Skip if already on this page (avoid unnecessary scroll)
+            if index == self._current_page:
+                return
+
             # Remove highlight from previous
             if 0 <= self._current_page < len(self._items):
                 self._items[self._current_page].set_highlighted(False)
@@ -447,14 +566,30 @@ class ThumbnailPanel(QWidget):
             self._current_page = index
             self._items[index].set_highlighted(True)
 
-            # Scroll to visible
-            self._scroll_to_item(index)
+            # Scroll to visible only if requested
+            if scroll:
+                self._scroll_to_item(index)
 
     def _scroll_to_item(self, index: int):
         """Scroll to make item visible"""
         if 0 <= index < len(self._items):
             item = self._items[index]
             self._scroll_area.ensureWidgetVisible(item, 10, 10)
+
+    def show_progress_bar(self):
+        """Start showing progress (reset fill to 0)"""
+        self.set_progress(0)
+
+    def hide_progress_bar(self):
+        """Hide progress fill (reset to 0, gray line remains)"""
+        self.set_progress(0)
+
+    def set_progress(self, percent: int):
+        """Set progress bar percentage (0-100)"""
+        if self._progress_bar_fill is not None:
+            parent_width = self._progress_bar.width() if self._progress_bar else 100
+            fill_width = int(parent_width * percent / 100)
+            self._progress_bar_fill.setFixedWidth(fill_width)
 
     def is_collapsed(self) -> bool:
         """Return collapsed state"""

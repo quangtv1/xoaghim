@@ -415,9 +415,12 @@ class BatchProcessThread(QThread):
 
 class MainWindow(QMainWindow):
     """Cửa sổ chính"""
-    
+
     MAX_PREVIEW_PAGES = 500
-    
+    INITIAL_LOAD_PAGES = 10  # Number of preview pages to load initially
+    THUMBNAIL_DPI = 36  # Low DPI for fast thumbnail rendering
+    PREVIEW_DPI = 120  # Full DPI for preview
+
     def __init__(self):
         super().__init__()
 
@@ -433,6 +436,12 @@ class MainWindow(QMainWindow):
         self._last_dir = self._get_default_folder_dir()  # Remember last opened folder
         self._user_zoomed = False  # Track if user has manually zoomed
         self._current_draw_mode = None  # Track current draw mode for cancel logic
+        # Lazy loading state
+        self._background_loading = False  # True when loading remaining pages in background
+        self._stop_loading_flag = False  # Signal to stop background loading
+        self._total_pages = 0  # Total pages in current PDF
+        self._bg_load_index = 0  # Current page index for background preview loading
+        self._thumb_load_index = 0  # Current page index for background thumbnail loading
 
         self.setWindowTitle("Xóa Ghim PDF (5S)")
         self.setMinimumSize(1200, 800)
@@ -558,6 +567,8 @@ class MainWindow(QMainWindow):
         self.preview.rect_drawn.connect(self._on_rect_drawn_from_preview)
         self.preview.prev_file_requested.connect(self._on_prev_file)
         self.preview.next_file_requested.connect(self._on_next_file)
+        self.preview.page_load_requested.connect(self._on_page_load_requested)
+        self.preview.zoom_changed.connect(self._on_zoom_changed_from_scroll)
         right_layout.addWidget(self.preview, stretch=1)
 
         # === BOTTOM BAR (inside right container) ===
@@ -1546,11 +1557,13 @@ class MainWindow(QMainWindow):
         settings = self.settings_panel.get_settings()
         filename_pattern = settings.get('filename_pattern', '{gốc}_clean.pdf')
 
-        # Show batch sidebar with file list
+        # Show batch sidebar FIRST, then load files
         self._batch_current_index = 0
         self._is_first_file_in_batch = True  # First file in new batch gets fit width
+        self._background_loading = True  # Prevent eventFilter during loading
+        self.batch_sidebar.setVisible(True)  # Show sidebar before loading
+        QApplication.processEvents()  # Ensure sidebar is rendered
         self.batch_sidebar.set_files(pdf_files, folder_path)
-        self.batch_sidebar.setVisible(True)
         # Apply saved sidebar width
         self._apply_saved_sidebar_width()
         # Show search box in compact toolbar and sync width (if sidebar not collapsed)
@@ -1583,6 +1596,19 @@ class MainWindow(QMainWindow):
         # Clear custom zones with 'none' filter (Tự do) - will be restored from per-file storage
         self.settings_panel.clear_custom_zones_with_free_filter()
         self._load_pdf(file_path)
+
+        # Defer zone loading to let thumbnails paint first
+        self._pending_zone_file = file_path
+        self._pending_zone_index = original_idx
+        QTimer.singleShot(50, self._load_zones_after_thumbnails)
+
+    def _load_zones_after_thumbnails(self):
+        """Load zones after thumbnails have painted"""
+        if not hasattr(self, '_pending_zone_file') or not self._pending_zone_file:
+            return
+        file_path = self._pending_zone_file
+        original_idx = self._pending_zone_index
+        self._pending_zone_file = None
 
         # Restore zones for this file
         self.settings_panel.load_per_file_custom_zones(file_path)
@@ -1653,13 +1679,10 @@ class MainWindow(QMainWindow):
             self.settings_panel.clear_custom_zones_with_free_filter()
             self._load_pdf(file_path)
 
-            # Restore zones for this file
-            self.settings_panel.load_per_file_custom_zones(file_path)
-            self.preview.load_per_file_zones(file_path)
-            self.preview.set_file_index(self._batch_current_index, len(self._batch_files))
-
-            # Update zone counts display
-            self._update_zone_counts()
+            # Defer zone loading to let thumbnails paint first
+            self._pending_zone_file = file_path
+            self._pending_zone_index = self._batch_current_index
+            QTimer.singleShot(50, self._load_zones_after_thumbnails)
 
     def _on_next_file(self):
         """Navigate to next file in batch mode"""
@@ -1675,13 +1698,10 @@ class MainWindow(QMainWindow):
             self.settings_panel.clear_custom_zones_with_free_filter()
             self._load_pdf(file_path)
 
-            # Restore zones for this file
-            self.settings_panel.load_per_file_custom_zones(file_path)
-            self.preview.load_per_file_zones(file_path)
-            self.preview.set_file_index(self._batch_current_index, len(self._batch_files))
-
-            # Update zone counts display
-            self._update_zone_counts()
+            # Defer zone loading to let thumbnails paint first
+            self._pending_zone_file = file_path
+            self._pending_zone_index = self._batch_current_index
+            QTimer.singleShot(50, self._load_zones_after_thumbnails)
 
     def _on_close_file(self):
         """Close currently opened file or folder"""
@@ -1721,8 +1741,9 @@ class MainWindow(QMainWindow):
         self.preview.set_draw_mode(None)
         self.settings_panel.set_draw_mode(None)
 
-        # Clear preview
+        # Clear preview and thumbnails
         self.preview.set_pages([])
+        self.preview.clear_thumbnails()  # Also clear thumbnail panel
         self.preview.clear_file_paths()
 
         # Reset zoom to 100% for placeholder icons
@@ -1740,6 +1761,10 @@ class MainWindow(QMainWindow):
     def _load_pdf(self, file_path: str):
         """Load file PDF"""
         try:
+            # Set flag FIRST to prevent eventFilter crashes during processEvents
+            self._background_loading = True
+            self._stop_loading_flag = True  # Stop any ongoing background loading
+
             self.statusBar().showMessage("Đang tải PDF...")
             QApplication.processEvents()
 
@@ -1749,95 +1774,130 @@ class MainWindow(QMainWindow):
             self._pdf_handler = PDFHandler(file_path)
             self._current_file_path = file_path
 
-            # Load pages
-            num_pages = min(self._pdf_handler.page_count, self.MAX_PREVIEW_PAGES)
+            # Get page count
+            self._total_pages = min(self._pdf_handler.page_count, self.MAX_PREVIEW_PAGES)
+            num_pages = self._total_pages
             self._all_pages = []
+            initial_pages = min(self.INITIAL_LOAD_PAGES, num_pages)
 
-            # Show loading overlay for large files (>20 pages)
-            show_overlay = num_pages > 20
-            if show_overlay:
-                # Position overlay over preview area
-                preview_rect = self.preview.geometry()
-                preview_pos = self.preview.mapTo(self, self.preview.rect().topLeft())
-                self._loading_overlay.setGeometry(
-                    preview_pos.x(), preview_pos.y(),
-                    preview_rect.width(), preview_rect.height()
-                )
-                self._loading_overlay.set_text(f"Đang tải 1/{num_pages}")
-                self._loading_overlay.show()
-                self._loading_overlay.raise_()
-                QApplication.processEvents()
+            # Set total pages for detection progress (before loading starts)
+            self.preview.set_detection_total_pages(self._total_pages)
 
-            for i in range(num_pages):
-                if show_overlay:
-                    self._loading_overlay.set_text(f"Đang tải {i+1}/{num_pages}")
-                self.statusBar().showMessage(f"Đang tải trang {i+1}/{num_pages}...")
-                QApplication.processEvents()
-
-                img = self._pdf_handler.render_page(i, dpi=120)
-                if img is not None:
-                    self._all_pages.append(img)
-
-            # Hide loading overlay
-            if show_overlay:
-                self._loading_overlay.hide()
-
-            # Update page navigation
+            # Update page navigation with total pages
             self.page_spin.setMaximum(self._pdf_handler.page_count)
             self.page_spin.setValue(1)
             self.total_pages_label.setText(str(self._pdf_handler.page_count))
 
-            # Set output path and calculate dest_path
+            # Calculate paths first (lightweight)
             source_path = Path(file_path)
             if self._batch_mode:
-                # In batch mode: use batch output dir, don't reset settings
                 output_dir = self._batch_output_dir or str(source_path.parent)
                 settings = self.settings_panel.get_settings()
                 pattern = settings.get('filename_pattern', '{gốc}_clean.pdf')
                 output_name = pattern.replace('{gốc}', source_path.stem)
                 dest_path = Path(output_dir) / output_name
             else:
-                # Single file mode: check if folder changed
                 file_folder = str(source_path.parent)
-                # Zones persist across folders (saved in config)
-                # No longer reset zones when opening file from different folder
-                # Update current folder
                 self._batch_base_dir = file_folder
-                # Set output path to file's parent
                 output_dir = file_folder
                 self.settings_panel.set_output_path(output_dir)
                 dest_path = source_path.parent / f"{source_path.stem}_clean{source_path.suffix}"
 
-            # Update preview panel titles with file paths
-            self.preview.set_file_paths(str(file_path), str(dest_path))
-            
-            # Set pages and track current file for per-file zone storage
-            self.preview.set_pages(self._all_pages)
-            self.preview.set_current_file_path(str(file_path))
-            self.settings_panel.set_current_file_path(str(file_path))
-            zones = self.settings_panel.get_zones()
-            self.preview.set_zones(zones)
+            # Store for deferred setup
+            self._pending_file_path = str(file_path)
+            self._pending_dest_path = str(dest_path)
 
-            # Apply text protection options (để vẽ bounding boxes ngay khi mở file)
-            text_protection_opts = self.settings_panel.get_text_protection_options()
-            self.preview.set_text_protection(text_protection_opts)
+            # Phase 1A: Load ONLY thumbnails first (fast at 36 DPI)
+            self.preview.start_thumbnail_loading(num_pages)
+            for i in range(initial_pages):
+                thumb_img = self._pdf_handler.render_page(i, dpi=self.THUMBNAIL_DPI)
+                if thumb_img is not None:
+                    self.preview.add_thumbnail(i, thumb_img)
 
-            self._update_ui_state()
-            self.statusBar().showMessage(f"Đã mở: {file_path}")
+            # Force thumbnails to paint NOW before any preview work
+            self._background_loading = False
+            self.preview.repaint_thumbnails()
+            QApplication.processEvents()
 
-            # Reset to first page
-            self.preview.set_current_page(0)  # Scroll về trang đầu
+            # Always apply saved zoom when loading files
+            self._fit_after_initial_load = True
 
-            # Only fit width for first file in batch, otherwise preserve zoom
-            if self._is_first_file_in_batch:
-                self._user_zoomed = False
-                # Defer fit width đến sau khi layout hoàn tất
-                # Dùng 100ms delay để đảm bảo viewport đã có kích thước đúng
-                QTimer.singleShot(100, self._fit_first_page_width)
-            
+            # Phase 1B: Load first N preview pages via QTimer (non-blocking)
+            self._stop_loading_flag = False
+            self._initial_preview_index = 0
+            self._initial_preview_count = initial_pages
+            self._thumb_load_index = initial_pages
+            self._bg_load_index = initial_pages
+            self._thumb_updates_paused = False  # Reset flag for new load
+
+            # Start loading initial preview pages (deferred to allow thumbnails to show)
+            QTimer.singleShot(10, self._load_initial_preview_pages)
+
+            # Start loading remaining thumbnails in parallel
+            # Use 500ms delay to ensure initial thumbnails are fully painted before pausing updates
+            if num_pages > initial_pages:
+                QTimer.singleShot(500, self._load_remaining_thumbnails)
+            else:
+                self.preview.finish_thumbnail_loading()
+
         except Exception as e:
+            self._background_loading = False
             self._loading_overlay.hide()
+            self.preview.hide_progress_bar()
             QMessageBox.critical(self, "Lỗi", f"Không thể mở file:\n{e}")
+
+    def _load_initial_preview_pages(self):
+        """Load initial preview pages one at a time via QTimer (non-blocking)"""
+        if self._stop_loading_flag or not self._pdf_handler:
+            return
+
+        i = self._initial_preview_index
+        if i >= self._initial_preview_count:
+            # Done loading initial pages, now setup preview
+            self._setup_preview_after_initial_load()
+            return
+
+        # Load one preview page
+        preview_img = self._pdf_handler.render_page(i, dpi=self.PREVIEW_DPI)
+        if preview_img is not None:
+            self._all_pages.append(preview_img)
+
+        self._initial_preview_index += 1
+
+        # Schedule next page with small delay to yield to UI
+        QTimer.singleShot(5, self._load_initial_preview_pages)
+
+    def _setup_preview_after_initial_load(self):
+        """Setup preview after initial pages are loaded"""
+        if not hasattr(self, '_pending_file_path') or not self._pending_file_path:
+            return
+
+        # Set file paths on preview (lightweight)
+        self.preview.set_file_paths(self._pending_file_path, self._pending_dest_path)
+
+        # Set initial pages - this rebuilds the graphics scene
+        self.preview.set_pages(self._all_pages)
+
+        # Re-apply Zone Chung after set_pages clears _per_page_zones
+        self.settings_panel._emit_zones()
+
+        # Force thumbnails to repaint AFTER preview setup (in case layout changed)
+        QTimer.singleShot(10, self.preview.repaint_thumbnails)
+
+        # Reset to first page
+        self.preview.set_current_page(0)
+
+        # Apply fit width if needed
+        if hasattr(self, '_fit_after_initial_load') and self._fit_after_initial_load:
+            QTimer.singleShot(50, self._fit_first_page_width)
+
+        # Clear pending values
+        self._pending_file_path = None
+        self._pending_dest_path = None
+
+        # Start background loading of remaining preview pages
+        if self._bg_load_index < self._total_pages:
+            QTimer.singleShot(20, self._load_remaining_pages_parallel)
 
     def _fit_first_page_width(self):
         """Apply saved zoom or fit width for first page - called after layout update"""
@@ -1847,20 +1907,158 @@ class MainWindow(QMainWindow):
                 zoom = self._saved_zoom_percent / 100.0
                 self.preview.set_zoom(zoom)
                 self._user_zoomed = True  # Preserve this zoom for subsequent files
+                # Center page after setting zoom
+                self.preview._scroll_to_page(0, align_top=False)
             else:
-                # scroll_to_page=True để scroll đến trang đầu tiên
-                self.preview.zoom_fit_width(0, scroll_to_page=True)
+                # scroll_to_page=False để center trang đầu tiên
+                self.preview.zoom_fit_width(0, scroll_to_page=False)
             self._update_zoom_combo()
             # Mark first file processed - subsequent files preserve zoom
             self._is_first_file_in_batch = False
+
+    def _load_remaining_thumbnails(self):
+        """Load remaining thumbnails in background using QTimer"""
+        if self._stop_loading_flag or not self._pdf_handler:
+            self.preview.finish_thumbnail_loading()
+            return
+
+        # Check if done with thumbnails
+        if self._thumb_load_index >= self._total_pages:
+            self.preview.finish_thumbnail_loading()
+            return
+
+        # NO pause_updates - let thumbnails be visible even with some flickering
+
+        # Load one thumbnail
+        i = self._thumb_load_index
+        thumb_img = self._pdf_handler.render_page(i, dpi=self.THUMBNAIL_DPI)
+        if thumb_img is not None:
+            self.preview.add_thumbnail(i, thumb_img)
+
+        self._thumb_load_index += 1
+
+        # Schedule next thumbnail with small delay
+        QTimer.singleShot(5, self._load_remaining_thumbnails)
+
+    def _load_remaining_pages_parallel(self):
+        """Start background loading of preview pages (runs in parallel with thumbnails)"""
+        if self._stop_loading_flag or not self._pdf_handler:
+            return
+
+        self._background_loading = True
+
+        # Show progress bar immediately
+        self.preview.show_progress_bar()
+        initial_progress = int(self._bg_load_index * 100 / self._total_pages)
+        self.preview.set_progress(initial_progress)
+
+        # Start loading chain
+        QTimer.singleShot(15, self._load_next_background_page)
+
+    def _load_next_background_page(self):
+        """Load one page at a time with delay to keep UI responsive"""
+        # Check if should stop
+        if self._stop_loading_flag or not self._pdf_handler:
+            self._finish_background_loading()
+            return
+
+        # Check if done
+        if self._bg_load_index >= self._total_pages:
+            self._finish_background_loading()
+            return
+
+        # Load current page
+        i = self._bg_load_index
+        preview_img = self._pdf_handler.render_page(i, dpi=self.PREVIEW_DPI)
+        if preview_img is not None:
+            self._all_pages.append(preview_img)
+            self.preview.add_preview_page(preview_img)
+
+        # Update progress
+        progress = int((i + 1) * 100 / self._total_pages)
+        self.preview.set_progress(progress)
+
+        # Update status periodically
+        if (i + 1) % 10 == 0:
+            self.statusBar().showMessage(f"Đang tải trang {i+1}/{self._total_pages}...")
+
+        # Move to next page
+        self._bg_load_index += 1
+
+        # Schedule next page with small delay (15ms) to yield to UI
+        QTimer.singleShot(15, self._load_next_background_page)
+
+    def _finish_background_loading(self):
+        """Cleanup after background loading completes or stops"""
+        self.preview.hide_progress_bar()
+        self._background_loading = False
+
+        # Rebuild preview scene with all loaded pages
+        if not self._stop_loading_flag and self._total_pages > 0:
+            self.preview.refresh_scene()
+            self.statusBar().showMessage(f"Đã tải xong {self._total_pages} trang")
+
+    def _on_page_load_requested(self, page_index: int):
+        """Handle request to load a specific page (clicked on unloaded thumbnail)"""
+        if not self._pdf_handler:
+            return
+
+        loaded_count = len(self._all_pages)
+        if page_index < loaded_count:
+            # Already loaded, just scroll preview (not thumbnail - user clicked it)
+            self.preview.set_current_page(page_index, scroll_thumbnail=False)
+            self.page_spin.blockSignals(True)
+            self.page_spin.setValue(page_index + 1)
+            self.page_spin.blockSignals(False)
+            return
+
+        # Show loading spinner
+        preview_rect = self.preview.geometry()
+        preview_pos = self.preview.mapTo(self, self.preview.rect().topLeft())
+        self._loading_overlay.setGeometry(
+            preview_pos.x(), preview_pos.y(),
+            preview_rect.width(), preview_rect.height()
+        )
+        self._loading_overlay.set_text(f"Đang tải trang {page_index + 1}...")
+        self._loading_overlay.show()
+        self._loading_overlay.raise_()
+        QApplication.processEvents()
+
+        # Load pages from current loaded count up to requested page
+        for i in range(loaded_count, page_index + 1):
+            if self._stop_loading_flag:
+                break
+
+            preview_img = self._pdf_handler.render_page(i, dpi=self.PREVIEW_DPI)
+            if preview_img is not None:
+                self._all_pages.append(preview_img)
+                self.preview.add_preview_page(preview_img)
+
+            # Update progress
+            self._loading_overlay.set_text(f"Đang tải trang {i + 1}/{page_index + 1}...")
+            QApplication.processEvents()
+
+        # Hide spinner
+        self._loading_overlay.hide()
+
+        # Scroll to requested page (not thumbnail - user clicked it)
+        self.preview.set_current_page(page_index, scroll_thumbnail=False)
+        self.page_spin.blockSignals(True)
+        self.page_spin.setValue(page_index + 1)
+        self.page_spin.blockSignals(False)
+
+        # Continue background loading for remaining pages if not already loading
+        remaining_start = len(self._all_pages)
+        if remaining_start < self._total_pages and not self._background_loading:
+            self._stop_loading_flag = False
+            QTimer.singleShot(50, lambda: self._load_remaining_pages(remaining_start))
 
     def _on_prev_page(self):
         if self.page_spin.value() > 1:
             self.page_spin.setValue(self.page_spin.value() - 1)
 
     def _on_next_page(self):
-        max_loaded = len(self._all_pages)
-        if self.page_spin.value() < max_loaded:
+        if self.page_spin.value() < self._total_pages:
             self.page_spin.setValue(self.page_spin.value() + 1)
     
     def _on_page_changed(self, value):
@@ -1868,26 +2066,32 @@ class MainWindow(QMainWindow):
         if not self._pdf_handler:
             return
 
-        # Validate: giới hạn trong phạm vi trang đã load
         max_loaded = len(self._all_pages)
         if max_loaded == 0:
             return
 
-        # Clamp value to valid range
-        clamped_value = max(1, min(value, max_loaded))
+        # Clamp to valid total pages range
+        total_pages = self._total_pages
+        clamped_value = max(1, min(value, total_pages))
         if clamped_value != value:
-            # Block signals to avoid recursion, then update spinbox
             self.page_spin.blockSignals(True)
             self.page_spin.setValue(clamped_value)
             self.page_spin.blockSignals(False)
             value = clamped_value
 
+        page_index = value - 1  # 0-based index
+
+        # If page not loaded yet, trigger loading
+        if page_index >= max_loaded:
+            self._on_page_load_requested(page_index)
+            return
+
         # Update preview - works for both continuous and single page mode
-        self.preview.set_current_page(value - 1)  # 0-based index
+        self.preview.set_current_page(page_index)
 
         # Update prev/next button states
         self.prev_page_btn.setEnabled(value > 1)
-        self.next_page_btn.setEnabled(value < max_loaded)
+        self.next_page_btn.setEnabled(value < total_pages)
 
     def _on_page_changed_from_scroll(self, page_index: int):
         """Handle page change from scroll - update spinbox without triggering scroll"""
@@ -1987,7 +2191,23 @@ class MainWindow(QMainWindow):
             get_config_manager().save_ui_config(ui_config)
         except:
             pass
-    
+
+    def _on_zoom_changed_from_scroll(self, zoom: float):
+        """Handle zoom change from scroll wheel - update combo and save to config"""
+        try:
+            self._user_zoomed = True
+            self.zoom_combo.blockSignals(True)
+            self.zoom_combo.setCurrentText(f"{int(zoom * 100)}%")
+            self.zoom_combo.blockSignals(False)
+            # Save to config
+            self._saved_zoom_percent = int(zoom * 100)
+            from core.config_manager import get_config_manager
+            ui_config = get_config_manager().get_ui_config()
+            ui_config['last_zoom_percent'] = self._saved_zoom_percent
+            get_config_manager().save_ui_config(ui_config)
+        except:
+            pass
+
     def _on_zones_changed(self, zones: List[Zone]):
         self.preview.set_zones(zones)
         self._update_zone_counts()
@@ -2993,9 +3213,13 @@ Thời gian: {time_str}"""
         from core.config_manager import get_config_manager
         ui_config = get_config_manager().get_ui_config()
 
-        # Save window size
-        ui_config['window_width'] = self.width()
-        ui_config['window_height'] = self.height()
+        # Save window maximized state
+        ui_config['window_maximized'] = self.isMaximized()
+
+        # Save window size (only if not maximized)
+        if not self.isMaximized():
+            ui_config['window_width'] = self.width()
+            ui_config['window_height'] = self.height()
 
         # Save sidebar width (if visible and not collapsed)
         if self.batch_sidebar.isVisible() and not self.batch_sidebar.is_collapsed():
@@ -3009,6 +3233,16 @@ Thời gian: {time_str}"""
         # Save after panel (Đích) collapsed state
         ui_config['after_panel_collapsed'] = self.preview._after_panel_collapsed
 
+        # Save toolbar visibility (hidden or shown)
+        toolbar_visible = self.settings_panel.isVisible() or self.compact_toolbar.isVisible()
+        ui_config['toolbar_visible'] = toolbar_visible
+
+        # Save thumbnail panel collapsed state
+        ui_config['thumbnail_collapsed'] = self.preview.is_thumbnail_collapsed()
+
+        # Save text protection enabled state
+        ui_config['text_protection_enabled'] = self.settings_panel.text_protection_cb.isChecked()
+
         get_config_manager().save_ui_config(ui_config)
 
     def _restore_window_state(self):
@@ -3016,10 +3250,14 @@ Thời gian: {time_str}"""
         from core.config_manager import get_config_manager
         ui_config = get_config_manager().get_ui_config()
 
-        # Restore window size
+        # Restore window size first
         width = ui_config.get('window_width', 1200)
         height = ui_config.get('window_height', 800)
         self.resize(width, height)
+
+        # Restore window maximized state
+        if ui_config.get('window_maximized', False):
+            self.showMaximized()
 
         # Restore sidebar width (will be applied when sidebar becomes visible)
         self._saved_sidebar_width = ui_config.get('sidebar_width', BatchSidebar.EXPANDED_WIDTH)
@@ -3030,6 +3268,23 @@ Thời gian: {time_str}"""
         # Restore after panel (Đích) collapsed state
         if ui_config.get('after_panel_collapsed', False):
             self.preview._toggle_after_panel()  # Toggle to collapse
+
+        # Restore toolbar visibility (hidden or shown)
+        # Default is True (visible)
+        if not ui_config.get('toolbar_visible', True):
+            self._toggle_settings()  # Toggle to hide
+
+        # Restore thumbnail panel collapsed state
+        if ui_config.get('thumbnail_collapsed', False):
+            if not self.preview.is_thumbnail_collapsed():
+                self.preview.toggle_thumbnail_panel()  # Toggle to collapse
+
+        # Restore text protection enabled state
+        if ui_config.get('text_protection_enabled', False):
+            self.settings_panel.text_protection_cb.setChecked(True)
+            # Update options and apply to preview directly (signal might not fire correctly)
+            self.settings_panel._text_protection_options.enabled = True
+            self.preview.set_text_protection(self.settings_panel._text_protection_options)
 
     def _get_default_folder_dir(self) -> str:
         """Get default folder directory from config, fallback to Desktop"""
@@ -3065,29 +3320,45 @@ Thời gian: {time_str}"""
 
     def eventFilter(self, obj, event):
         """Cancel draw mode when clicking on corner/edge icons only"""
-        from PyQt5.QtCore import QEvent
+        # Skip during loading to prevent crashes - check FIRST before any Qt operations
+        if getattr(self, '_background_loading', False):
+            return False  # Don't filter, just pass through
 
-        if event.type() == QEvent.MouseButtonPress and self._current_draw_mode is not None:
-            click_pos = event.globalPos()
+        try:
+            from PyQt5.QtCore import QEvent
 
-            # Only cancel draw mode when clicking on corner or edge icons
-            # (clicking on custom icon is handled by zone_selector toggle)
-            corner_icon = self.settings_panel.zone_selector.corner_icon
-            edge_icon = self.settings_panel.zone_selector.edge_icon
+            if event.type() == QEvent.MouseButtonPress and self._current_draw_mode is not None:
+                # Guard against accessing uninitialized widgets
+                if not hasattr(self, 'settings_panel') or self.settings_panel is None:
+                    return super().eventFilter(obj, event)
+                if not hasattr(self.settings_panel, 'zone_selector') or self.settings_panel.zone_selector is None:
+                    return super().eventFilter(obj, event)
 
-            corner_rect = corner_icon.rect()
-            corner_global_pos = corner_icon.mapToGlobal(corner_rect.topLeft())
-            corner_global_rect = corner_rect.translated(corner_global_pos)
+                click_pos = event.globalPos()
 
-            edge_rect = edge_icon.rect()
-            edge_global_pos = edge_icon.mapToGlobal(edge_rect.topLeft())
-            edge_global_rect = edge_rect.translated(edge_global_pos)
+                # Only cancel draw mode when clicking on corner or edge icons
+                # (clicking on custom icon is handled by zone_selector toggle)
+                corner_icon = self.settings_panel.zone_selector.corner_icon
+                edge_icon = self.settings_panel.zone_selector.edge_icon
 
-            if corner_global_rect.contains(click_pos) or edge_global_rect.contains(click_pos):
-                # Cancel draw mode when clicking on corners or edges
-                self._current_draw_mode = None
-                self.preview.set_draw_mode(None)
-                self.settings_panel.set_draw_mode(None)
+                if corner_icon is None or edge_icon is None:
+                    return super().eventFilter(obj, event)
+
+                corner_rect = corner_icon.rect()
+                corner_global_pos = corner_icon.mapToGlobal(corner_rect.topLeft())
+                corner_global_rect = corner_rect.translated(corner_global_pos)
+
+                edge_rect = edge_icon.rect()
+                edge_global_pos = edge_icon.mapToGlobal(edge_rect.topLeft())
+                edge_global_rect = edge_rect.translated(edge_global_pos)
+
+                if corner_global_rect.contains(click_pos) or edge_global_rect.contains(click_pos):
+                    # Cancel draw mode when clicking on corners or edges
+                    self._current_draw_mode = None
+                    self.preview.set_draw_mode(None)
+                    self.settings_panel.set_draw_mode(None)
+        except Exception:
+            pass  # Ignore errors in eventFilter to prevent crashes
 
         return super().eventFilter(obj, event)
 

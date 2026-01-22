@@ -146,13 +146,17 @@ import threading
 class DetectionRunner:
     """Runner để chạy YOLO detection trong Python thread (không dùng QThread)"""
 
-    def __init__(self, processor, pages, original_indices, callback):
+    def __init__(self, processor, pages, original_indices, callback, progress_callback=None):
         self._processor = processor
         self._pages = pages  # Copy of pages
         self._original_indices = original_indices
         self._callback = callback  # Called when done with results
+        self._progress_callback = progress_callback  # Called after each page (current, total)
         self._cancelled = False
         self._thread = None
+        self._current_progress = 0  # Current page being processed
+        self._total_pages = len(pages)
+        self._incremental_results = {}  # Store results incrementally
 
     def start(self):
         """Start detection in background thread"""
@@ -174,6 +178,14 @@ class DetectionRunner:
             return not self._thread.is_alive()
         return True
 
+    def get_progress(self) -> tuple:
+        """Get current progress (current, total)"""
+        return (self._current_progress, self._total_pages)
+
+    def get_incremental_results(self) -> dict:
+        """Get results detected so far (for incremental display)"""
+        return self._incremental_results.copy()
+
     def _run(self):
         """Run detection (called in background thread)"""
         results = {}
@@ -186,9 +198,16 @@ class DetectionRunner:
                 original_idx = self._original_indices[i]
                 regions = self._processor.detect_protected_regions(page)
                 results[original_idx] = regions
+                self._incremental_results[original_idx] = regions
             except Exception as e:
                 original_idx = self._original_indices[i]
                 results[original_idx] = []
+                self._incremental_results[original_idx] = []
+
+            # Update progress
+            self._current_progress = i + 1
+            if self._progress_callback and not self._cancelled:
+                self._progress_callback(self._current_progress, self._total_pages)
 
         # Call callback with results (if not cancelled)
         if not self._cancelled and self._callback:
@@ -472,8 +491,9 @@ class ContinuousGraphicsView(QGraphicsView):
                 rect = self._draw_rect_item.rect()
 
                 # Find which page the rect center is on
+                # Use combined method to ensure page_bounds and page_idx are consistent
                 rect_center_y = rect.y() + rect.height() / 2
-                page_bounds = self._find_page_at_y(rect_center_y)
+                page_idx, page_bounds = self._find_page_with_index_at_y(rect_center_y)
 
                 if page_bounds:
                     px, py, pw, ph = page_bounds
@@ -483,8 +503,6 @@ class ContinuousGraphicsView(QGraphicsView):
                         y = max(0, (rect.y() - py) / ph)
                         w = min(1 - x, rect.width() / pw)
                         h = min(1 - y, rect.height() / ph)
-                        # Find which page this rect is on
-                        page_idx = self._find_page_index_at_y(rect_center_y)
                         # Only emit if reasonable size
                         if w > 0.01 and h > 0.01:
                             self.rect_drawn.emit(x, y, w, h, self._draw_mode, page_idx)
@@ -515,7 +533,31 @@ class ContinuousGraphicsView(QGraphicsView):
                 px, py, pw, ph = bounds
                 if py <= y <= py + ph:
                     return i
+            # No exact match - find the page index for fallback _page_bounds
+            # This ensures consistency with _find_page_at_y
+            if self._page_bounds:
+                for i, bounds in enumerate(self._all_page_bounds):
+                    if bounds == self._page_bounds:
+                        return i
         return 0  # Default to first page
+
+    def _find_page_with_index_at_y(self, y: float) -> tuple:
+        """Find both page bounds and index containing the given y coordinate.
+
+        Returns (page_idx, page_bounds) tuple ensuring consistency.
+        """
+        if self._all_page_bounds:
+            for i, bounds in enumerate(self._all_page_bounds):
+                px, py, pw, ph = bounds
+                if py <= y <= py + ph:
+                    return (i, bounds)
+            # No exact match - use fallback _page_bounds and find its index
+            if self._page_bounds:
+                for i, bounds in enumerate(self._all_page_bounds):
+                    if bounds == self._page_bounds:
+                        return (i, self._page_bounds)
+        # Ultimate fallback
+        return (0, self._page_bounds)
 
 
 class ContinuousPreviewPanel(QFrame):
@@ -729,6 +771,50 @@ class ContinuousPreviewPanel(QFrame):
         
         layout.addWidget(title_bar)
 
+        # Progress bar container (2px) - holds both page loading and detection bars
+        self._progress_bar = None
+        self._progress_bar_fill = None
+        self._detection_progress_fill = None
+        self._page_loading_active = False  # Track if page loading progress is active
+        self._detection_active = False  # Track if detection progress is active
+        # Smooth animation for detection progress
+        self._detection_current_progress = 0.0  # Current displayed progress (float for smooth)
+        self._detection_target_progress = 0  # Target progress (int 0-100)
+        self._detection_anim_timer = None
+        if show_overlay:
+            # Container for progress bars
+            self._progress_bar = QWidget()
+            self._progress_bar.setFixedHeight(2)
+            self._progress_bar.setStyleSheet("background-color: #E5E7EB;")  # Gray background
+
+            progress_layout = QHBoxLayout(self._progress_bar)
+            progress_layout.setContentsMargins(0, 0, 0, 0)
+            progress_layout.setSpacing(0)
+
+            # Page loading progress fill (blue)
+            self._progress_bar_fill = QWidget()
+            self._progress_bar_fill.setFixedHeight(2)
+            self._progress_bar_fill.setStyleSheet("background-color: #3B82F6;")  # Blue fill
+            self._progress_bar_fill.setFixedWidth(0)
+            progress_layout.addWidget(self._progress_bar_fill)
+            progress_layout.addStretch()
+
+            self._progress_bar.setVisible(False)
+            layout.addWidget(self._progress_bar)
+
+            # Detection progress fill (red) - overlays blue, child of container
+            self._detection_progress_fill = QWidget(self._progress_bar)
+            self._detection_progress_fill.setFixedHeight(2)
+            self._detection_progress_fill.setStyleSheet("background-color: rgba(220, 38, 38, 0.6);")
+            self._detection_progress_fill.setGeometry(0, 0, 0, 2)
+            self._detection_progress_fill.setVisible(False)
+            self._detection_progress_fill.raise_()
+
+            # Animation timer for smooth progress (8ms = ~120fps for ultra smooth)
+            self._detection_anim_timer = QTimer()
+            self._detection_anim_timer.setInterval(8)
+            self._detection_anim_timer.timeout.connect(self._animate_detection_progress)
+
         # Content area: [ThumbnailPanel (Gốc only)] + [GraphicsView]
         self._content_widget = QWidget()
         self._content_widget.setStyleSheet("background-color: #E5E7EB;")
@@ -785,18 +871,24 @@ class ContinuousPreviewPanel(QFrame):
         self.collapse_requested.emit()
 
     def _on_thumbnail_page_clicked(self, page_index: int):
-        """Handle thumbnail click - scroll to page and emit signal"""
-        self.set_current_page(page_index)
+        """Handle thumbnail click - emit signal to parent, let DualPreviewWidget handle scroll"""
+        # Don't scroll here - DualPreviewWidget will handle all scrolling with proper skip flag
         self.thumbnail_page_clicked.emit(page_index)
 
     def _on_thumbnail_collapsed_changed(self, collapsed: bool):
         """Handle thumbnail panel collapse state change"""
         self.thumbnail_collapsed_changed.emit(collapsed)
 
-    def update_thumbnail_highlight(self, page_index: int):
-        """Update thumbnail highlight for current visible page"""
+    def update_thumbnail_highlight(self, page_index: int, scroll: bool = True):
+        """Update thumbnail highlight for current visible page
+
+        Args:
+            page_index: Page to highlight
+            scroll: If True, scroll thumbnail into view. Default True when called from
+                   preview scroll detection. False when called after user clicks thumbnail.
+        """
         if self._thumbnail_panel is not None:
-            self._thumbnail_panel.set_current_page(page_index)
+            self._thumbnail_panel.set_current_page(page_index, scroll=scroll)
 
     def is_thumbnail_collapsed(self) -> bool:
         """Check if thumbnail panel is collapsed"""
@@ -809,6 +901,87 @@ class ContinuousPreviewPanel(QFrame):
         if self._thumbnail_panel is not None:
             return self._thumbnail_panel.get_width()
         return 0
+
+    def show_progress_bar(self):
+        """Show the page loading progress bar (blue)"""
+        self._page_loading_active = True
+        if self._progress_bar is not None:
+            self._progress_bar.setVisible(True)
+            self.set_progress(0)
+
+    def hide_progress_bar(self):
+        """Hide the page loading progress bar (blue)"""
+        self._page_loading_active = False
+        if self._progress_bar_fill is not None:
+            self._progress_bar_fill.setFixedWidth(0)
+        # Only hide container if detection is also not active
+        if self._progress_bar is not None and not self._detection_active:
+            self._progress_bar.setVisible(False)
+
+    def set_progress(self, percent: int):
+        """Set page loading progress bar percentage (0-100)"""
+        if self._progress_bar_fill is not None:
+            parent_width = self._progress_bar.width() if self._progress_bar else 100
+            fill_width = int(parent_width * percent / 100)
+            self._progress_bar_fill.setFixedWidth(fill_width)
+
+    def show_detection_progress(self):
+        """Show detection progress bar (red, overlays page loading bar)"""
+        self._detection_active = True
+        self._detection_current_progress = 0.0  # Reset animation state
+        self._detection_target_progress = 0
+        if self._progress_bar is not None:
+            self._progress_bar.setVisible(True)
+        if self._detection_progress_fill is not None:
+            self._detection_progress_fill.setVisible(True)
+            self._detection_progress_fill.raise_()
+            self._detection_progress_fill.setGeometry(0, 0, 0, 2)
+
+    def hide_detection_progress(self):
+        """Hide detection progress bar (red)"""
+        self._detection_active = False
+        # Stop animation timer
+        if self._detection_anim_timer is not None:
+            self._detection_anim_timer.stop()
+        self._detection_current_progress = 0.0
+        self._detection_target_progress = 0
+        if self._detection_progress_fill is not None:
+            self._detection_progress_fill.setVisible(False)
+            self._detection_progress_fill.setGeometry(0, 0, 0, 2)
+        # Only hide container if page loading is also not active
+        if self._progress_bar is not None and not self._page_loading_active:
+            self._progress_bar.setVisible(False)
+
+    def set_detection_progress(self, percent: int):
+        """Set detection progress bar percentage (0-100) with smooth animation"""
+        self._detection_target_progress = percent
+        # Start animation timer if not running
+        if self._detection_anim_timer is not None and not self._detection_anim_timer.isActive():
+            self._detection_anim_timer.start()
+
+    def _animate_detection_progress(self):
+        """Animate progress bar smoothly towards target (called by timer)"""
+        if self._detection_progress_fill is None or self._progress_bar is None:
+            return
+
+        diff = self._detection_target_progress - self._detection_current_progress
+        if abs(diff) < 0.05:
+            # Close enough, snap to target
+            self._detection_current_progress = self._detection_target_progress
+            if self._detection_anim_timer is not None:
+                self._detection_anim_timer.stop()
+        else:
+            # Ultra smooth: fixed step of 0.3% per frame + tiny ease-out
+            step = min(0.3, abs(diff) * 0.05)
+            if diff > 0:
+                self._detection_current_progress += step
+            else:
+                self._detection_current_progress -= step
+
+        # Update visual
+        parent_width = self._progress_bar.width()
+        fill_width = int(parent_width * self._detection_current_progress / 100)
+        self._detection_progress_fill.setGeometry(0, 0, fill_width, 2)
 
     def set_collapse_button_icon(self, collapsed: bool):
         """Update collapse button icon based on state"""
@@ -1105,17 +1278,69 @@ class ContinuousPreviewPanel(QFrame):
     
     def set_pages(self, pages: List[np.ndarray]):
         """Set danh sách ảnh các trang"""
-        self._pages = pages
+        # Create own list to avoid reference issues with parent widget
+        self._pages = list(pages) if pages else []
         self._current_page = 0  # Reset to first page
         # Clear per_page_zones when loading new file
         # This ensures zones will be re-added by set_zone_definitions
         self._per_page_zones.clear()
         self._rebuild_scene()
 
-        # Update thumbnail panel if exists (Gốc panel only)
+        # Update thumbnail panel if exists (Gốc panel only) - only if not using progressive loading
+        # When using progressive loading, thumbnails are set separately via set_thumbnail_pages()
+        # if self._thumbnail_panel is not None:
+        #     self._thumbnail_panel.set_pages(pages)
+
+    def set_thumbnail_pages(self, pages: List[np.ndarray]):
+        """Set thumbnail images separately (can be different DPI from preview)"""
         if self._thumbnail_panel is not None:
             self._thumbnail_panel.set_pages(pages)
-    
+
+    def start_thumbnail_loading(self, total_pages: int):
+        """Start progressive thumbnail loading"""
+        if self._thumbnail_panel is not None:
+            self._thumbnail_panel.start_loading(total_pages)
+
+    def add_thumbnail(self, index: int, image: np.ndarray):
+        """Add single thumbnail during progressive loading"""
+        if self._thumbnail_panel is not None:
+            self._thumbnail_panel.add_thumbnail(index, image)
+
+    def finish_thumbnail_loading(self):
+        """Finish thumbnail loading"""
+        if self._thumbnail_panel is not None:
+            self._thumbnail_panel.finish_loading()
+
+    def pause_thumbnail_updates(self):
+        """Pause thumbnail updates for bulk loading"""
+        if self._thumbnail_panel is not None:
+            self._thumbnail_panel.pause_updates()
+
+    def repaint_thumbnails(self):
+        """Force immediate repaint of thumbnail panel"""
+        if self._thumbnail_panel is not None:
+            self._thumbnail_panel.repaint()
+
+    def clear_thumbnails(self):
+        """Clear all thumbnails from the thumbnail panel"""
+        if self._thumbnail_panel is not None:
+            self._thumbnail_panel.set_pages([])
+
+    def add_page(self, page: np.ndarray):
+        """Add single page to preview (for background loading)
+
+        This method appends page to list. Scene is rebuilt at the end
+        of background loading to avoid visual issues.
+        """
+        if page is None:
+            return
+        # Make a copy to ensure numpy array memory is properly managed
+        self._pages.append(page.copy())
+
+    def refresh_scene(self):
+        """Rebuild scene with all pages. Call at end of background loading."""
+        self._rebuild_scene()
+
     def _rebuild_scene(self):
         """Xây dựng lại scene với tất cả các trang hoặc 1 trang"""
         self.scene.clear()
@@ -2166,6 +2391,9 @@ class ContinuousPreviewWidget(QWidget):
     next_file_requested = pyqtSignal()  # Navigate to next file
     # Thumbnail panel signals
     thumbnail_collapsed_changed = pyqtSignal(bool)  # collapsed state changed
+    page_load_requested = pyqtSignal(int)  # Request loading a specific page (for lazy loading)
+    # Zoom signal for saving to config
+    zoom_changed = pyqtSignal(float)  # zoom level (e.g., 1.0 = 100%)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2182,6 +2410,9 @@ class ContinuousPreviewWidget(QWidget):
         self._detection_runner: Optional[DetectionRunner] = None
         self._detection_pending = False  # Track if detection is pending/running
         self._detection_results: Optional[dict] = None  # Store results from thread
+        self._detection_total_pages = 0  # Total pages in PDF (for overall progress)
+        self._detection_displayed_pages: set = set()  # Track pages already displayed incrementally
+        self._detection_progress_shown = False  # Track if progress bar is already shown
 
         # Timer to check for detection results (cross-thread communication)
         self._result_check_timer = QTimer()
@@ -2302,6 +2533,8 @@ class ContinuousPreviewWidget(QWidget):
         self.after_panel.view.zoom_changed.connect(self._sync_zoom)
         self.before_panel.view.scroll_changed.connect(self._sync_scroll_from_before)
         self.after_panel.view.scroll_changed.connect(self._sync_scroll_from_after)
+        # Forward zoom_changed to parent (main_window) for saving to config
+        self.before_panel.view.zoom_changed.connect(self.zoom_changed.emit)
         
         # Set equal stretch factors so both panels resize equally
         self.splitter.setStretchFactor(0, 1)
@@ -2453,7 +2686,11 @@ class ContinuousPreviewWidget(QWidget):
         """Reset titles to default"""
         self.before_panel.set_title("Gốc:")
         self.after_panel.set_title("Đích:")
-    
+
+    def clear_thumbnails(self):
+        """Clear thumbnails from the before panel"""
+        self.before_panel.clear_thumbnails()
+
     def set_pages(self, pages: List[np.ndarray]):
         """Set danh sách ảnh các trang"""
         # Stop any running detection first
@@ -2465,6 +2702,8 @@ class ContinuousPreviewWidget(QWidget):
 
         # Clear cached regions khi load pages mới
         self._cached_regions.clear()
+        self._detection_displayed_pages.clear()
+        self._detection_progress_shown = False
 
         # Clear undo history when loading new file
         self._undo_manager.clear()
@@ -2484,23 +2723,119 @@ class ContinuousPreviewWidget(QWidget):
             self.after_panel.view.resetTransform()
 
         self._schedule_process()
-    
+
+    # === Progressive Loading Methods ===
+
+    def start_thumbnail_loading(self, total_pages: int):
+        """Start progressive thumbnail loading"""
+        self.before_panel.start_thumbnail_loading(total_pages)
+
+    def add_thumbnail(self, index: int, image: np.ndarray):
+        """Add single thumbnail during progressive loading"""
+        self.before_panel.add_thumbnail(index, image)
+
+    def finish_thumbnail_loading(self):
+        """Finish thumbnail loading"""
+        self.before_panel.finish_thumbnail_loading()
+
+    def pause_thumbnail_updates(self):
+        """Pause thumbnail updates for bulk loading"""
+        self.before_panel.pause_thumbnail_updates()
+
+    def repaint_thumbnails(self):
+        """Force immediate repaint of thumbnail panel"""
+        self.before_panel.repaint_thumbnails()
+
+    def show_progress_bar(self):
+        """Show loading progress bar"""
+        self.before_panel.show_progress_bar()
+
+    def hide_progress_bar(self):
+        """Hide loading progress bar"""
+        self.before_panel.hide_progress_bar()
+
+    def set_progress(self, percent: int):
+        """Set progress bar percentage (0-100)"""
+        self.before_panel.set_progress(percent)
+
+    def show_detection_progress(self):
+        """Show detection progress bar (red)"""
+        self.before_panel.show_detection_progress()
+
+    def hide_detection_progress(self):
+        """Hide detection progress bar"""
+        self.before_panel.hide_detection_progress()
+
+    def set_detection_progress(self, percent: int):
+        """Set detection progress bar percentage (0-100)"""
+        self.before_panel.set_detection_progress(percent)
+
+    def add_preview_page(self, page: np.ndarray):
+        """Add single page to both before and after panels"""
+        if page is None:
+            return
+        page_copy = page.copy()
+        page_idx = len(self._pages)  # Index of new page
+        # Add to our own lists for tracking loaded count and processing
+        self._pages.append(page_copy)
+        self._processed_pages.append(page_copy.copy())  # Keep in sync for processing
+        # Also add to panels - they will append to their _pages lists
+        self.before_panel.add_page(page_copy)
+        self.after_panel.add_page(page_copy.copy())
+
+        # If text protection enabled, detect this page immediately
+        if self._text_protection_enabled and page_idx not in self._cached_regions:
+            self._detect_single_page(page_idx, page_copy)
+
+    def get_loaded_page_count(self) -> int:
+        """Get number of pages currently loaded in preview"""
+        return len(self._pages)
+
+    def refresh_scene(self):
+        """Rebuild scenes with all pages. Call at end of background loading."""
+        self.before_panel.refresh_scene()
+        self.after_panel.refresh_scene()
+
+        # Re-display protection regions that were already detected (scene.clear() removed them)
+        if self._text_protection_enabled and self._detection_displayed_pages:
+            for page_idx in self._detection_displayed_pages:
+                if page_idx in self._cached_regions:
+                    regions = self._cached_regions[page_idx]
+                    self.before_panel.set_protected_regions(page_idx, regions, margin=self._text_protection_margin)
+
+        # Check if all pages are detected - hide progress bar
+        if self._text_protection_enabled:
+            if self._detection_total_pages > 0 and len(self._cached_regions) >= self._detection_total_pages:
+                # All pages detected, hide progress bar and process
+                self.hide_detection_progress()
+                self._detection_progress_shown = False
+                self._process_pages_with_cached_regions()
+            else:
+                # Some pages not yet detected, continue detection
+                self._schedule_process()
+
     def set_view_mode(self, mode: str):
         """Set view mode: 'continuous' or 'single'"""
         self.before_panel.set_view_mode(mode)
         self.after_panel.set_view_mode(mode)
     
-    def set_current_page(self, index: int):
-        """Set current page index - scroll in continuous mode, rebuild in single mode"""
+    def set_current_page(self, index: int, scroll_thumbnail: bool = True):
+        """Set current page index - scroll in continuous mode, rebuild in single mode
+
+        Args:
+            index: Page index (0-based)
+            scroll_thumbnail: If True, scroll thumbnail to show current page.
+                            Set False when action was initiated by clicking thumbnail.
+        """
         # Skip page detection during programmatic scroll to prevent jumping
         self._skip_page_detection = True
         self._last_emitted_page = index
         self.before_panel.set_current_page(index)
         self.after_panel.set_current_page(index)
-        # Update thumbnail highlight to match current page
-        self.before_panel.update_thumbnail_highlight(index)
+        # Update thumbnail highlight
+        self.before_panel.update_thumbnail_highlight(index, scroll=scroll_thumbnail)
         # Reset flag after scroll completes (use timer to allow scroll event to finish)
-        QTimer.singleShot(100, lambda: setattr(self, '_skip_page_detection', False))
+        QTimer.singleShot(1000, lambda: setattr(self, '_skip_page_detection', False))
     
     def get_current_page(self) -> int:
         """Get current page index"""
@@ -2833,8 +3168,8 @@ class ContinuousPreviewWidget(QWidget):
         self._undo_manager.clear()
 
     def _schedule_process(self):
-        """Schedule processing với debounce"""
-        self._process_timer.start(150)  # Reduced from 300ms for faster response
+        """Schedule processing với minimal debounce cho response nhanh"""
+        self._process_timer.start(30)  # Fast response for zone drawing
     
     def _do_process_all(self):
         """Xử lý tất cả các trang"""
@@ -2856,19 +3191,59 @@ class ContinuousPreviewWidget(QWidget):
         # No detection needed, process directly
         self._process_pages_with_cached_regions()
 
+    def set_detection_total_pages(self, total: int):
+        """Set total page count for detection progress calculation (call before loading)"""
+        self._detection_total_pages = total
+
+    def _detect_single_page(self, page_idx: int, page: np.ndarray):
+        """Detect protection regions for a single page (runs synchronously during page load)"""
+        # Show progress bar if not shown yet
+        if not self._detection_progress_shown:
+            self._detection_progress_shown = True
+            self.show_detection_progress()
+
+        try:
+            # Run detection
+            regions = self._processor.detect_protected_regions(page)
+            # Cache result
+            self._cached_regions[page_idx] = regions
+            self._detection_displayed_pages.add(page_idx)
+            # Display regions on before panel
+            self.before_panel.set_protected_regions(page_idx, regions, margin=self._text_protection_margin)
+            # Update progress
+            if self._detection_total_pages > 0:
+                percent = int(len(self._cached_regions) * 100 / self._detection_total_pages)
+                self.set_detection_progress(percent)
+        except Exception:
+            self._cached_regions[page_idx] = []
+
     def _start_background_detection(self, pages_to_detect: List[int]):
         """Bắt đầu detection trong background thread (Python threading)"""
-        # Stop any existing detection
+        # Stop any existing detection (but keep progress bar if continuing)
+        was_pending = self._detection_pending
         self._stop_detection()
 
         self._detection_pending = True
         self._detection_results = None
-        self._show_loading()
+        # Total pages = all pages in PDF (for overall progress tracking)
+        self._detection_total_pages = len(self._pages)
+        # Don't clear displayed pages - they're already shown from previous batch
+        # self._detection_displayed_pages.clear()
+
+        # Show progress bar only if not already shown (first batch)
+        if not self._detection_progress_shown:
+            self._detection_progress_shown = True
+            self.show_detection_progress()
+
+        # Update progress based on already cached pages
+        if self._detection_total_pages > 0:
+            initial_progress = int(len(self._cached_regions) * 100 / self._detection_total_pages)
+            self.set_detection_progress(initial_progress)
 
         # Create a copy of pages for the thread to avoid thread safety issues
         pages_copy = [self._pages[i].copy() for i in pages_to_detect]
 
-        # Create runner with callback
+        # Create runner with callback (progress callback not used - we poll from timer)
         self._detection_runner = DetectionRunner(
             self._processor,
             pages_copy,
@@ -2879,7 +3254,7 @@ class ContinuousPreviewWidget(QWidget):
         # Start detection thread
         self._detection_runner.start()
 
-        # Start timer to check for results
+        # Start timer to check for results and update progress
         self._result_check_timer.start()
 
     def _on_detection_complete(self, results: dict):
@@ -2888,15 +3263,38 @@ class ContinuousPreviewWidget(QWidget):
 
     def _check_detection_results(self):
         """Check if detection results are ready (called by timer in main thread)"""
+        # Update progress bar and display incremental results while detection is running
+        if self._detection_runner is not None and self._detection_pending:
+            # Get incremental results and display newly detected pages immediately
+            incremental = self._detection_runner.get_incremental_results()
+            for page_idx, regions in incremental.items():
+                if page_idx not in self._detection_displayed_pages:
+                    # Cache the regions
+                    self._cached_regions[page_idx] = regions
+                    # Display regions on before panel immediately
+                    self.before_panel.set_protected_regions(page_idx, regions, margin=self._text_protection_margin)
+                    self._detection_displayed_pages.add(page_idx)
+
+            # Update progress based on TOTAL pages detected (not just this batch)
+            if self._detection_total_pages > 0:
+                percent = int(len(self._cached_regions) * 100 / self._detection_total_pages)
+                self.set_detection_progress(percent)
+
         if self._detection_results is not None and self._detection_pending:
             # Stop the timer
             self._result_check_timer.stop()
 
-            # Process results in main thread
+            # Only hide progress bar if ALL pages are detected
+            all_pages_detected = len(self._cached_regions) >= self._detection_total_pages
+            if all_pages_detected:
+                self.hide_detection_progress()
+                self._detection_progress_shown = False  # Reset for next file
+
+            # Process results in main thread (any remaining)
             results = self._detection_results
             self._detection_results = None
 
-            # Update cache
+            # Update cache (ensure all results are cached)
             for page_idx, regions in results.items():
                 if page_idx < len(self._pages):
                     self._cached_regions[page_idx] = regions
@@ -2904,8 +3302,8 @@ class ContinuousPreviewWidget(QWidget):
             self._detection_pending = False
             self._detection_runner = None
 
-            # Continue processing
-            self._process_pages_with_cached_regions()
+            # Process all pages for after panel (with zones applied)
+            self._process_pages_after_detection()
 
     def _stop_detection(self):
         """Stop any running detection"""
@@ -2916,10 +3314,42 @@ class ContinuousPreviewWidget(QWidget):
         except RuntimeError:
             pass  # Timer already deleted during shutdown
 
+        # Hide detection progress bar
+        self.hide_detection_progress()
+
         if self._detection_runner is not None:
             self._detection_runner.cancel()
             # Don't wait - let daemon thread die naturally
             self._detection_runner = None
+
+    def _process_pages_after_detection(self):
+        """Process pages for after panel after incremental detection complete.
+
+        Unlike _process_pages_with_cached_regions, this does NOT clear
+        protected regions display (already shown incrementally).
+        """
+        if not self._pages:
+            return
+
+        for i, page in enumerate(self._pages):
+            page_zones = self._get_zones_for_page(i)
+
+            if page_zones:
+                if self._text_protection_enabled:
+                    regions = self._cached_regions.get(i, [])
+                    processed = self._processor.process_image(page, page_zones, protected_regions=regions)
+                    self._processed_pages[i] = processed
+                else:
+                    processed = self._processor.process_image(page, page_zones)
+                    self._processed_pages[i] = processed
+            else:
+                self._processed_pages[i] = page.copy()
+
+        self.after_panel.set_pages(self._processed_pages)
+
+        # Force UI refresh
+        from PyQt5.QtWidgets import QApplication
+        QApplication.processEvents()
 
     def _process_pages_with_cached_regions(self):
         """Xử lý tất cả trang với cached regions (không blocking)
@@ -3255,10 +3685,25 @@ class ContinuousPreviewWidget(QWidget):
 
     def _on_thumbnail_page_clicked(self, page_index: int):
         """Handle thumbnail click - scroll both panels to page and update page number"""
-        # Scroll after panel (Đích) to same page
+        # Check if page is loaded (for lazy loading support)
+        loaded_count = len(self._pages)
+        if page_index >= loaded_count:
+            # Page not loaded yet - request loading
+            self.page_load_requested.emit(page_index)
+            return
+
+        # Skip page detection to prevent thumbnail from scrolling again
+        self._skip_page_detection = True
+        self._last_emitted_page = page_index
+
+        # Scroll both panels to same page
+        self.before_panel.set_current_page(page_index)
         self.after_panel.set_current_page(page_index)
         # Emit page_changed to update bottom bar page number
         self.page_changed.emit(page_index)
+
+        # Reset skip flag after scroll events are processed
+        QTimer.singleShot(1000, lambda: setattr(self, '_skip_page_detection', False))
 
     def _on_thumbnail_collapsed_changed(self, collapsed: bool):
         """Handle thumbnail panel collapse state change - reset splitter sizes"""
@@ -3269,6 +3714,11 @@ class ContinuousPreviewWidget(QWidget):
     def is_thumbnail_collapsed(self) -> bool:
         """Check if thumbnail panel is collapsed (Gốc panel only)"""
         return self.before_panel.is_thumbnail_collapsed()
+
+    def toggle_thumbnail_panel(self):
+        """Toggle thumbnail panel collapsed state (Gốc panel only)"""
+        if self.before_panel._thumbnail_panel is not None:
+            self.before_panel._thumbnail_panel._toggle_collapsed()
 
     def get_thumbnail_width(self) -> int:
         """Get current thumbnail panel width"""
@@ -3313,8 +3763,8 @@ class ContinuousPreviewWidget(QWidget):
             self._last_emitted_page = current_page
             self.before_panel._current_page = current_page  # Update internal state
             self.after_panel._current_page = current_page
-            # Update thumbnail highlight
-            self.before_panel.update_thumbnail_highlight(current_page)
+            # Update thumbnail highlight - scroll=True to follow preview scroll
+            self.before_panel.update_thumbnail_highlight(current_page, scroll=True)
             self.page_changed.emit(current_page)
     
     def zoom_in(self):
@@ -3401,10 +3851,17 @@ class ContinuousPreviewWidget(QWidget):
         self.after_panel.view.scale(new_zoom, new_zoom)
         self.after_panel.view._zoom = new_zoom
 
+        # Skip page detection during programmatic scroll
+        self._skip_page_detection = True
+        self._last_emitted_page = page_index
+
         # Scroll đến trang hiện tại để giữ nó visible
         # scroll_to_page=True: scroll đến TOP của trang
         # scroll_to_page=False: scroll đến trang (giữ trang visible)
         self._scroll_to_page(page_index, align_top=scroll_to_page)
+
+        # Reset skip flag after scroll events are processed
+        QTimer.singleShot(500, lambda: setattr(self, '_skip_page_detection', False))
 
     def _scroll_to_page(self, page_index: int, align_top: bool = False):
         """Scroll view đến trang chỉ định
@@ -3549,8 +4006,14 @@ class ContinuousPreviewWidget(QWidget):
         self._text_protection_enabled = options.enabled
         self._text_protection_margin = options.margin  # Store margin for overlay display
 
-        # Clear cache khi settings thay đổi để detect lại với settings mới
+        # Clear cache and reset progress tracking for fresh detection
         self._cached_regions.clear()
+        self._detection_displayed_pages.clear()
+        self._detection_progress_shown = False
+
+        # Clear protection regions display if disabling
+        if not options.enabled:
+            self.before_panel.clear_protected_regions()
 
         # Loading overlay will be shown automatically in _start_background_detection
         self._processor.set_text_protection(options)

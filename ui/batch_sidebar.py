@@ -360,9 +360,9 @@ class BatchSidebar(QFrame):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
-        # Title bar with hamburger, title and count (aligns with Gốc/Đích titles)
+        # Title bar with hamburger, title and count (aligns with Preview Gốc title bar)
         self._title_bar = QWidget()
-        self._title_bar.setFixedHeight(32)  # Match preview panel title bar height
+        self._title_bar.setFixedHeight(32)  # Match Preview Gốc title bar height
         self._title_bar.setStyleSheet("background-color: #F3F4F6; border-bottom: 1px solid #D1D5DB;")
         title_layout = QHBoxLayout(self._title_bar)
         title_layout.setContentsMargins(4, 0, 4, 0)
@@ -405,12 +405,12 @@ class BatchSidebar(QFrame):
         self._list_container = QWidget()
         self._list_container.setStyleSheet("background-color: #F3F4F6;")
         list_layout = QVBoxLayout(self._list_container)
-        list_layout.setContentsMargins(4, 4, 4, 4)
-        list_layout.setSpacing(4)
+        list_layout.setContentsMargins(4, 0, 4, 4)  # No top margin for alignment
+        list_layout.setSpacing(0)  # No spacing between header and line for alignment
 
-        # Header row
+        # Header row (chiều cao bằng thumbnail header)
         header = QWidget()
-        header.setFixedHeight(24)
+        header.setFixedHeight(28)
         header.setStyleSheet("background-color: #F3F4F6;")
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(8, 0, 8, 0)
@@ -448,12 +448,21 @@ class BatchSidebar(QFrame):
 
         list_layout.addWidget(header)
 
-        # Filter row (full width)
+        # Line xám 1px (thẳng hàng với line dưới "Trang thu nhỏ")
+        header_line = QWidget()
+        header_line.setFixedHeight(1)
+        header_line.setStyleSheet("background-color: #E5E7EB;")
+        list_layout.addWidget(header_line)
+
+        # Spacer 4px between header_line and filter_row
+        list_layout.addSpacing(4)
+
+        # Filter row (full width, aligned with table edges)
         filter_row = QWidget()
         filter_row.setFixedHeight(32)
         filter_row.setStyleSheet("background-color: #F9FAFB;")
         filter_layout = QHBoxLayout(filter_row)
-        filter_layout.setContentsMargins(4, 4, 4, 4)
+        filter_layout.setContentsMargins(0, 4, 0, 4)  # No left/right margin for alignment
         filter_layout.setSpacing(4)
 
         # Name filter (full width to left edge)
