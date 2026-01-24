@@ -1595,12 +1595,12 @@ class MainWindow(QMainWindow):
         self._batch_current_index = original_idx
         # Clear custom zones with 'none' filter (Tự do) - will be restored from per-file storage
         self.settings_panel.clear_custom_zones_with_free_filter()
-        self._load_pdf(file_path)
 
-        # Defer zone loading to let thumbnails paint first
+        # Store pending zone info - will be loaded after set_pages() completes
         self._pending_zone_file = file_path
         self._pending_zone_index = original_idx
-        QTimer.singleShot(50, self._load_zones_after_thumbnails)
+
+        self._load_pdf(file_path)
 
     def _load_zones_after_thumbnails(self):
         """Load zones after thumbnails have painted"""
@@ -1614,6 +1614,9 @@ class MainWindow(QMainWindow):
         self.settings_panel.load_per_file_custom_zones(file_path)
         self.preview.load_per_file_zones(file_path)
         self.preview.set_file_index(original_idx, len(self._batch_files))
+
+        # Clear zone loading flag (may not be cleared if no zones existed)
+        self.preview.before_panel._zones_loading = False
 
         # Update zone counts display
         self._update_zone_counts()
@@ -1677,12 +1680,12 @@ class MainWindow(QMainWindow):
             self.batch_sidebar.select_by_original_index(self._batch_current_index)
             # Clear custom zones with 'none' filter (Tự do) - will be restored from per-file storage
             self.settings_panel.clear_custom_zones_with_free_filter()
-            self._load_pdf(file_path)
 
-            # Defer zone loading to let thumbnails paint first
+            # Store pending zone info - will be loaded after set_pages() completes
             self._pending_zone_file = file_path
             self._pending_zone_index = self._batch_current_index
-            QTimer.singleShot(50, self._load_zones_after_thumbnails)
+
+            self._load_pdf(file_path)
 
     def _on_next_file(self):
         """Navigate to next file in batch mode"""
@@ -1696,12 +1699,12 @@ class MainWindow(QMainWindow):
             self.batch_sidebar.select_by_original_index(self._batch_current_index)
             # Clear custom zones with 'none' filter (Tự do) - will be restored from per-file storage
             self.settings_panel.clear_custom_zones_with_free_filter()
-            self._load_pdf(file_path)
 
-            # Defer zone loading to let thumbnails paint first
+            # Store pending zone info - will be loaded after set_pages() completes
             self._pending_zone_file = file_path
             self._pending_zone_index = self._batch_current_index
-            QTimer.singleShot(50, self._load_zones_after_thumbnails)
+
+            self._load_pdf(file_path)
 
     def _on_close_file(self):
         """Close currently opened file or folder"""
@@ -1801,10 +1804,20 @@ class MainWindow(QMainWindow):
                 dest_path = Path(output_dir) / output_name
             else:
                 file_folder = str(source_path.parent)
-                self._batch_base_dir = file_folder
+                file_path_str = str(source_path)  # Absolute path for single file
+                self._batch_base_dir = file_path_str  # Use file path as source
                 output_dir = file_folder
                 self.settings_panel.set_output_path(output_dir)
                 dest_path = source_path.parent / f"{source_path.stem}_clean{source_path.suffix}"
+                # Set batch base dir for zone persistence (use file path for single file mode)
+                self.preview.set_batch_base_dir(file_path_str)
+                self.settings_panel.set_batch_base_dir(file_path_str)
+                # Load persisted zones for this specific file
+                self.preview.load_persisted_zones(file_path_str)
+                self.settings_panel.load_persisted_custom_zones(file_path_str)
+                # Set pending zone file for zone restoration after pages load
+                self._pending_zone_file = str(file_path)
+                self._pending_zone_index = 0
 
             # Store for deferred setup
             self._pending_file_path = str(file_path)
@@ -1878,11 +1891,36 @@ class MainWindow(QMainWindow):
         # Set file paths on preview (lightweight)
         self.preview.set_file_paths(self._pending_file_path, self._pending_dest_path)
 
+        # Set current file path on settings panel (for per-file zone tracking)
+        self.settings_panel.set_current_file_path(self._pending_file_path)
+
         # Set initial pages - this rebuilds the graphics scene
         self.preview.set_pages(self._all_pages)
 
         # Re-apply Zone Chung after set_pages clears _per_page_zones
         self.settings_panel._emit_zones()
+
+        # Apply text protection settings (triggers processing with zones)
+        text_protection_opts = self.settings_panel.get_text_protection_options()
+        self.preview.set_text_protection(text_protection_opts)
+
+        # Load Zone Riêng (per-file zones) AFTER set_pages and Zone Chung
+        # This must happen here, not via timer, to avoid race condition
+        if hasattr(self, '_pending_zone_file') and self._pending_zone_file:
+            file_path = self._pending_zone_file
+            original_idx = getattr(self, '_pending_zone_index', 0)
+            self._pending_zone_file = None
+
+            # Restore zones for this file
+            self.settings_panel.load_per_file_custom_zones(file_path)
+            self.preview.load_per_file_zones(file_path)
+            self.preview.set_file_index(original_idx, len(self._batch_files) if self._batch_files else 1)
+
+            # Clear zone loading flag (may not be cleared if no zones existed)
+            self.preview.before_panel._zones_loading = False
+
+            # Update zone counts display
+            self._update_zone_counts()
 
         # Force thumbnails to repaint AFTER preview setup (in case layout changed)
         QTimer.singleShot(10, self.preview.repaint_thumbnails)
@@ -1901,6 +1939,9 @@ class MainWindow(QMainWindow):
         # Start background loading of remaining preview pages
         if self._bg_load_index < self._total_pages:
             QTimer.singleShot(20, self._load_remaining_pages_parallel)
+
+        # Update UI state to enable Clean button now that PDF is loaded
+        self._update_ui_state()
 
     def _fit_first_page_width(self):
         """Apply saved zoom or fit width for first page - called after layout update"""
@@ -2214,6 +2255,14 @@ class MainWindow(QMainWindow):
     def _on_zones_changed(self, zones: List[Zone]):
         self.preview.set_zones(zones)
         self._update_zone_counts()
+
+        # Save per-file zones when Zone Riêng changes - ALWAYS save if has Zone Riêng
+        # (regardless of _batch_mode since user might be in single file mode within folder)
+        has_zone_rieng = any(z.page_filter == 'none' for z in zones)
+        if has_zone_rieng:
+            # Use QTimer to defer save until after set_zones completes
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(100, lambda: self.preview.save_per_file_zones())
 
     def _update_zone_counts(self):
         """Update zone count display in bottom bar
@@ -3195,7 +3244,8 @@ Thời gian: {time_str}"""
                 return
 
         # Save per-file zones before closing (crash recovery)
-        if self._batch_mode:
+        # Save for both batch mode AND single file mode (when _batch_base_dir is set)
+        if self._batch_base_dir:
             # First save current file zones to memory
             self.preview.save_per_file_zones(persist=False)
             self.settings_panel.save_per_file_custom_zones(persist=False)

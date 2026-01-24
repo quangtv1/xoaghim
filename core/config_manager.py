@@ -5,11 +5,15 @@ Lưu cấu hình vào file JSON trong thư mục user:
 - macOS: ~/Library/Application Support/XoaGhim/config.json
 - Windows: %APPDATA%/XoaGhim/config.json
 - Linux: ~/.config/XoaGhim/config.json
+
+Zone Riêng (per-file zones) được lưu riêng cho mỗi file/folder:
+- zones/<hash>.json - hash từ đường dẫn tuyệt đối
 """
 
 import json
 import os
 import sys
+import hashlib
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -37,9 +41,30 @@ def get_config_path() -> Path:
     return get_config_dir() / 'config.json'
 
 
-def get_batch_zones_path() -> Path:
-    """Get full path to batch zones file (separate from main config)"""
-    return get_config_dir() / 'batch_zones.json'
+def get_zones_dir() -> Path:
+    """Get directory for per-file zone storage"""
+    zones_dir = get_config_dir() / 'zones'
+    zones_dir.mkdir(parents=True, exist_ok=True)
+    return zones_dir
+
+
+def _path_to_hash(path: str) -> str:
+    """Convert absolute path to a short hash for filename"""
+    # Use MD5 hash (truncated) for reasonable filename length
+    return hashlib.md5(path.encode('utf-8')).hexdigest()[:16]
+
+
+def _get_zones_file_path(source_path: str) -> Path:
+    """Get JSON file path for a specific source (file or folder)
+
+    Args:
+        source_path: Absolute path to file or folder
+
+    Returns:
+        Path to zones JSON file
+    """
+    hash_name = _path_to_hash(source_path)
+    return get_zones_dir() / f'{hash_name}.json'
 
 
 class ConfigManager:
@@ -115,43 +140,54 @@ class ConfigManager:
         self._config[key] = value
         self._save()
 
-    # === Batch zones persistence (for crash recovery) ===
+    # === Per-source zone persistence (each file/folder has its own JSON) ===
 
-    def _get_batch_zones_path(self) -> Path:
-        """Get path to batch zones file"""
-        return get_batch_zones_path()
-
-    def _load_batch_zones(self) -> Dict[str, Any]:
-        """Load batch zones from file"""
-        try:
-            path = self._get_batch_zones_path()
-            if path.exists():
-                with open(path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-        except Exception as e:
-            print(f"[Config] Failed to load batch zones: {e}")
-        return {}
-
-    def _save_batch_zones(self, data: Dict[str, Any]):
-        """Save batch zones to file"""
-        try:
-            path = self._get_batch_zones_path()
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-                f.flush()
-                os.fsync(f.fileno())  # Force write to disk before closing
-        except Exception as e:
-            print(f"[Config] Failed to save batch zones: {e}")
-
-    def save_per_file_zones(self, batch_base_dir: str, per_file_zones: Dict[str, Dict[int, Dict[str, tuple]]]):
-        """Save per-file zones for crash recovery
+    def _load_source_zones(self, source_path: str) -> Dict[str, Any]:
+        """Load zones for a specific source (file or folder)
 
         Args:
-            batch_base_dir: Base directory of current batch
+            source_path: Absolute path to file or folder
+
+        Returns:
+            Zone data dict or empty dict if not found
+        """
+        try:
+            zones_file = _get_zones_file_path(source_path)
+            if zones_file.exists():
+                with open(zones_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    # Verify source path matches (hash collision protection)
+                    if data.get('source_path') == source_path:
+                        return data
+        except Exception as e:
+            print(f"[Config] Failed to load zones for {source_path}: {e}")
+        return {}
+
+    def _save_source_zones(self, source_path: str, data: Dict[str, Any]):
+        """Save zones for a specific source (file or folder)
+
+        Args:
+            source_path: Absolute path to file or folder
+            data: Zone data to save
+        """
+        try:
+            zones_file = _get_zones_file_path(source_path)
+            data['source_path'] = source_path  # Store source path for verification
+            with open(zones_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())  # Force write to disk
+        except Exception as e:
+            print(f"[Config] Failed to save zones for {source_path}: {e}")
+
+    def save_per_file_zones(self, source_path: str, per_file_zones: Dict[str, Dict[int, Dict[str, tuple]]]):
+        """Save per-file zones for a source (file or folder)
+
+        Args:
+            source_path: Absolute path to source (file or folder)
             per_file_zones: {file_path: {page_idx: {zone_id: zone_data}}}
         """
-        data = self._load_batch_zones()
-        data['batch_base_dir'] = batch_base_dir
+        data = self._load_source_zones(source_path)
 
         # Convert page indices from int to str for JSON
         zones_serializable = {}
@@ -161,20 +197,18 @@ class ConfigManager:
                 for page_idx, zone_data in page_zones.items()
             }
         data['per_page_zones'] = zones_serializable
-        self._save_batch_zones(data)
+        self._save_source_zones(source_path, data)
 
-    def get_per_file_zones(self, batch_base_dir: str) -> Dict[str, Dict[int, Dict[str, tuple]]]:
-        """Load per-file zones for batch recovery
+    def get_per_file_zones(self, source_path: str) -> Dict[str, Dict[int, Dict[str, tuple]]]:
+        """Load per-file zones for a source
 
         Args:
-            batch_base_dir: Base directory to match
+            source_path: Absolute path to source (file or folder)
 
         Returns:
-            {file_path: {page_idx: {zone_id: zone_data}}} or empty dict if no match
+            {file_path: {page_idx: {zone_id: zone_data}}} or empty dict
         """
-        data = self._load_batch_zones()
-        if data.get('batch_base_dir') != batch_base_dir:
-            return {}  # Different batch, don't restore
+        data = self._load_source_zones(source_path)
 
         # Convert page indices from str back to int
         raw_zones = data.get('per_page_zones', {})
@@ -186,40 +220,42 @@ class ConfigManager:
             }
         return result
 
-    def save_per_file_custom_zones(self, batch_base_dir: str, per_file_custom_zones: Dict[str, Dict[str, Any]]):
-        """Save per-file custom Zone objects for crash recovery
+    def save_per_file_custom_zones(self, source_path: str, per_file_custom_zones: Dict[str, Dict[str, Any]]):
+        """Save per-file custom Zone objects for a source
 
         Args:
-            batch_base_dir: Base directory of current batch
+            source_path: Absolute path to source (file or folder)
             per_file_custom_zones: {file_path: {zone_id: zone_dict}}
         """
-        data = self._load_batch_zones()
-        data['batch_base_dir'] = batch_base_dir
+        data = self._load_source_zones(source_path)
         data['custom_zones'] = per_file_custom_zones
-        self._save_batch_zones(data)
+        self._save_source_zones(source_path, data)
 
-    def get_per_file_custom_zones(self, batch_base_dir: str) -> Dict[str, Dict[str, Any]]:
-        """Load per-file custom zones for batch recovery
+    def get_per_file_custom_zones(self, source_path: str) -> Dict[str, Dict[str, Any]]:
+        """Load per-file custom zones for a source
 
         Args:
-            batch_base_dir: Base directory to match
+            source_path: Absolute path to source (file or folder)
 
         Returns:
-            {file_path: {zone_id: zone_dict}} or empty dict if no match
+            {file_path: {zone_id: zone_dict}} or empty dict
         """
-        data = self._load_batch_zones()
-        if data.get('batch_base_dir') != batch_base_dir:
-            return {}  # Different batch, don't restore
+        data = self._load_source_zones(source_path)
         return data.get('custom_zones', {})
 
-    def clear_batch_zones(self):
-        """Clear batch zones file (called when opening a different folder)"""
+    def clear_source_zones(self, source_path: str):
+        """Clear zones for a specific source"""
         try:
-            path = self._get_batch_zones_path()
-            if path.exists():
-                path.unlink()
+            zones_file = _get_zones_file_path(source_path)
+            if zones_file.exists():
+                zones_file.unlink()
         except Exception as e:
-            print(f"[Config] Failed to clear batch zones: {e}")
+            print(f"[Config] Failed to clear zones for {source_path}: {e}")
+
+    # Legacy compatibility - redirect to new API
+    def clear_batch_zones(self):
+        """Legacy: No longer used. Each source has its own zones file."""
+        pass  # No-op, kept for compatibility
 
 
 # Global instance

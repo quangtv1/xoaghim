@@ -614,7 +614,8 @@ class ContinuousPreviewPanel(QFrame):
         self._per_file_zones: Dict[str, Dict[int, Dict[str, tuple]]] = {}  # {file_path: _per_page_zones}
         self._current_file_path: str = ""  # Currently loaded file path
         self._batch_base_dir: str = ""  # Batch folder for persistence
-        
+        self._zones_loading: bool = False  # Flag to prevent saving during initial zone load
+
         self.setFrameStyle(QFrame.NoFrame)
         self.setStyleSheet("background-color: #E5E7EB;")
         
@@ -940,9 +941,12 @@ class ContinuousPreviewPanel(QFrame):
     def hide_detection_progress(self):
         """Hide detection progress bar (red)"""
         self._detection_active = False
-        # Stop animation timer
-        if self._detection_anim_timer is not None:
-            self._detection_anim_timer.stop()
+        # Stop animation timer (guard against Qt already deleting the timer)
+        try:
+            if self._detection_anim_timer is not None:
+                self._detection_anim_timer.stop()
+        except RuntimeError:
+            pass  # Timer already deleted by Qt
         self._detection_current_progress = 0.0
         self._detection_target_progress = 0
         if self._detection_progress_fill is not None:
@@ -1140,6 +1144,10 @@ class ContinuousPreviewPanel(QFrame):
         if not path:
             return
 
+        # Don't save during initial zone loading (would overwrite persisted zones)
+        if self._zones_loading:
+            return
+
         # Only save Tự do zones (custom_*, protect_*), skip Zone Chung (corner_*, margin_*)
         zones_to_save = {}
         for page_idx, page_zones in self._per_page_zones.items():
@@ -1161,13 +1169,10 @@ class ContinuousPreviewPanel(QFrame):
             self._per_file_zones[path] = zones_to_save
             changed = True
         elif path in self._per_file_zones:
-            # No zones but path exists in storage - check if we should remove
-            # Only remove if _per_page_zones actually has data (not a fresh open)
-            has_any_zones = any(self._per_page_zones.get(p) for p in self._per_page_zones)
-            if has_any_zones:
-                # File had zones before but now cleared - remove from storage
-                del self._per_file_zones[path]
-                changed = True
+            # No zones to save but path exists in storage - remove it
+            # This handles the case when user clears all zones
+            del self._per_file_zones[path]
+            changed = True
         # else: no zones and path not in storage - nothing to do
 
         # Only persist if we actually changed something
@@ -1193,14 +1198,16 @@ class ContinuousPreviewPanel(QFrame):
 
         # Restore only Tự do zones (custom_*, protect_*) to _per_page_zones
         # Skip Zone Chung (corner_*, margin_*) - they use current global values
+        # NOTE: Store zones for ALL pages, not just loaded ones. Visual overlays
+        # will be created only for loaded pages, and zones for later pages will
+        # appear when those pages load and scene rebuilds.
         for page_idx, page_zones in saved_zones.items():
-            if page_idx < len(self._pages):  # Only restore for valid pages
-                if page_idx not in self._per_page_zones:
-                    self._per_page_zones[page_idx] = {}
-                for zone_id, zone_data in page_zones.items():
-                    # Only load Tự do zones, skip Zone Chung
-                    if not zone_id.startswith('corner_') and not zone_id.startswith('margin_'):
-                        self._per_page_zones[page_idx][zone_id] = zone_data
+            if page_idx not in self._per_page_zones:
+                self._per_page_zones[page_idx] = {}
+            for zone_id, zone_data in page_zones.items():
+                # Only load Tự do zones, skip Zone Chung
+                if not zone_id.startswith('corner_') and not zone_id.startswith('margin_'):
+                    self._per_page_zones[page_idx][zone_id] = zone_data
 
         # Recreate visual overlays for loaded zones
         if self.show_overlay:
@@ -1210,6 +1217,9 @@ class ContinuousPreviewPanel(QFrame):
                 self._recreate_zone_overlays()
         # Force scene update
         self.scene.update()
+
+        # Clear loading flag - zones are now fully loaded, safe to save
+        self._zones_loading = False
 
         return True
 
@@ -1227,9 +1237,6 @@ class ContinuousPreviewPanel(QFrame):
         """Persist per-file zones to disk for crash recovery."""
         if not self._batch_base_dir:
             return
-        # Don't overwrite with empty data (would lose persisted zones on fresh open)
-        if not self._per_file_zones:
-            return
         from core.config_manager import get_config_manager
         get_config_manager().save_per_file_zones(
             self._batch_base_dir,
@@ -1245,10 +1252,16 @@ class ContinuousPreviewPanel(QFrame):
             batch_base_dir: Batch folder to load zones for.
         """
         self._batch_base_dir = batch_base_dir
+        self._zones_loading = True  # Prevent saving during load
+        # Clear old zones before loading new source
+        self._per_file_zones.clear()
+        self._per_page_zones.clear()
         from core.config_manager import get_config_manager
         persisted = get_config_manager().get_per_file_zones(batch_base_dir)
         if persisted:
             self._per_file_zones = persisted
+        # Reset loading flag - disk load complete, safe to save future changes
+        self._zones_loading = False
 
     def _should_apply_to_page(self, page_idx: int) -> bool:
         """Check if zones should be applied to this page based on filter"""
@@ -1412,11 +1425,14 @@ class ContinuousPreviewPanel(QFrame):
         
         # Update scene rect
         self.scene.setSceneRect(0, 0, max_width, y_offset)
-        
+
         # Recreate zone overlays
         if self.show_overlay:
             self._recreate_zone_overlays()
-    
+
+        # Refresh draw mode bounds after page positions changed
+        self._refresh_draw_mode_bounds()
+
     def _rebuild_scene_single(self):
         """Build scene with single page only"""
         if self._current_page >= len(self._pages):
@@ -1439,11 +1455,14 @@ class ContinuousPreviewPanel(QFrame):
         scene_width = pixmap.width() + self.PAGE_SPACING * 2
         scene_height = pixmap.height() + self.PAGE_SPACING * 2
         self.scene.setSceneRect(0, 0, scene_width, scene_height)
-        
+
         # Recreate zone overlays for current page only
         if self.show_overlay:
             self._recreate_zone_overlays_single()
-    
+
+        # Refresh draw mode bounds after page positions changed
+        self._refresh_draw_mode_bounds()
+
     def _add_placeholder(self):
         """Add placeholder with PDF document icon and Folder icon"""
         self._has_placeholder = True
@@ -1849,19 +1868,24 @@ class ContinuousPreviewPanel(QFrame):
             if zone.id in zones_to_add and zone.enabled:
                 # Check if zone has specific target page (for Tự do mode)
                 target_page = getattr(zone, 'target_page', -1)
+                zone_page_filter = getattr(zone, 'page_filter', 'all')
 
-                if target_page >= 0 and target_page < len(self._pages):
-                    # Add only to specific target page
-                    zone_data = self._calculate_initial_zone_data(zone, target_page)
-                    self._per_page_zones[target_page][zone.id] = zone_data
-                else:
-                    # Add to pages based on zone's page_filter (not UI filter)
-                    zone_page_filter = getattr(zone, 'page_filter', 'all')
+                if target_page >= 0:
+                    # Zone has specific target page - ensure page entry exists
+                    if target_page not in self._per_page_zones:
+                        self._per_page_zones[target_page] = {}
+                    # Only add if page is loaded (prevents crash on missing page)
+                    if target_page < len(self._pages):
+                        zone_data = self._calculate_initial_zone_data(zone, target_page)
+                        self._per_page_zones[target_page][zone.id] = zone_data
+                    # else: page not loaded yet, zone will be added when page loads
+                elif zone_page_filter != 'none':
+                    # Global zones (not Tự do) - add to pages based on filter
                     pages_to_add = self._get_pages_for_zone_filter(zone_page_filter)
                     for page_idx in pages_to_add:
-                        # Calculate zone_data based on size_mode and page dimensions
                         zone_data = self._calculate_initial_zone_data(zone, page_idx)
                         self._per_page_zones[page_idx][zone.id] = zone_data
+                # else: Zone Riêng with no target_page - skip (shouldn't happen)
 
         # NOTE: Do NOT update existing zones here - user modifications must be preserved
         # User can reset a zone by disabling and re-enabling it
@@ -2367,6 +2391,21 @@ class ContinuousPreviewPanel(QFrame):
         if page_bounds and page_bounds[2] > 0 and page_bounds[3] > 0:
             self.view.set_draw_mode(mode, page_bounds, all_page_bounds)
 
+    def _refresh_draw_mode_bounds(self):
+        """Refresh draw mode bounds after scene rebuild.
+
+        When scene is rebuilt (e.g., after progressive loading), page positions may change
+        due to centering based on max_width. This method updates the cached bounds in the
+        view to match the new page positions, preventing zone coordinate jumping.
+        """
+        # Check if draw mode is active
+        current_mode = getattr(self.view, '_draw_mode', None)
+        if current_mode is None:
+            return
+
+        # Re-apply draw mode with current page bounds
+        self.set_draw_mode(current_mode)
+
     def _on_rect_drawn(self, x: float, y: float, w: float, h: float, mode: str, page_idx: int):
         """Forward rect_drawn signal - keep draw mode active for continuous drawing"""
         self.rect_drawn.emit(x, y, w, h, mode, page_idx)
@@ -2452,7 +2491,10 @@ class ContinuousPreviewWidget(QWidget):
 
     def __del__(self):
         """Destructor - đảm bảo cleanup"""
-        self._stop_detection()
+        try:
+            self._stop_detection()
+        except (RuntimeError, AttributeError):
+            pass  # Qt objects may already be deleted
     
     def _setup_ui(self):
         self.setStyleSheet("background-color: #E5E7EB;")
@@ -2822,6 +2864,9 @@ class ContinuousPreviewWidget(QWidget):
             else:
                 # Some pages not yet detected, continue detection
                 self._schedule_process()
+        else:
+            # Text protection off - still need to process zones on all pages
+            self._schedule_process()
 
     def set_view_mode(self, mode: str):
         """Set view mode: 'continuous' or 'single'"""

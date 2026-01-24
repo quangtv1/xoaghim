@@ -1347,9 +1347,6 @@ class SettingsPanel(QWidget):
         """Persist per-file custom zones to disk for crash recovery."""
         if not self._batch_base_dir:
             return
-        # Don't overwrite with empty data (would lose persisted zones on fresh open)
-        if not self._per_file_custom_zones:
-            return
         from core.config_manager import get_config_manager
         # Convert Zone objects to serializable dicts
         serializable = {}
@@ -1408,6 +1405,9 @@ class SettingsPanel(QWidget):
             batch_base_dir: Batch folder to load zones for.
         """
         self._batch_base_dir = batch_base_dir
+        # Clear old zones before loading new source
+        self._per_file_custom_zones.clear()
+        self._custom_zones.clear()
         from core.config_manager import get_config_manager
         persisted = get_config_manager().get_per_file_custom_zones(batch_base_dir)
         if persisted:
@@ -1983,3 +1983,8 @@ class SettingsPanel(QWidget):
 
             # Debounced save for all zones (reduces I/O during drag)
             self._save_config_timer.start(300)
+
+            # Also save Zone Riêng (per-file zones) if applicable
+            # _save_zone_config skips zones with page_filter == 'none', so we need to save them separately
+            if zone.page_filter == 'none':
+                self.save_per_file_custom_zones()
