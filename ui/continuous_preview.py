@@ -1865,27 +1865,32 @@ class ContinuousPreviewPanel(QFrame):
 
         # Add new zones to pages based on filter or target_page
         for zone in zones:
-            if zone.id in zones_to_add and zone.enabled:
-                # Check if zone has specific target page (for Tự do mode)
-                target_page = getattr(zone, 'target_page', -1)
-                zone_page_filter = getattr(zone, 'page_filter', 'all')
+            if not zone.enabled:
+                continue
 
-                if target_page >= 0:
-                    # Zone has specific target page - ensure page entry exists
-                    if target_page not in self._per_page_zones:
-                        self._per_page_zones[target_page] = {}
-                    # Only add if page is loaded (prevents crash on missing page)
-                    if target_page < len(self._pages):
-                        zone_data = self._calculate_initial_zone_data(zone, target_page)
-                        self._per_page_zones[target_page][zone.id] = zone_data
-                    # else: page not loaded yet, zone will be added when page loads
-                elif zone_page_filter != 'none':
-                    # Global zones (not Tự do) - add to pages based on filter
-                    pages_to_add = self._get_pages_for_zone_filter(zone_page_filter)
-                    for page_idx in pages_to_add:
-                        zone_data = self._calculate_initial_zone_data(zone, page_idx)
-                        self._per_page_zones[page_idx][zone.id] = zone_data
-                # else: Zone Riêng with no target_page - skip (shouldn't happen)
+            # Check if zone has specific target page (for Tự do mode)
+            target_page = getattr(zone, 'target_page', -1)
+            zone_page_filter = getattr(zone, 'page_filter', 'all')
+
+            if target_page >= 0:
+                # Zone has specific target page - ensure page entry exists
+                if target_page not in self._per_page_zones:
+                    self._per_page_zones[target_page] = {}
+                # Add if not already exists (prevents overwriting user modifications)
+                # Also add if zone_id is in zones_to_add (new or missing zone)
+                if zone.id not in self._per_page_zones[target_page] or zone.id in zones_to_add:
+                    # Always store zone data - use current page if target not loaded yet
+                    # Zone coordinates are in % so they work regardless of page size
+                    page_for_calc = min(target_page, len(self._pages) - 1) if self._pages else 0
+                    zone_data = self._calculate_initial_zone_data(zone, page_for_calc)
+                    self._per_page_zones[target_page][zone.id] = zone_data
+            elif zone_page_filter != 'none' and zone.id in zones_to_add:
+                # Global zones (not Tự do) - add to pages based on filter
+                pages_to_add = self._get_pages_for_zone_filter(zone_page_filter)
+                for page_idx in pages_to_add:
+                    zone_data = self._calculate_initial_zone_data(zone, page_idx)
+                    self._per_page_zones[page_idx][zone.id] = zone_data
+            # else: Zone Riêng with no target_page - skip (shouldn't happen)
 
         # NOTE: Do NOT update existing zones here - user modifications must be preserved
         # User can reset a zone by disabling and re-enabling it
