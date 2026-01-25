@@ -20,6 +20,45 @@ except ImportError:
     Image = None
 
 from core.processor import StapleRemover, Zone
+from core.layout_detector import ProtectedRegion
+
+
+def serialize_protected_regions(regions_by_page: Dict[int, List]) -> Dict[int, List[Dict]]:
+    """Serialize protected regions for multiprocessing"""
+    result = {}
+    for page_idx, regions in regions_by_page.items():
+        result[page_idx] = [
+            {'bbox': r.bbox, 'label': r.label, 'confidence': r.confidence}
+            for r in regions
+        ]
+    return result
+
+
+def deserialize_and_scale_protected_regions(
+    serialized: Dict[int, List[Dict]],
+    preview_dpi: int,
+    export_dpi: int
+) -> Dict[int, List]:
+    """Deserialize and scale protected regions from preview DPI to export DPI"""
+    scale = export_dpi / preview_dpi
+    result = {}
+    for page_idx, regions in serialized.items():
+        scaled_regions = []
+        for r in regions:
+            x1, y1, x2, y2 = r['bbox']
+            scaled_bbox = (
+                int(x1 * scale),
+                int(y1 * scale),
+                int(x2 * scale),
+                int(y2 * scale)
+            )
+            scaled_regions.append(ProtectedRegion(
+                bbox=scaled_bbox,
+                label=r['label'],
+                confidence=r['confidence']
+            ))
+        result[int(page_idx)] = scaled_regions
+    return result
 
 
 @dataclass
@@ -141,9 +180,23 @@ def process_single_pdf(task: ProcessTask, progress_queue=None) -> ProcessResult:
         export_dpi = task.settings.get('dpi', 300)
         jpeg_quality = task.settings.get('jpeg_quality', 90)
         optimize_size = task.settings.get('optimize_size', False)
+        preview_dpi = task.settings.get('preview_dpi', 120)
 
         # Deserialize zones
         zones = _deserialize_zones(task.zones)
+
+        # Deserialize and scale protected regions from preview (if provided)
+        # Only use cached regions if this file matches the preview file
+        scaled_regions_by_page = None
+        preview_regions = task.settings.get('preview_cached_regions')
+        preview_file_path = task.settings.get('preview_file_path')
+        if preview_regions:
+            # For batch mode: only use cached regions for the previewed file
+            # For single file mode: preview_file_path may not be set, use regions anyway
+            if preview_file_path is None or os.path.normpath(task.input_path) == os.path.normpath(preview_file_path):
+                scaled_regions_by_page = deserialize_and_scale_protected_regions(
+                    preview_regions, preview_dpi, export_dpi
+                )
 
         # Open documents
         doc = fitz.open(task.input_path)
@@ -183,7 +236,15 @@ def process_single_pdf(task: ProcessTask, progress_queue=None) -> ProcessResult:
                 img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
             # Process with applicable zones
-            processed = processor.process_image(img, applicable_zones, render_dpi=export_dpi)
+            # Use scaled regions from preview if available (ensures consistency)
+            page_regions = None
+            if scaled_regions_by_page is not None:
+                page_regions = scaled_regions_by_page.get(page_num, [])
+            processed = processor.process_image(
+                img, applicable_zones,
+                protected_regions=page_regions,
+                render_dpi=export_dpi
+            )
 
             # === IN-MEMORY BUFFER (no disk I/O) ===
             if optimize_size and _is_bw_image(processed):

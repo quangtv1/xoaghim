@@ -147,6 +147,16 @@ class ProcessThread(QThread):
 
             # Get DPI for zone coordinate scaling
             export_dpi = self.settings.get('dpi', 300)
+            preview_dpi = self.settings.get('preview_dpi', 120)
+
+            # Deserialize and scale cached protected regions if provided
+            scaled_regions_by_page = None
+            preview_regions = self.settings.get('preview_cached_regions')
+            if preview_regions:
+                from core.parallel_processor import deserialize_and_scale_protected_regions
+                scaled_regions_by_page = deserialize_and_scale_protected_regions(
+                    preview_regions, preview_dpi, export_dpi
+                )
 
             def process_func(image, page_num):
                 if self._cancelled:
@@ -163,7 +173,16 @@ class ProcessThread(QThread):
                 if not page_zones:
                     return image  # No zones for this page
 
-                return processor.process_image(image, page_zones, render_dpi=export_dpi)
+                # Use scaled regions from preview if available (ensures consistency)
+                page_regions = None
+                if scaled_regions_by_page is not None:
+                    page_regions = scaled_regions_by_page.get(page_num, [])
+
+                return processor.process_image(
+                    image, page_zones,
+                    protected_regions=page_regions,
+                    render_dpi=export_dpi
+                )
 
             def progress_callback(current, total):
                 self._total_pages = total
@@ -2591,6 +2610,14 @@ class MainWindow(QMainWindow):
         # Create zone_getter for per-page zone support
         zone_getter = self.preview.get_zones_for_page_processing
 
+        # Add cached protected regions from preview to settings (for consistency)
+        if hasattr(self.preview, '_cached_regions') and self.preview._cached_regions:
+            from core.parallel_processor import serialize_protected_regions
+            settings['preview_cached_regions'] = serialize_protected_regions(
+                self.preview._cached_regions
+            )
+            settings['preview_dpi'] = 120  # Preview DPI
+
         # Show progress dialog like batch mode
         self._show_single_progress_dialog(
             self._pdf_handler.pdf_path, output_path, zones, settings, zone_getter
@@ -2660,6 +2687,15 @@ class MainWindow(QMainWindow):
 
         # Get per-file zones for batch processing (Zone Riêng for each file)
         per_file_zones = self.preview.get_per_file_zones_for_batch()
+
+        # Add cached protected regions from preview to settings (for consistency)
+        if hasattr(self.preview, '_cached_regions') and self.preview._cached_regions:
+            from core.parallel_processor import serialize_protected_regions
+            settings['preview_cached_regions'] = serialize_protected_regions(
+                self.preview._cached_regions
+            )
+            settings['preview_dpi'] = 120  # Preview DPI
+            settings['preview_file_path'] = current_file  # File these regions belong to
 
         # Show batch progress dialog
         self._show_batch_progress_dialog(checked_files, output_dir, zones, settings, per_file_zones)
