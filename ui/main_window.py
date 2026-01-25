@@ -2158,37 +2158,26 @@ class MainWindow(QMainWindow):
         self.next_page_btn.setEnabled(page_num < max_loaded)
 
     def _on_zoom_in(self):
-        """Zoom in to next preset level"""
-        self._user_zoomed = True  # Track manual zoom
-        zoom_levels = list(range(25, 425, 25))  # 25, 50, 75, ... 400
+        """Zoom in by 5%, snapping to nearest multiple of 5"""
+        self._user_zoomed = True
         current = int(self.preview.before_panel.view._zoom * 100)
-
-        # Find next level
-        for level in zoom_levels:
-            if level > current:
-                self.preview.set_zoom(level / 100.0)
-                self._update_zoom_combo()
-                return
-
-        # Already at max
-        self.preview.set_zoom(4.0)
+        # Ceil to nearest 5, then add 5
+        import math
+        next_level = math.ceil(current / 5) * 5 + 5
+        # Clamp to max 400%
+        next_level = min(next_level, 400)
+        self.preview.set_zoom(next_level / 100.0)
         self._update_zoom_combo()
-    
+
     def _on_zoom_out(self):
-        """Zoom out to previous preset level"""
-        self._user_zoomed = True  # Track manual zoom
-        zoom_levels = list(range(25, 425, 25))  # 25, 50, 75, ... 400
+        """Zoom out by 5%, snapping to nearest multiple of 5"""
+        self._user_zoomed = True
         current = int(self.preview.before_panel.view._zoom * 100)
-
-        # Find previous level
-        for level in reversed(zoom_levels):
-            if level < current:
-                self.preview.set_zoom(level / 100.0)
-                self._update_zoom_combo()
-                return
-
-        # Already at min
-        self.preview.set_zoom(0.25)
+        # Floor to nearest 5, then subtract 5
+        prev_level = (current // 5) * 5 - 5
+        # Clamp to min 25%
+        prev_level = max(prev_level, 25)
+        self.preview.set_zoom(prev_level / 100.0)
         self._update_zoom_combo()
     
     def _on_zoom_fit_width(self):
