@@ -1083,13 +1083,11 @@ class MainWindow(QMainWindow):
 
         # Zone count status (left side)
         self.zone_count_label = QLabel("Zone chung: <b>0</b>; Zone riêng: <b>0/0</b>")
-        self.zone_count_label.setStyleSheet("""
-            QLabel {
-                color: #6B7280;
-                font-size: 12px;
-            }
-        """)
+        self.zone_count_label.setStyleSheet("color: #6B7280; font-size: 12px;")
         bar_layout.addWidget(self.zone_count_label)
+        # Track previous zone counts for flash effect
+        self._prev_zone_counts = (0, 0, 0)  # (zone_chung, zone_rieng_file, zone_rieng_total)
+        self._zone_flash_timer = None
 
         # Left stretch for centering
         bar_layout.addStretch(1)
@@ -2305,7 +2303,79 @@ class MainWindow(QMainWindow):
                         file_unique_ids.add(zone_id)
             zone_rieng_total += len(file_unique_ids)
 
-        # Update bottom bar label (bold numbers)
+        # Check which values changed
+        new_counts = (zone_chung, zone_rieng_file, zone_rieng_total)
+        old_chung, old_rieng_file, old_rieng_total = self._prev_zone_counts
+        chung_changed = zone_chung != old_chung
+        rieng_changed = (zone_rieng_file != old_rieng_file) or (zone_rieng_total != old_rieng_total)
+        self._prev_zone_counts = new_counts
+
+        # Flash effect: highlight only the changed value(s)
+        if chung_changed or rieng_changed:
+            self._start_zone_flash(zone_chung, zone_rieng_file, zone_rieng_total, chung_changed, rieng_changed)
+        else:
+            self.zone_count_label.setText(
+                f"Zone chung: <b>{zone_chung}</b>; Zone riêng: <b>{zone_rieng_file}/{zone_rieng_total}</b>"
+            )
+
+    def _start_zone_flash(self, zone_chung: int, zone_rieng_file: int, zone_rieng_total: int,
+                          chung_changed: bool, rieng_changed: bool):
+        """Start flash animation with gradual fade for changed values"""
+        # Cancel previous timer if running
+        if self._zone_flash_timer:
+            self._zone_flash_timer.stop()
+
+        # Store flash state
+        self._flash_chung = chung_changed
+        self._flash_rieng = rieng_changed
+        self._flash_step = 0
+        # Fade steps: opacity from 1.0 to 0.0 (8 steps for smoother fade)
+        self._flash_opacities = [1.0, 0.85, 0.7, 0.55, 0.4, 0.25, 0.1, 0.0]
+
+        # Update label with initial flash
+        self._update_zone_flash_label()
+
+        # Start fade timer (2400ms total / 8 steps = 300ms per step)
+        self._zone_flash_timer = QTimer()
+        self._zone_flash_timer.timeout.connect(self._fade_zone_flash_step)
+        self._zone_flash_timer.start(300)
+
+    def _fade_zone_flash_step(self):
+        """Handle one step of the fade animation"""
+        self._flash_step += 1
+        if self._flash_step >= len(self._flash_opacities):
+            # Animation complete
+            self._zone_flash_timer.stop()
+            self._clear_zone_count_flash()
+        else:
+            self._update_zone_flash_label()
+
+    def _update_zone_flash_label(self):
+        """Update label with current flash style (like selected page thumbnail)"""
+        zone_chung, zone_rieng_file, zone_rieng_total = self._prev_zone_counts
+        opacity = self._flash_opacities[self._flash_step]
+
+        # Style like selected page number: #3B82F6 background, white text
+        bg_color = f"rgba(59,130,246,{opacity})"
+        # Text color fades from white to normal gray
+        text_color = f"rgba(255,255,255,{opacity})" if opacity > 0.3 else "#374151"
+
+        # Build HTML with flash on changed values only
+        if self._flash_chung:
+            chung_html = f"<span style='background-color:{bg_color};color:{text_color};'><b> {zone_chung} </b></span>"
+        else:
+            chung_html = f"<b>{zone_chung}</b>"
+
+        if self._flash_rieng:
+            rieng_html = f"<span style='background-color:{bg_color};color:{text_color};'><b> {zone_rieng_file}/{zone_rieng_total} </b></span>"
+        else:
+            rieng_html = f"<b>{zone_rieng_file}/{zone_rieng_total}</b>"
+
+        self.zone_count_label.setText(f"Zone chung: {chung_html}; Zone riêng: {rieng_html}")
+
+    def _clear_zone_count_flash(self):
+        """Remove flash background from zone count values"""
+        zone_chung, zone_rieng_file, zone_rieng_total = self._prev_zone_counts
         self.zone_count_label.setText(
             f"Zone chung: <b>{zone_chung}</b>; Zone riêng: <b>{zone_rieng_file}/{zone_rieng_total}</b>"
         )
