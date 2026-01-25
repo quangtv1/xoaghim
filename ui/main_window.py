@@ -1433,6 +1433,9 @@ class MainWindow(QMainWindow):
 
     def _load_files_batch(self, pdf_files: list, base_dir: str):
         """Load multiple PDF files for batch processing"""
+        # Free memory from previous session before loading new batch
+        self._cleanup_memory()
+
         # Check if this is a NEW folder (different from current)
         is_new_folder = self._batch_base_dir != base_dir and self._batch_base_dir != ""
 
@@ -1761,6 +1764,9 @@ class MainWindow(QMainWindow):
     
     def _load_pdf(self, file_path: str):
         """Load file PDF"""
+        # Free memory from previous file before loading new one
+        self._cleanup_memory()
+
         try:
             # Set flag FIRST to prevent eventFilter crashes during processEvents
             self._background_loading = True
@@ -2671,25 +2677,50 @@ class MainWindow(QMainWindow):
         self.run_btn.setVisible(True)
         self.cancel_btn.setVisible(False)
         self.progress_bar.setVisible(False)
-        
+
         if success:
             self._result_path = message
-            
+
             input_size = os.path.getsize(self._pdf_handler.pdf_path) / (1024 * 1024)
             output_size = os.path.getsize(message) / (1024 * 1024)
-            
+
             self.statusBar().showMessage(
                 f"✅ Hoàn thành! {input_size:.1f}MB → {output_size:.1f}MB"
             )
-            
+
             # Show custom completion dialog
             self._show_completion_dialog(message, input_size, output_size)
         else:
             self.statusBar().showMessage(f"❌ {message}")
             if message != "Đã hủy":
                 QMessageBox.critical(self, "Lỗi", f"Lỗi khi xử lý:\n{message}")
-        
+
         self._process_thread = None
+
+    def _cleanup_memory(self):
+        """Free memory after processing completes"""
+        import gc
+
+        # Clear processed pages (keep original _pages for re-processing if needed)
+        if hasattr(self, 'preview') and hasattr(self.preview, '_processed_pages'):
+            self.preview._processed_pages.clear()
+
+        # Clear after panel pages (result display)
+        if hasattr(self, 'preview') and hasattr(self.preview, 'after_panel'):
+            self.preview.after_panel._pages.clear()
+            self.preview.after_panel._page_items.clear()
+            self.preview.after_panel.scene.clear()
+
+        # Clear PDF page cache
+        if hasattr(self, '_pdf_handler') and self._pdf_handler:
+            self._pdf_handler.clear_cache()
+
+        # Clear cached detection regions
+        if hasattr(self, 'preview') and hasattr(self.preview, '_cached_regions'):
+            self.preview._cached_regions.clear()
+
+        # Force garbage collection
+        gc.collect()
 
     def _show_single_progress_dialog(self, input_path: str, output_path: str,
                                      zones: List[Zone], settings: dict, zone_getter=None):
