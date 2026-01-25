@@ -1739,8 +1739,9 @@ class MainWindow(QMainWindow):
 
             # Clear per-file zone storage in MEMORY only
             # DON'T clear disk file - zones will be restored when reopening same folder
-            self.preview.clear_per_file_zones()
-            self.settings_panel.clear_per_file_custom_zones()
+            # reset_paths=True to clear _batch_base_dir since we're closing batch mode
+            self.preview.clear_per_file_zones(reset_paths=True)
+            self.settings_panel.clear_per_file_custom_zones(reset_paths=True)
             # NOTE: Removed clear_batch_zones() call - zones persist on disk
             # They will be overwritten when opening a different folder
 

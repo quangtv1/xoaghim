@@ -1233,11 +1233,20 @@ class ContinuousPreviewPanel(QFrame):
         """Set current file path for per-file zone tracking."""
         self._current_file_path = file_path
 
-    def clear_per_file_zones(self):
-        """Clear all per-file zone storage (when closing batch mode)."""
+    def clear_per_file_zones(self, reset_paths: bool = False):
+        """Clear all per-file zone storage.
+
+        Args:
+            reset_paths: If True, also clear _current_file_path and _batch_base_dir.
+                        Use True only when completely closing batch mode.
+        """
         self._per_file_zones.clear()
-        self._current_file_path = ""
-        self._batch_base_dir = ""
+        # Persist the empty state to disk (unless closing batch mode)
+        if not reset_paths and self._batch_base_dir:
+            self._persist_zones_to_disk()
+        if reset_paths:
+            self._current_file_path = ""
+            self._batch_base_dir = ""
 
     def _persist_zones_to_disk(self):
         """Persist per-file zones to disk for crash recovery."""
@@ -2978,9 +2987,9 @@ class ContinuousPreviewWidget(QWidget):
         """Set current file path for per-file zone tracking."""
         self.before_panel.set_current_file_path(file_path)
 
-    def clear_per_file_zones(self):
+    def clear_per_file_zones(self, reset_paths: bool = False):
         """Clear all per-file zone storage."""
-        self.before_panel.clear_per_file_zones()
+        self.before_panel.clear_per_file_zones(reset_paths=reset_paths)
 
     def set_batch_base_dir(self, batch_base_dir: str):
         """Set batch base directory for persistence."""

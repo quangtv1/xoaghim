@@ -1337,11 +1337,17 @@ class SettingsPanel(QWidget):
         """Set current file path for per-file zone tracking."""
         self._current_file_path = file_path
 
-    def clear_per_file_custom_zones(self):
-        """Clear all per-file custom zone storage."""
+    def clear_per_file_custom_zones(self, reset_paths: bool = False):
+        """Clear all per-file custom zone storage.
+
+        Args:
+            reset_paths: If True, also clear _current_file_path and _batch_base_dir.
+                        Use True only when completely closing batch mode.
+        """
         self._per_file_custom_zones.clear()
-        self._current_file_path = ""
-        self._batch_base_dir = ""
+        if reset_paths:
+            self._current_file_path = ""
+            self._batch_base_dir = ""
 
     def _persist_custom_zones_to_disk(self):
         """Persist per-file custom zones to disk for crash recovery."""
