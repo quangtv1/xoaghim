@@ -515,9 +515,13 @@ class StapleRemover:
         diff = bg_gray - gray_region.astype(np.int16)
         artifact_mask = diff > zone.threshold
 
-        # Bảo vệ chữ đen (gray < 80)
-        text_mask = gray_region < 80
-        artifact_mask = artifact_mask & ~text_mask
+        # Bảo vệ chữ đen - chỉ khi text protection được bật
+        if self._text_protection.enabled:
+            zone_id_lower = zone.id.lower()
+            is_edge_or_corner = zone_id_lower.startswith('margin_') or zone_id_lower.startswith('corner_')
+            text_threshold = 50 if is_edge_or_corner else 80  # Giảm cho cạnh/góc
+            text_mask = gray_region < text_threshold
+            artifact_mask = artifact_mask & ~text_mask
 
         # Bảo vệ màu đỏ/xanh nếu được bật
         if self.protect_red and is_color:
@@ -619,9 +623,13 @@ class StapleRemover:
         diff = bg_gray - gray_region.astype(np.int16)
         artifact_mask = diff > zone.threshold
 
-        # Bảo vệ chữ đen (gray < 80)
-        text_mask = gray_region < 80
-        artifact_mask = artifact_mask & ~text_mask
+        # Bảo vệ chữ đen - chỉ khi text protection được bật
+        if self._text_protection.enabled:
+            zone_id_lower = zone.id.lower()
+            is_edge_or_corner = zone_id_lower.startswith('margin_') or zone_id_lower.startswith('corner_')
+            text_threshold = 50 if is_edge_or_corner else 80  # Giảm cho cạnh/góc
+            text_mask = gray_region < text_threshold
+            artifact_mask = artifact_mask & ~text_mask
 
         # Bảo vệ màu đỏ/xanh nếu được bật
         if self.protect_red and is_color:
