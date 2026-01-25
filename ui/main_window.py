@@ -2427,16 +2427,10 @@ class MainWindow(QMainWindow):
             if scope == 'file':
                 # Clear Zone riêng for current file only (keep Zone chung)
                 self.preview.clear_zone_rieng()
-                # Save immediately
-                if hasattr(self, '_batch_mode') and self._batch_mode:
-                    self.preview.save_per_file_zones()
             else:
                 # Clear Zone riêng for all files in folder
                 self.preview.before_panel.clear_per_file_zones()
                 self.preview.clear_zone_rieng()
-                # Save immediately (empty)
-                if hasattr(self, '_batch_mode') and self._batch_mode:
-                    self.preview.save_per_file_zones()
         elif reset_type == 'chung':
             # Clear Zone chung for all pages (keep Zone riêng)
             self.preview.clear_zone_chung()
@@ -2447,10 +2441,10 @@ class MainWindow(QMainWindow):
             # Clear all zones (folder scope)
             self.preview.clear_all_zones()
 
-        # Persist zone removal to batch_zones.json
-        if hasattr(self, '_batch_mode') and self._batch_mode:
-            self.preview.save_per_file_zones()
-            self.settings_panel.save_per_file_custom_zones()
+        # Persist zone changes to disk (works for both batch and single file mode)
+        # _batch_base_dir is set to folder path (batch) or file path (single)
+        self.preview.save_per_file_zones()
+        self.settings_panel.save_per_file_custom_zones()
 
         # Update zone counts display
         self._update_zone_counts()
@@ -2469,10 +2463,10 @@ class MainWindow(QMainWindow):
         """Persist all zones immediately to memory and disk (crash recovery)"""
         # Save Zone chung (preset + custom with filter != 'none') to config.json
         self.settings_panel._save_zone_config()
-        # Save Zone riêng (Tự do zones) to batch_zones.json (if in batch mode)
-        if hasattr(self, '_batch_mode') and self._batch_mode:
-            self.preview.save_per_file_zones()
-            self.settings_panel.save_per_file_custom_zones()
+        # Save Zone riêng (Tự do zones) - works for both batch and single file mode
+        # _batch_base_dir is set to folder path (batch) or file path (single)
+        self.preview.save_per_file_zones()
+        self.settings_panel.save_per_file_custom_zones()
 
     def _on_zone_selected_from_preview(self, zone_id: str):
         """Khi click vào zone trong preview → chuyển filter theo zone"""

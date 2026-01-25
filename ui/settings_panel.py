@@ -1600,23 +1600,93 @@ class SettingsPanel(QWidget):
                 for z in self._custom_zones.values()
             )
 
+        # Helper to check Zone riêng for current file only
+        def has_zone_rieng_current_file():
+            parent = self.parent()
+            while parent:
+                if hasattr(parent, 'preview') and hasattr(parent.preview, 'before_panel'):
+                    before_panel = parent.preview.before_panel
+                    per_page_zones = getattr(before_panel, '_per_page_zones', {})
+                    for page_zones in per_page_zones.values():
+                        for zone_id in page_zones.keys():
+                            if not zone_id.startswith('corner_') and not zone_id.startswith('margin_'):
+                                return True
+                    return False
+                parent = parent.parent() if hasattr(parent, 'parent') else None
+            return False
+
+        # Helper to check if in batch (folder) mode
+        def is_batch_mode():
+            parent = self.parent()
+            while parent:
+                if hasattr(parent, '_batch_mode'):
+                    return parent._batch_mode
+                parent = parent.parent() if hasattr(parent, 'parent') else None
+            return False
+
         # State tracking
         state = {
             'has_zone_chung': any(z.enabled for z in self._zones.values()) or has_zone_chung_custom(),
-            'has_zone_rieng': self._has_per_file_zones()
+            'has_zone_rieng_file': has_zone_rieng_current_file(),
+            'has_zone_rieng_folder': self._has_per_file_zones(),
+            'is_batch_mode': is_batch_mode()
         }
         buttons = {}
 
-        def update_buttons():
-            """Update button states after deletion"""
-            state['has_zone_chung'] = any(z.enabled for z in self._zones.values()) or has_zone_chung_custom()
-            state['has_zone_rieng'] = self._has_per_file_zones()
-            has_any = state['has_zone_chung'] or state['has_zone_rieng']
+        # Faded button style (disabled state)
+        btn_faded_style = """
+            QPushButton {
+                background-color: #F9FAFB; color: #D1D5DB;
+                border: 1px solid #E5E7EB; border-radius: 6px;
+                padding: 6px 12px; font-size: 12px;
+            }
+        """
+        btn_danger_faded_style = """
+            QPushButton {
+                background-color: #FEF2F2; color: #F9A8A8;
+                border: 1px solid #FECACA; border-radius: 6px;
+                padding: 6px 12px; font-size: 12px;
+            }
+        """
 
-            buttons['btn_chung'].setEnabled(state['has_zone_chung'])
-            buttons['btn_file'].setEnabled(state['has_zone_rieng'])
-            buttons['btn_folder'].setEnabled(state['has_zone_rieng'])
-            buttons['btn_all'].setEnabled(has_any)
+        def update_buttons():
+            """Update button styles after deletion - fade when no zones"""
+            state['has_zone_chung'] = any(z.enabled for z in self._zones.values()) or has_zone_chung_custom()
+            state['has_zone_rieng_file'] = has_zone_rieng_current_file()
+            state['has_zone_rieng_folder'] = self._has_per_file_zones()
+
+            # Zone chung button: fade when no zones
+            if state['has_zone_chung']:
+                buttons['btn_chung'].setStyleSheet(btn_style)
+                buttons['btn_chung'].setEnabled(True)
+            else:
+                buttons['btn_chung'].setStyleSheet(btn_faded_style)
+                buttons['btn_chung'].setEnabled(False)
+
+            # "File hiện tại" button: fade when no zones for current file
+            if state['has_zone_rieng_file']:
+                buttons['btn_file'].setStyleSheet(btn_style)
+                buttons['btn_file'].setEnabled(True)
+            else:
+                buttons['btn_file'].setStyleSheet(btn_faded_style)
+                buttons['btn_file'].setEnabled(False)
+
+            # "Cả thư mục" button: fade if single file or no zones
+            if state['is_batch_mode'] and state['has_zone_rieng_folder']:
+                buttons['btn_folder'].setStyleSheet(btn_style)
+                buttons['btn_folder'].setEnabled(True)
+            else:
+                buttons['btn_folder'].setStyleSheet(btn_faded_style)
+                buttons['btn_folder'].setEnabled(False)
+
+            # "Xóa tất cả" button: fade when no zones at all
+            has_any = state['has_zone_chung'] or state['has_zone_rieng_file'] or state['has_zone_rieng_folder']
+            if has_any:
+                buttons['btn_all'].setStyleSheet(btn_danger_style)
+                buttons['btn_all'].setEnabled(True)
+            else:
+                buttons['btn_all'].setStyleSheet(btn_danger_faded_style)
+                buttons['btn_all'].setEnabled(False)
 
         def on_reset_chung():
             self._reset_zone_chung()
@@ -1642,7 +1712,7 @@ class SettingsPanel(QWidget):
         chung_layout.addWidget(desc)
 
         buttons['btn_chung'] = QPushButton("Xóa Zone chung")
-        buttons['btn_chung'].setStyleSheet(btn_style)
+        buttons['btn_chung'].setStyleSheet(btn_style if state['has_zone_chung'] else btn_faded_style)
         buttons['btn_chung'].setEnabled(state['has_zone_chung'])
         buttons['btn_chung'].clicked.connect(on_reset_chung)
         chung_layout.addWidget(buttons['btn_chung'])
@@ -1663,14 +1733,15 @@ class SettingsPanel(QWidget):
         btn_row.setSpacing(8)
 
         buttons['btn_file'] = QPushButton("File hiện tại")
-        buttons['btn_file'].setStyleSheet(btn_style)
-        buttons['btn_file'].setEnabled(state['has_zone_rieng'])
+        buttons['btn_file'].setStyleSheet(btn_style if state['has_zone_rieng_file'] else btn_faded_style)
+        buttons['btn_file'].setEnabled(state['has_zone_rieng_file'])
         buttons['btn_file'].clicked.connect(lambda: on_reset_rieng('file'))
         btn_row.addWidget(buttons['btn_file'])
 
         buttons['btn_folder'] = QPushButton("Cả thư mục")
-        buttons['btn_folder'].setStyleSheet(btn_style)
-        buttons['btn_folder'].setEnabled(state['has_zone_rieng'])
+        folder_enabled = state['is_batch_mode'] and state['has_zone_rieng_folder']
+        buttons['btn_folder'].setStyleSheet(btn_style if folder_enabled else btn_faded_style)
+        buttons['btn_folder'].setEnabled(folder_enabled)
         buttons['btn_folder'].clicked.connect(lambda: on_reset_rieng('folder'))
         btn_row.addWidget(buttons['btn_folder'])
 
@@ -1688,10 +1759,10 @@ class SettingsPanel(QWidget):
         bottom_row = QHBoxLayout()
         bottom_row.setSpacing(8)
 
-        has_any = state['has_zone_chung'] or state['has_zone_rieng']
+        has_any = state['has_zone_chung'] or state['has_zone_rieng_file'] or state['has_zone_rieng_folder']
         buttons['btn_all'] = QPushButton("Xóa tất cả")
         buttons['btn_all'].setToolTip("Zone chung + Zone riêng")
-        buttons['btn_all'].setStyleSheet(btn_danger_style)
+        buttons['btn_all'].setStyleSheet(btn_danger_style if has_any else btn_danger_faded_style)
         buttons['btn_all'].setEnabled(has_any)
         buttons['btn_all'].clicked.connect(on_reset_all)
         bottom_row.addWidget(buttons['btn_all'])
@@ -1865,7 +1936,8 @@ class SettingsPanel(QWidget):
         elif scope == 'folder':
             self._per_file_custom_zones.clear()
 
-        # Persist to disk
+        # Persist to disk (works for both batch and single file mode)
+        # _batch_base_dir is set to folder path (batch) or file path (single)
         if self._batch_base_dir:
             self._persist_custom_zones_to_disk()
 
