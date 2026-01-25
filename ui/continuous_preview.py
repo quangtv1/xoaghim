@@ -368,8 +368,11 @@ class ContinuousGraphicsView(QGraphicsView):
             self.setDragMode(QGraphicsView.NoDrag)
             self.viewport().unsetCursor()
             # Clean up any in-progress drawing
-            if self._draw_rect_item and self._draw_rect_item.scene():
-                self.scene().removeItem(self._draw_rect_item)
+            try:
+                if self._draw_rect_item and self._draw_rect_item.scene():
+                    self.scene().removeItem(self._draw_rect_item)
+            except RuntimeError:
+                pass  # Item already deleted
             self._draw_rect_item = None
             self._drawing = False
             self._draw_start = None
@@ -508,8 +511,11 @@ class ContinuousGraphicsView(QGraphicsView):
                             self.rect_drawn.emit(x, y, w, h, self._draw_mode, page_idx)
 
             # Clean up drawing rect but KEEP draw mode active
-            if self._draw_rect_item and self._draw_rect_item.scene():
-                self.scene().removeItem(self._draw_rect_item)
+            try:
+                if self._draw_rect_item and self._draw_rect_item.scene():
+                    self.scene().removeItem(self._draw_rect_item)
+            except RuntimeError:
+                pass  # Item already deleted
             self._draw_rect_item = None
             self._draw_start = None
         else:
@@ -1435,11 +1441,13 @@ class ContinuousPreviewPanel(QFrame):
 
     def _rebuild_scene_single(self):
         """Build scene with single page only"""
+        if not self._pages:
+            return  # No pages loaded yet
         if self._current_page >= len(self._pages):
             self._current_page = len(self._pages) - 1
         if self._current_page < 0:
             self._current_page = 0
-        
+
         page_img = self._pages[self._current_page]
         pixmap = self._numpy_to_pixmap(page_img)
         
@@ -2088,7 +2096,10 @@ class ContinuousPreviewPanel(QFrame):
     def _clear_zone_overlays(self):
         """Remove all zone overlay items from scene"""
         for zone in self._zones:
-            self.scene.removeItem(zone)
+            try:
+                self.scene.removeItem(zone)
+            except RuntimeError:
+                pass  # Item already deleted
         self._zones.clear()
         # Force scene update to clear any visual artifacts
         self.scene.update()
@@ -2129,7 +2140,7 @@ class ContinuousPreviewPanel(QFrame):
     
     def update_page(self, page_idx: int, image: np.ndarray):
         """Cập nhật ảnh một trang"""
-        if 0 <= page_idx < len(self._page_items):
+        if 0 <= page_idx < len(self._page_items) and page_idx < len(self._pages):
             pixmap = self._numpy_to_pixmap(image)
             self._page_items[page_idx].setPixmap(pixmap)
             self._pages[page_idx] = image
@@ -2309,7 +2320,10 @@ class ContinuousPreviewPanel(QFrame):
         # Clear existing regions for this page
         if page_idx in self._protected_region_items:
             for item in self._protected_region_items[page_idx]:
-                self.scene.removeItem(item)
+                try:
+                    self.scene.removeItem(item)
+                except RuntimeError:
+                    pass  # Item already deleted
             self._protected_region_items[page_idx].clear()
         else:
             self._protected_region_items[page_idx] = []
@@ -2359,7 +2373,10 @@ class ContinuousPreviewPanel(QFrame):
         if hasattr(self, '_protected_region_items'):
             for page_idx, items in self._protected_region_items.items():
                 for item in items:
-                    self.scene.removeItem(item)
+                    try:
+                        self.scene.removeItem(item)
+                    except RuntimeError:
+                        pass  # Item already deleted
             self._protected_region_items.clear()
 
     def set_draw_mode(self, mode):
@@ -2673,7 +2690,14 @@ class ContinuousPreviewWidget(QWidget):
             current_zoom = self.before_panel.view._zoom
             new_zoom = current_zoom * ratio
             new_zoom = max(0.1, min(5.0, new_zoom))
-            QTimer.singleShot(10, lambda: self.set_zoom(new_zoom))
+            # Use weak reference to avoid crash if widget is deleted before timer fires
+            import weakref
+            weak_self = weakref.ref(self)
+            def safe_set_zoom():
+                obj = weak_self()
+                if obj is not None:
+                    obj.set_zoom(new_zoom)
+            QTimer.singleShot(10, safe_set_zoom)
 
     def showEvent(self, event):
         """Set correct splitter sizes when widget becomes visible"""
@@ -3300,7 +3324,11 @@ class ContinuousPreviewWidget(QWidget):
             self.set_detection_progress(initial_progress)
 
         # Create a copy of pages for the thread to avoid thread safety issues
-        pages_copy = [self._pages[i].copy() for i in pages_to_detect]
+        # Filter to only valid indices to prevent index errors
+        valid_indices = [i for i in pages_to_detect if i < len(self._pages)]
+        if not valid_indices:
+            return
+        pages_copy = [self._pages[i].copy() for i in valid_indices]
 
         # Create runner with callback (progress callback not used - we poll from timer)
         self._detection_runner = DetectionRunner(
