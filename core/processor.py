@@ -466,7 +466,8 @@ class StapleRemover:
         
         return result
     
-    def _process_safe_zone(self, image: np.ndarray, safe_zone, zone: Zone) -> np.ndarray:
+    def _process_safe_zone(self, image: np.ndarray, safe_zone, zone: Zone,
+                           render_dpi: int = 120) -> np.ndarray:
         """
         Xử lý safe zone (polygon-based) thay vì rectangle.
 
@@ -474,6 +475,7 @@ class StapleRemover:
             image: Ảnh gốc
             safe_zone: SafeZone object từ zone_optimizer
             zone: Zone gốc (để lấy threshold)
+            render_dpi: DPI used to render the image (default 120 for preview)
 
         Returns:
             Ảnh đã xử lý
@@ -531,8 +533,12 @@ class StapleRemover:
         # Chỉ xử lý trong polygon mask
         artifact_mask = artifact_mask & (local_polygon_mask > 0)
 
-        # Morphological operations
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        # Morphological operations - scale kernel size with DPI
+        dpi_scale = render_dpi / 120.0
+        kernel_size = max(5, int(5 * dpi_scale))
+        if kernel_size % 2 == 0:
+            kernel_size += 1  # Ensure odd size
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
         artifact_mask = artifact_mask.astype(np.uint8) * 255
         artifact_mask = cv2.morphologyEx(artifact_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
         artifact_mask = cv2.dilate(artifact_mask, kernel, iterations=3)
@@ -639,8 +645,12 @@ class StapleRemover:
         # Loại trừ các vùng protected khỏi artifact_mask
         artifact_mask = artifact_mask & ~protection_mask
 
-        # Morphological operations
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        # Morphological operations - scale kernel size with DPI
+        dpi_scale = render_dpi / 120.0
+        kernel_size = max(5, int(5 * dpi_scale))
+        if kernel_size % 2 == 0:
+            kernel_size += 1  # Ensure odd size
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
         artifact_mask = artifact_mask.astype(np.uint8) * 255
         artifact_mask = cv2.morphologyEx(artifact_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
         artifact_mask = cv2.dilate(artifact_mask, kernel, iterations=3)
@@ -724,7 +734,7 @@ class StapleRemover:
 
                 # Process each safe zone
                 for safe_zone in safe_zones:
-                    result = self._process_safe_zone(result, safe_zone, zone)
+                    result = self._process_safe_zone(result, safe_zone, zone, render_dpi)
         elif all_protected:
             # Fallback: subtract protected regions from removal zones manually
             for zone in removal_zones:
