@@ -11,6 +11,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal, QSize, QRect, QTimer
 from PyQt5.QtGui import QColor, QPainter, QFont
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 
 class ComboItemDelegate(QStyledItemDelegate):
     """Custom delegate for larger combobox items"""
@@ -167,20 +169,31 @@ class SidebarFileList(QListWidget):
         self._lazy_load_timer.start(10)  # 10ms delay to allow UI to render
 
     def _load_next_batch(self):
-        """Load page counts for next batch of files"""
+        """Load page counts for next batch of files using ThreadPool"""
         if self._lazy_load_index >= len(self._filtered_files):
             return  # Done loading
 
-        # Load batch
+        # Get batch of files to load
         end_index = min(self._lazy_load_index + self.LAZY_LOAD_BATCH_SIZE,
                         len(self._filtered_files))
 
-        loaded_any = False
+        # Collect files that need page count loading
+        files_to_load = []
         for i in range(self._lazy_load_index, end_index):
             file_path = self._filtered_files[i]
             if file_path not in self._page_counts:
-                self._page_counts[file_path] = self._get_page_count(file_path)
-                loaded_any = True
+                files_to_load.append(file_path)
+
+        # Load page counts in parallel using ThreadPool
+        if files_to_load:
+            with ThreadPoolExecutor(max_workers=min(10, len(files_to_load))) as executor:
+                futures = {executor.submit(self._get_page_count, fp): fp for fp in files_to_load}
+                for future in as_completed(futures):
+                    file_path = futures[future]
+                    try:
+                        self._page_counts[file_path] = future.result()
+                    except Exception:
+                        self._page_counts[file_path] = -1
 
         self._lazy_load_index = end_index
 
@@ -188,15 +201,16 @@ class SidebarFileList(QListWidget):
         self.viewport().update()
 
         # Emit signal to update pages combo
-        if loaded_any:
+        if files_to_load:
             self.page_counts_updated.emit()
 
         # Schedule next batch if more files to load
         if self._lazy_load_index < len(self._filtered_files):
             self._lazy_load_timer.start(5)  # 5ms between batches for responsive UI
 
-    def _get_page_count(self, file_path: str) -> int:
-        """Get PDF page count quickly"""
+    @staticmethod
+    def _get_page_count(file_path: str) -> int:
+        """Get PDF page count (thread-safe static method)"""
         try:
             doc = fitz.open(file_path)
             count = doc.page_count
