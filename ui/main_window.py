@@ -1726,7 +1726,16 @@ class MainWindow(QMainWindow):
         if not next_file or next_file in self._file_cache:
             return  # Already cached or no next file
 
-        self._preload_worker = PreloadWorker(next_file, self)
+        # Check if text protection (AI detection) is enabled
+        text_protection_opts = self.settings_panel.get_text_protection_options()
+        detect_regions = text_protection_opts.get('enabled', False)
+
+        self._preload_worker = PreloadWorker(
+            next_file,
+            detect_regions=detect_regions,
+            text_protection_options=text_protection_opts,
+            parent=self
+        )
         self._preload_worker.finished.connect(self._on_preload_finished)
         self._preload_worker.error.connect(self._on_preload_error)
         self._preload_worker.start()
@@ -1840,10 +1849,14 @@ class MainWindow(QMainWindow):
         # Set preview pages
         self.preview.set_pages(self._all_pages)
 
+        # Apply cached detection regions BEFORE text protection processing
+        if cache.detected_regions:
+            self.preview._cached_regions = dict(cache.detected_regions)
+
         # Re-apply Zone Chung after set_pages clears _per_page_zones
         self.settings_panel._emit_zones()
 
-        # Apply text protection settings (triggers processing with zones)
+        # Apply text protection settings (uses cached regions if available)
         text_protection_opts = self.settings_panel.get_text_protection_options()
         self.preview.set_text_protection(text_protection_opts)
 
