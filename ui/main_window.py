@@ -3434,6 +3434,7 @@ Thời gian: {time_str}"""
                 break
     
     def closeEvent(self, event):
+        # Check single file processing thread
         if self._process_thread and self._process_thread.isRunning():
             reply = QMessageBox.question(
                 self, "Xác nhận",
@@ -3442,10 +3443,28 @@ Thời gian: {time_str}"""
             )
             if reply == QMessageBox.Yes:
                 self._process_thread.cancel()
-                self._process_thread.wait()
+                self._process_thread.wait(3000)  # Wait max 3 seconds
             else:
                 event.ignore()
                 return
+
+        # Check batch processing thread
+        if self._batch_process_thread and self._batch_process_thread.isRunning():
+            reply = QMessageBox.question(
+                self, "Xác nhận",
+                "Đang xử lý batch, bạn có muốn dừng và thoát?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                self._batch_process_thread.cancel()
+                self._batch_process_thread.wait(5000)  # Wait max 5 seconds
+            else:
+                event.ignore()
+                return
+
+        # Stop detection thread in preview
+        if hasattr(self, 'preview'):
+            self.preview._stop_detection()
 
         # Save per-file zones before closing (crash recovery)
         # Save for both batch mode AND single file mode (when _batch_base_dir is set)
@@ -3460,8 +3479,12 @@ Thời gian: {time_str}"""
         # Save window size and sidebar width
         self._save_window_state()
 
+        # Cleanup resources
         if self._pdf_handler:
             self._pdf_handler.close()
+
+        # Force cleanup memory to release resources
+        self._cleanup_memory()
 
         event.accept()
 
