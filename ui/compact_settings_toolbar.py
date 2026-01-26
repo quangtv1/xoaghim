@@ -112,8 +112,8 @@ class CompactSettingsToolbar(QWidget):
     def _add_custom_icons(self, layout: QHBoxLayout):
         """Add draw mode buttons (remove/protect)"""
         draw_modes = [
-            ('draw_remove', 'Vẽ vùng xóa ghim'),
-            ('draw_protect', 'Vẽ vùng bảo vệ'),
+            ('draw_remove', 'Vẽ vùng xóa ghim (⌘S hoặc -)'),
+            ('draw_protect', 'Vẽ vùng bảo vệ (⌘A hoặc +)'),
         ]
 
         for mode_id, tooltip in draw_modes:
@@ -248,6 +248,7 @@ class CompactSettingsToolbar(QWidget):
             self._filter_buttons[filter_mode].blockSignals(True)
             self._filter_buttons[filter_mode].setChecked(True)
             self._filter_buttons[filter_mode].blockSignals(False)
+            self._filter_buttons[filter_mode].update()  # Force repaint
 
     def set_draw_mode_state(self, mode):
         """Update draw mode button state"""
@@ -256,6 +257,7 @@ class CompactSettingsToolbar(QWidget):
             btn.blockSignals(True)
             btn.setChecked(mode == expected_mode)
             btn.blockSignals(False)
+            btn.update()  # Force repaint
 
     def set_ai_detect_state(self, enabled: bool):
         """Update AI detect button state"""

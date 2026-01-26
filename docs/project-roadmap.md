@@ -1,28 +1,38 @@
 # XoaGhim PDF - Project Roadmap
 
-**Last Updated:** 2026-01-19
-**Current Version:** 1.1.21
+**Last Updated:** 2026-01-26
+**Current Version:** 1.1.22
 
 ---
 
 ## Release Timeline
 
-### v1.1.21 (Current - Stable)
+### v1.1.22 (Current - Stable)
 
-**Status:** All Enhancements Complete
+**Status:** All Bug Fixes & Features Complete
+- Fixed "Xóa tất cả" not persisting to JSON in single/batch mode
+- Improved protected region caching from preview with DPI scaling
+- Fixed kernel size scaling in zone processing
+- Fixed text protection consistency across operations
+- Enhanced memory cleanup when loading new files/folders
+
+**Release Date:** 2026-01-26
+**Status:** Stable/Production
+
+**Cumulative v1.1.x Features:**
 - Sidebar file filters (name + page count)
 - Loading overlay for large PDFs (>20 pages)
-- Zone counter on status bar (global + per-file)
+- Zone counter on status bar (global + per-file + per-page)
 - Delete zones (global/per-file/per-page)
 - Auto-recovery on crash
-- Undo (Ctrl+Z) up to 79 actions
+- Undo (Ctrl+Z/Cmd+Z) up to 79 actions
 - Delete key for zone removal
 - Hybrid zone sizing (pixels + percentage)
 - Batch mode zoom preservation
-- Compact settings toolbar (v1.1.19+)
-
-**Release Date:** 2026-01-19
-**Status:** Stable/Production
+- Compact settings toolbar
+- AI text protection with YOLO DocLayNet
+- Draw Mode (Cmd+A/Alt+A) and Select Mode (Cmd+S/Alt+S) shortcuts
+- Zoom controls (+, -, =)
 
 ---
 
@@ -451,6 +461,7 @@ Before each release:
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
+| 1.2 | 2026-01-26 | Docs Manager | Updated for v1.1.22 release (bug fixes + stability) |
 | 1.1 | 2026-01-19 | Docs Manager | Updated for v1.1.21 release (all core features complete) |
 | 1.0 | 2026-01-17 | Team | Initial roadmap (v1.1.18 baseline) |
 

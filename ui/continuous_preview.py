@@ -1376,7 +1376,51 @@ class ContinuousPreviewPanel(QFrame):
 
     def refresh_scene(self):
         """Rebuild scene with all pages. Call at end of background loading."""
+        # Ensure zones are applied to all pages (including newly loaded ones)
+        # This handles the case when pages are loaded progressively
+        self._extend_zones_to_new_pages()
         self._rebuild_scene()
+
+    def _extend_zones_to_new_pages(self):
+        """Extend zone data to newly loaded pages.
+
+        When pages are loaded progressively, set_zone_definitions() might only
+        apply zones to pages available at that time. This method ensures zones
+        with 'all/odd/even' filter are applied to new pages.
+        """
+        if not self._pages or not self._zone_definitions:
+            return
+
+        total_pages = len(self._pages)
+
+        # Ensure _per_page_zones has entries for all pages
+        for page_idx in range(total_pages):
+            if page_idx not in self._per_page_zones:
+                self._per_page_zones[page_idx] = {}
+
+        # Get pages that have zone data (from first zone we find)
+        # Zones with 'all' filter should be on all pages
+        for zone in self._zone_definitions:
+            if not zone.enabled:
+                continue
+
+            zone_page_filter = getattr(zone, 'page_filter', 'all')
+            target_page = getattr(zone, 'target_page', -1)
+
+            # Skip Zone Riêng (per-page zones) - they have specific target pages
+            if target_page >= 0 or zone_page_filter == 'none':
+                continue
+
+            # Get which pages should have this zone based on filter
+            pages_should_have = self._get_pages_for_zone_filter(zone_page_filter)
+
+            # Add zone to pages that don't have it yet
+            for page_idx in pages_should_have:
+                if page_idx not in self._per_page_zones:
+                    self._per_page_zones[page_idx] = {}
+                if zone.id not in self._per_page_zones[page_idx]:
+                    zone_data = self._calculate_initial_zone_data(zone, page_idx)
+                    self._per_page_zones[page_idx][zone.id] = zone_data
 
     def _rebuild_scene(self):
         """Xây dựng lại scene với tất cả các trang hoặc 1 trang"""
@@ -3692,7 +3736,13 @@ class ContinuousPreviewWidget(QWidget):
             else:
                 # Custom/protect or legacy format: (x_pct, y_pct, w_pct, h_pct)
                 threshold_val = zone_def.threshold if zone_def else 7
-                zone_type_val = getattr(zone_def, 'zone_type', 'remove') if zone_def else 'remove'
+                # Infer zone_type from zone_id if zone_def is None (persisted zones)
+                if zone_def:
+                    zone_type_val = getattr(zone_def, 'zone_type', 'remove')
+                elif zone_id_lower.startswith('protect_'):
+                    zone_type_val = 'protect'
+                else:
+                    zone_type_val = 'remove'
                 page_zone = Zone(
                     id=zone_id,
                     name=zone_def.name if zone_def else zone_id,

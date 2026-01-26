@@ -957,6 +957,36 @@ class MainWindow(QMainWindow):
         self.undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
         self.undo_shortcut.activated.connect(self._on_undo)
 
+        # Keyboard shortcuts for draw mode (toggle on/off)
+        # macOS: Cmd+A, Cmd+S | Windows: Alt+A, Alt+S
+        import sys
+        if sys.platform == 'darwin':
+            # macOS: Ctrl maps to Cmd
+            protect_key = "Ctrl+A"
+            remove_key = "Ctrl+S"
+        else:
+            # Windows/Linux: Use Alt to avoid conflict with Ctrl+A/S
+            protect_key = "Alt+A"
+            remove_key = "Alt+S"
+
+        self.draw_protect_a = QShortcut(QKeySequence(protect_key), self)
+        self.draw_protect_a.setAutoRepeat(False)
+        self.draw_protect_a.activated.connect(self._toggle_draw_protect)
+        self.draw_protect_plus = QShortcut(QKeySequence("Shift+="), self)
+        self.draw_protect_plus.setAutoRepeat(False)
+        self.draw_protect_plus.activated.connect(self._toggle_draw_protect)
+        # Also map = key (without shift) for convenience
+        self.draw_protect_equal = QShortcut(QKeySequence("="), self)
+        self.draw_protect_equal.setAutoRepeat(False)
+        self.draw_protect_equal.activated.connect(self._toggle_draw_protect)
+
+        self.draw_remove_s = QShortcut(QKeySequence(remove_key), self)
+        self.draw_remove_s.setAutoRepeat(False)
+        self.draw_remove_s.activated.connect(self._toggle_draw_remove)
+        self.draw_remove_minus = QShortcut(QKeySequence("-"), self)
+        self.draw_remove_minus.setAutoRepeat(False)
+        self.draw_remove_minus.activated.connect(self._toggle_draw_remove)
+
         # Cancel button (hidden by default)
         self.cancel_btn = QPushButton("Dừng")
         self.cancel_btn.setStyleSheet("""
@@ -2405,6 +2435,46 @@ class MainWindow(QMainWindow):
     def _on_draw_mode_changed(self, mode):
         """Handle draw mode toggle from settings panel (mode: 'remove', 'protect', or None)"""
         self._current_draw_mode = mode
+        self.preview.set_draw_mode(mode)
+
+    def _toggle_draw_protect(self):
+        """Toggle protection zone (+) draw mode.
+        Keyboard shortcuts: Cmd+A (macOS), Alt+A (Windows), +, =
+        """
+        if self._current_draw_mode == 'protect':
+            self._set_draw_mode_with_filter(None)
+        else:
+            self._set_draw_mode_with_filter('protect')
+
+    def _toggle_draw_remove(self):
+        """Toggle removal zone (-) draw mode.
+        Keyboard shortcuts: Cmd+S (macOS), Alt+S (Windows), -
+        """
+        if self._current_draw_mode == 'remove':
+            self._set_draw_mode_with_filter(None)
+        else:
+            self._set_draw_mode_with_filter('remove')
+
+    def _set_draw_mode_with_filter(self, mode):
+        """Set draw mode and update all UI components.
+
+        Args:
+            mode: 'remove', 'protect', or None
+        """
+        # Update filter to 'Từng trang' when entering draw mode
+        if mode is not None:
+            self.settings_panel.set_filter('none')
+            self.compact_toolbar.set_filter_state('none')
+
+        # Update internal state first
+        self._current_draw_mode = mode
+
+        # Update all UI components
+        self.settings_panel.set_draw_mode(mode)
+        self.settings_panel._current_draw_mode = mode
+        self.compact_toolbar.set_draw_mode_state(mode)
+
+        # Update preview
         self.preview.set_draw_mode(mode)
 
     def _on_rect_drawn_from_preview(self, x: float, y: float, w: float, h: float, mode: str, page_idx: int):

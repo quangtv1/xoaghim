@@ -2,7 +2,7 @@
 
 Ứng dụng desktop dùng AI để xóa vết ghim (staple marks) từ tài liệu PDF scan.
 
-**Phiên bản:** 1.1.22 | **Tổ chức:** HUCE | **Framework:** PyQt5 | **Python 3.8+**
+**Phiên bản:** 1.1.22 | **Tổ chức:** HUCE | **Framework:** PyQt5 | **Python 3.8+** | **Ngày cập nhật:** 2026-01-26
 
 ## Tính Năng Nổi Bật
 
@@ -19,7 +19,10 @@
 - **Custom Draw Mode** - Vẽ vùng tùy chỉnh trên preview
 - **Hybrid Zone Sizing** - Góc dùng pixel cố định, cạnh dùng % chiều dài
 - **Zone chung/riêng** - Vùng chung cho tất cả hoặc riêng từng file/trang
-- **Undo (Ctrl+Z)** - Hoàn tác thao tác vùng chọn (tối đa 79 lần)
+- **Undo (Ctrl+Z / Cmd+Z)** - Hoàn tác thao tác vùng chọn (tối đa 79 lần)
+- **Draw Mode (Cmd+A / Alt+A)** - Kích hoạt chế độ vẽ vùng tùy chỉnh
+- **Select Mode (Cmd+S / Alt+S)** - Kích hoạt chế độ chọn zone
+- **Zoom (+, -, =)** - Phóng to, thu nhỏ, reset zoom
 - **Phím Delete** - Xóa vùng chọn đang được chọn
 - **Xóa vùng chọn** - Xóa chung/riêng, từng trang/cả thư mục
 - **Bộ đếm Zone** - Hiển thị số zone chung và riêng trên thanh bottom
@@ -64,23 +67,31 @@ python main.py
 ## Cấu Trúc
 
 ```
-core/          (6 files, ~2,930 lines)
-  ├── pdf_handler.py       # PDF I/O, caching
-  ├── layout_detector.py   # AI detection (ONNX)
-  ├── processor.py         # Staple removal logic
-  ├── zone_optimizer.py    # Polygon algorithms
-  └── config_manager.py    # Config persistence
+core/          (8 modules, ~2,146 lines)
+  ├── processor.py         # Staple removal engine (500+ LOC)
+  ├── layout_detector.py   # AI detection YOLO/ONNX (500+ LOC)
+  ├── pdf_handler.py       # PDF I/O with caching (223 LOC)
+  ├── zone_optimizer.py    # Polygon algorithms (315 LOC)
+  ├── config_manager.py    # Config persistence (271 LOC)
+  ├── resource_manager.py  # CPU/RAM monitoring (118 LOC)
+  ├── parallel_processor.py # Batch processing (300+ LOC)
+  └── __init__.py
 
-ui/            (13 files, ~10,800 lines)
-  ├── main_window.py       # Main orchestrator
-  ├── continuous_preview.py # Multi-page preview
-  ├── page_thumbnail_sidebar.py # Thumbnail navigation
-  ├── settings_panel.py    # Zone config UI
-  ├── compact_settings_toolbar.py # Icon toolbar
-  └── ... (other UI components)
+ui/            (14 modules, ~13,620 lines)
+  ├── main_window.py                # Main orchestrator
+  ├── continuous_preview.py         # Multi-page preview
+  ├── settings_panel.py             # Zone config
+  ├── compact_settings_toolbar.py   # Icon toolbar
+  ├── zone_selector.py              # Zone picker
+  └── ... (11 other UI components)
 
-tests/         (6 files, 124 tests)
-  └── test_*.py           # Unit tests
+tests/         (6 files, 108 tests, 98%+ pass)
+  ├── test_processor.py    # Core removal logic
+  ├── test_zone_undo.py    # Undo/Redo
+  ├── test_compact_toolbar.py # UI toolbar
+  ├── test_geometry.py     # Polygon operations
+  ├── test_layout_detector.py # AI detection
+  └── test_zone_optimizer.py # Zone calculations
 ```
 
 Tài liệu chi tiết: [docs/](docs/)

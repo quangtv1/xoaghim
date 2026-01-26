@@ -1,11 +1,12 @@
-# Codebase Summary - Xóa Vết Ghim PDF v1.1.21
+# Codebase Summary - Xóa Vết Ghim PDF v1.1.22
 
 ## Overview
 
-**Total Lines of Code:** ~17,542 LOC (excluding tests)
-**Total Files:** 27 Python modules (main.py + 26 in packages)
-**Test Coverage:** 6 test files, 1,546 test LOC, 99+ test cases
+**Total Lines of Code:** ~17,566 LOC (excluding tests)
+**Total Files:** 29 Python modules + main.py
+**Test Coverage:** 6 test files, 1,546 test LOC, 108 test cases (98%+ pass rate)
 **Architecture:** PyQt5 MVC with signal/slot pattern
+**Last Updated:** 2026-01-26
 
 ## Directory Structure
 
@@ -19,7 +20,7 @@ xoaghim/
 └── docs/                      (documentation)
 ```
 
-## Core Module (3,146 LOC)
+## Core Module (2,146 LOC)
 
 Low-level processing engine with AI-powered detection and staple removal.
 
@@ -27,40 +28,46 @@ Low-level processing engine with AI-powered detection and staple removal.
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `layout_detector.py` | 1,601 | Multi-model AI detection (ONNX/PyTorch/PaddleOCR) |
-| `processor.py` | 774 | Core staple removal with 4-layer content protection |
-| `zone_optimizer.py` | 314 | Polygon-based safe zone calculation |
-| `config_manager.py` | 234 | Cross-platform config + crash recovery |
-| `pdf_handler.py` | 222 | PDF I/O with smart compression |
+| `processor.py` | 500+ | Core staple removal with 7-step algorithm + content protection |
+| `layout_detector.py` | 500+ | Multi-model AI detection (ONNX/PyTorch/PaddleOCR/Detectron2) |
+| `zone_optimizer.py` | 315 | Hybrid Polygon Algorithm using Shapely for safe zone calculation |
+| `pdf_handler.py` | 223 | PDF I/O with PyMuPDF, rendering + LRU cache |
+| `config_manager.py` | 271 | JSON persistence for zones, UI state, auto-recovery |
+| `resource_manager.py` | 118 | CPU/RAM monitoring via psutil, optimal worker calculation |
+| `parallel_processor.py` | 300+ | ProcessPoolExecutor for batch processing, DPI scaling |
 | `__init__.py` | 1 | Module initialization |
-| **Total** | **3,146** | |
+| **Total** | **2,146** | |
 
 ### Key Classes
 
-#### processor.py (774 LOC)
+#### processor.py (500+ LOC)
 - **Zone** - Dataclass defining removal/protection zones with hybrid sizing
   - `to_pixels()` - Convert percentage/hybrid zones to pixel coordinates
   - `is_applicable()` - Check if zone applies to given page
-- **StapleRemover** - Core removal engine
-  - `remove()` - Main processing pipeline
+- **StapleRemover** - Core removal engine with 7-step algorithm
+  - `process_image()` - Main pipeline for multiple zones
+  - `process_zone()` - Process single zone with scaling
   - `remove_staples()` - Artifact detection and removal
   - `protect_signatures()` - Red/blue color preservation
-  - `apply_protected_regions()` - AI-based exclusion
-  - `dilation_cleanup()` - Morphological processing
+  - `apply_protected_regions()` - AI-based region exclusion
+  - `get_background_color()` - Background sampling from safe zone
 
-#### layout_detector.py (1,601 LOC)
-- **DocumentLayoutDetector** - Multi-model AI detection
-  - `detect()` - Run inference on page image
-  - Model loaders: ONNX, PyTorch, PaddleOCR
-  - `_load_onnx_model()`, `_load_pytorch_model()`, `_load_paddleocr_model()`
-  - Results: text, table, figure, caption regions
+#### layout_detector.py (500+ LOC)
+- **LayoutDetector (base)** - Abstract interface for layout detection
+  - `create(backend)` - Factory method for detector creation
+  - Implementations: ONNX, PyTorch, PaddleOCR, Detectron2, RemoteServer
+- **YOLODocLayNetONNXDetector** - Primary ONNX-based detector
+  - `detect()` - Run YOLO DocLayNet inference
+  - Auto model download, CPU-friendly inference
+  - Results: text, title, list, table, figure, caption, header, footer, etc.
 
-#### zone_optimizer.py (314 LOC)
-- **ZoneOptimizer** - Polygon geometry calculations
-  - `expand_zone()` - Expand polygon by distance
-  - `simplify_zone()` - Reduce point count
-  - Shoelace formula for area calculation
-  - Point-in-polygon tests
+#### zone_optimizer.py (315 LOC)
+- **SafeZone** - Dataclass for safe zone representation
+- **HybridPolygonOptimizer** - Shapely-based geometry calculations
+  - `optimize()` - Calculate safe zones
+  - `subtract()` - Subtract protected regions using Shapely
+  - Polygon simplification and validation
+  - DPI-aware coordinate scaling
 
 #### config_manager.py (234 LOC)
 - **ConfigManager** - Persistent settings
@@ -77,7 +84,7 @@ Low-level processing engine with AI-powered detection and staple removal.
   - `export_pdf()` - Write processed pages to PDF
   - DPI adjustment, JPEG compression
 
-## UI Module (12,620 LOC)
+## UI Module (13,620 LOC)
 
 PyQt5-based GUI with advanced widgets and real-time preview.
 
@@ -85,20 +92,21 @@ PyQt5-based GUI with advanced widgets and real-time preview.
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `main_window.py` | 3,316 | Main application orchestrator |
-| `continuous_preview.py` | 3,400 | Multi-page preview with zone overlay |
-| `settings_panel.py` | 1,985 | Zone config UI and mode switching |
-| `batch_sidebar.py` | 800 | File list with filtering/sorting |
-| `batch_preview.py` | 615 | Batch processing container |
-| `zone_selector.py` | 523 | Visual zone picker |
-| `text_protection_dialog.py` | 487 | AI protection settings dialog |
-| `preview_widget.py` | 454 | Before/after synchronized preview |
-| `compact_toolbar_icons.py` | 357 | Custom QPainter icon rendering |
-| `zone_item.py` | 331 | Draggable/resizable zone rectangles |
-| `compact_settings_toolbar.py` | 294 | Collapsed toolbar UI |
-| `undo_manager.py` | 57 | Action stack management |
+| `continuous_preview.py` | 3,400+ | Multi-page preview with zone overlay, LoadingOverlay |
+| `main_window.py` | 3,316+ | Main application orchestrator, menu/toolbar/status bar |
+| `settings_panel.py` | 1,985+ | Zone config UI, mode switching (Global/File/Page) |
+| `batch_sidebar.py` | 800+ | File list with name/page filtering, sorting |
+| `batch_preview.py` | 615+ | Batch processing container and results display |
+| `zone_selector.py` | 523+ | Visual zone picker with PaperIcon |
+| `text_protection_dialog.py` | 487+ | AI protection settings and configuration dialog |
+| `preview_widget.py` | 454+ | Before/after synchronized preview panels |
+| `compact_toolbar_icons.py` | 357+ | Custom QPainter icon rendering (20+ icon types) |
+| `zone_item.py` | 331+ | Draggable/resizable zone rectangles with handles |
+| `compact_settings_toolbar.py` | 294+ | Collapsed toolbar UI with zone toggles |
+| `page_thumbnail_sidebar.py` | TBD | Page thumbnail navigation |
+| `undo_manager.py` | 57 | Action stack management (79 max actions) |
 | `__init__.py` | 1 | Module initialization |
-| **Total** | **12,620** | |
+| **Total** | **13,620** | |
 
 ### Key Classes
 
@@ -191,7 +199,7 @@ PyQt5-based GUI with advanced widgets and real-time preview.
 
 ## Tests Module (1,546 LOC)
 
-Comprehensive unit test suite with 99+ test cases.
+Comprehensive unit test suite with 108 test cases (98%+ pass rate).
 
 ### Files
 
@@ -204,7 +212,7 @@ Comprehensive unit test suite with 99+ test cases.
 | `test_layout_detector.py` | 10+ | 85 | AI detection |
 | `test_zone_optimizer.py` | 9+ | 145 | Zone calculations |
 | `__init__.py` | - | 0 | - |
-| **Total** | **99+** | **1,546** | - |
+| **Total** | **108** | **1,546** | 98%+ passing |
 
 ## Architecture Patterns
 
@@ -407,9 +415,28 @@ Completion notification
 2. Performance benchmarking suite
 3. Model accuracy validation tests
 
+## Key Features by Version
+
+### v1.1.22 (Current - 2026-01-26)
+- Fixed "Xóa tất cả" (Clear All) not persisting to JSON in single/batch mode
+- Improved protected region caching from preview with DPI scaling
+- Fixed kernel size scaling in zone processing operations
+- Fixed text protection consistency across operations
+- Enhanced memory cleanup when loading new files/folders
+
+### v1.1.21
+- Sidebar file filters (name + page count)
+- Loading overlay for large PDFs (>20 pages)
+- Zone counter on status bar (global + per-file + per-page)
+- Delete zones (global/per-file/per-page)
+- Auto-recovery on crash
+- Undo (Ctrl+Z) up to 79 actions
+- Hybrid zone sizing (pixels + percentage)
+- Batch mode zoom preservation
+
 ## Document Control
 
-- **Last Updated:** 2026-01-19
-- **Version:** 1.1
-- **Status:** Current (v1.1.21)
+- **Last Updated:** 2026-01-26
+- **Version:** 1.2
+- **Status:** Current (v1.1.22)
 - **Generated by:** Documentation manager - codebase analysis

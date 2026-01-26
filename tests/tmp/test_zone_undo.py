@@ -257,16 +257,16 @@ class TestSettingsPanelZoneSignals:
         """Test toggling a corner zone"""
         panel = SettingsPanel()
 
-        # Initially corner_tl is enabled by default
+        # Initially all zones are disabled by default (no saved config)
+        assert not panel._zones['corner_tl'].enabled
+
+        # Enable it
+        panel.toggle_preset_zone('corner_tl', True)
         assert panel._zones['corner_tl'].enabled
 
         # Disable it
         panel.toggle_preset_zone('corner_tl', False)
         assert not panel._zones['corner_tl'].enabled
-
-        # Enable it again
-        panel.toggle_preset_zone('corner_tl', True)
-        assert panel._zones['corner_tl'].enabled
 
         panel.close()
 

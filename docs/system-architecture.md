@@ -1,7 +1,7 @@
 # XoaGhim PDF - System Architecture
 
-**Last Updated:** 2026-01-19
-**Version:** 1.1.21
+**Last Updated:** 2026-01-26
+**Version:** 1.1.22
 
 ---
 
@@ -126,7 +126,7 @@ XoaGhim follows a **layered architecture pattern** with clear separation of conc
 **Processor Module:**
 ```
 ┌────────────────────────────────────┐
-│   StapleRemover (670 lines)         │
+│   StapleRemover (500+ lines)        │
 ├────────────────────────────────────┤
 │ Input: image + Zone[]               │
 │ Process: 7-step algorithm           │
@@ -136,23 +136,24 @@ XoaGhim follows a **layered architecture pattern** with clear separation of conc
 │ - process_image(img, zones)         │
 │ - process_zone(img, zone)           │
 │ - get_background_color()            │
-│ - is_red_or_blue()                  │
-│ - apply_protection()                │
+│ - remove_staples()                  │
+│ - protect_signatures()              │
+│ - apply_protected_regions()         │
 └────────────────────────────────────┘
 
-Step 1: Sample background color
+Step 1: Sample background color from safe zone
   ↓
 Step 2: Convert to grayscale
   ↓
-Step 3: Find darker pixels (threshold)
+Step 3: Find darker pixels (threshold-based)
   ↓
 Step 4: Exclude dark text (gray < 80)
   ↓
-Step 5: Exclude red/blue pixels
+Step 5: Exclude red/blue signature colors
   ↓
-Step 6: Morphological operations
+Step 6: Apply morphological operations
   ↓
-Step 7: Fill with background color
+Step 7: Fill removed areas with background color
 ```
 
 **PDF Handler Module:**
@@ -177,34 +178,31 @@ Step 7: Fill with background color
 **Layout Detector Module:**
 ```
 ┌──────────────────────────────────────┐
-│   LayoutDetector (1,602 lines)        │
-│   Abstract base class                 │
+│   LayoutDetector (500+ lines)         │
+│   Abstract base class + factory       │
 ├──────────────────────────────────────┤
 │ create(backend: str) → Detector       │
 │ detect(image) → ProtectedRegion[]     │
 ├──────────────────────────────────────┤
-│ Implementations:                      │
+│ Implementations (6 backends):         │
 │ 1. YOLODocLayNetONNXDetector (primary)│
 │    - ONNX Runtime inference           │
-│    - CPU-friendly                     │
-│    - Auto model download              │
+│    - CPU-friendly, auto-download      │
 │                                       │
 │ 2. YOLODocLayNetDetector (PyTorch)    │
-│    - PyTorch backend                  │
-│    - GPU support                      │
+│    - PyTorch + GPU support            │
 │                                       │
 │ 3. PPDocLayoutDetector (PaddleOCR)    │
 │    - PaddleOCR backend                │
 │                                       │
 │ 4. DocLayoutYOLO (legacy)             │
-│    - Older implementation              │
+│    - Fallback implementation          │
 │                                       │
 │ 5. LayoutParserDetector (Detectron2)  │
-│    - Facebook research model           │
+│    - Facebook research model          │
 │                                       │
 │ 6. RemoteLayoutDetector (GPU server)  │
 │    - Server-based processing          │
-│    - For GPU deployment                │
 └──────────────────────────────────────┘
 
 Detection Categories (11):
@@ -216,38 +214,39 @@ Detection Categories (11):
 **Zone Optimizer Module:**
 ```
 ┌──────────────────────────────────────┐
-│   ZoneOptimizer (315 lines)           │
+│   HybridPolygonOptimizer (315 lines)  │
 │   Shapely-based geometry              │
 ├──────────────────────────────────────┤
 │ - Safe zone calculation               │
-│ - Intersection detection              │
+│ - Protected region subtraction        │
 │ - Polygon simplification              │
+│ - DPI-aware scaling                   │
+│ - Intersection detection              │
 │ - Coordinate validation               │
-│ - Text protection integration         │
 └──────────────────────────────────────┘
 ```
 
 **Config Manager Module:**
 ```
 ┌──────────────────────────────────────┐
-│   ConfigManager (124 lines)           │
-│   JSON persistence                    │
+│   ConfigManager (271 lines)           │
+│   JSON persistence + auto-recovery    │
 ├──────────────────────────────────────┤
 │ Platform-specific paths:              │
 │ - macOS: ~/Library/Application       │
 │   Support/XoaGhim/config.json         │
 │ - Windows: %APPDATA%/XoaGhim/         │
-│   config.json                         │
 │ - Linux: ~/.config/XoaGhim/           │
-│   config.json                         │
 ├──────────────────────────────────────┤
 │ Persisted Config:                     │
-│ - Enabled zones                       │
+│ - Enabled zones (global/per-file)     │
 │ - Zone coordinates/sizes              │
-│ - Thresholds                          │
-│ - DPI settings                        │
+│ - Threshold values                    │
+│ - DPI and compression settings        │
 │ - Window size/position                │
 │ - Filter mode (all/odd/even/current)  │
+│ - Last opened file/folder             │
+│ - Text protection settings            │
 └──────────────────────────────────────┘
 ```
 
@@ -510,24 +509,24 @@ def process_zone(self, image, zone):
 
 ```
 XoaGhim
-├─ PyQt5 (GUI)
-│  ├─ Qt (C++)
-│  └─ sip (bindings)
-├─ PyMuPDF (PDF I/O)
+├─ PyQt5 (GUI framework)
+│  └─ Qt (C++ runtime)
+├─ PyMuPDF/fitz (PDF I/O)
 │  └─ MuPDF (C library)
 ├─ OpenCV (image processing)
-│  └─ OpenCV (C++ library)
+│  └─ C++ optimized operations
 ├─ ONNX Runtime (AI inference)
-│  ├─ ONNX (runtime)
-│  └─ CPU/GPU backends
-├─ Shapely (geometry)
-│  └─ GEOS (C library)
-├─ NumPy (arrays)
+│  └─ CPU/GPU hardware support
+├─ Shapely (polygon geometry)
+│  └─ GEOS (geometry engine)
+├─ NumPy (array operations)
 │  └─ BLAS/LAPACK
+├─ psutil (resource monitoring)
 └─ Optional:
-   ├─ PyTorch (alternative AI)
+   ├─ PyTorch (alternative AI backend)
    ├─ PaddleOCR (alternative AI)
-   └─ detectron2 (alternative AI)
+   ├─ detectron2 (Detectron2 backend)
+   └─ requests (remote API)
 ```
 
 **Version Lock:**

@@ -2,8 +2,8 @@
 Zone Selector - Widget chọn vùng xử lý bằng icon trang giấy
 """
 
-from PyQt5.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QFrame
-from PyQt5.QtCore import Qt, pyqtSignal, QRectF, QPointF
+from PyQt5.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QFrame, QToolTip
+from PyQt5.QtCore import Qt, pyqtSignal, QRectF, QPointF, QEvent
 from PyQt5.QtGui import QPainter, QColor, QPen, QBrush, QFont, QPainterPath
 
 from typing import Set, Optional
@@ -312,6 +312,27 @@ class PaperIcon(QWidget):
                 self.setCursor(Qt.PointingHandCursor if new_hover else Qt.ArrowCursor)
                 self.update()
 
+    def event(self, event):
+        """Handle tooltip events with position-aware tooltips for custom mode"""
+        if event.type() == QEvent.ToolTip and self.mode == 'custom':
+            pos = event.pos()
+            remove_rect, protect_rect = self._get_custom_areas()
+
+            if remove_rect.contains(QPointF(pos)):
+                if self._draw_mode_remove:
+                    QToolTip.showText(event.globalPos(), "Đang vẽ vùng xóa (⌘S hoặc click để tắt)")
+                else:
+                    QToolTip.showText(event.globalPos(), "Vẽ vùng xóa ghim (⌘S hoặc -)")
+            elif protect_rect.contains(QPointF(pos)):
+                if self._draw_mode_protect:
+                    QToolTip.showText(event.globalPos(), "Đang vẽ vùng bảo vệ (⌘A hoặc click để tắt)")
+                else:
+                    QToolTip.showText(event.globalPos(), "Vẽ vùng bảo vệ (⌘A hoặc +)")
+            else:
+                QToolTip.hideText()
+            return True
+        return super().event(event)
+
     def mousePressEvent(self, event):
         """Toggle zone khi click"""
         if event.button() == Qt.LeftButton:
@@ -416,7 +437,7 @@ class ZoneSelectorWidget(QFrame):
 
         # Custom button (no label)
         self.custom_icon = PaperIcon(mode='custom')
-        self.custom_icon.setToolTip("Vẽ vùng xóa ghim (-) hoặc bảo vệ (+)")
+        self.custom_icon.setToolTip("Vẽ vùng xóa ghim (S hoặc -) / bảo vệ (A hoặc +)")
         layout.addWidget(self.custom_icon)
 
         # Connect custom icon click
@@ -464,11 +485,11 @@ class ZoneSelectorWidget(QFrame):
         self.custom_icon.set_draw_mode(mode)
         # Update tooltip based on mode
         if mode == 'remove':
-            self.custom_icon.setToolTip("Đang vẽ vùng xóa (click để tắt)")
+            self.custom_icon.setToolTip("Đang vẽ vùng xóa (S hoặc click để tắt)")
         elif mode == 'protect':
-            self.custom_icon.setToolTip("Đang vẽ vùng bảo vệ (click để tắt)")
+            self.custom_icon.setToolTip("Đang vẽ vùng bảo vệ (A hoặc click để tắt)")
         else:
-            self.custom_icon.setToolTip("Vẽ vùng xóa ghim (-) hoặc bảo vệ (+)")
+            self.custom_icon.setToolTip("Vẽ vùng xóa ghim (S hoặc -) / bảo vệ (A hoặc +)")
         self.draw_mode_changed.emit(mode)
 
     def set_draw_mode(self, mode: Optional[str]):
@@ -477,11 +498,11 @@ class ZoneSelectorWidget(QFrame):
         self.custom_icon.set_draw_mode(mode)
         # Update tooltip based on mode
         if mode == 'remove':
-            self.custom_icon.setToolTip("Đang vẽ vùng xóa (click để tắt)")
+            self.custom_icon.setToolTip("Đang vẽ vùng xóa (S hoặc click để tắt)")
         elif mode == 'protect':
-            self.custom_icon.setToolTip("Đang vẽ vùng bảo vệ (click để tắt)")
+            self.custom_icon.setToolTip("Đang vẽ vùng bảo vệ (A hoặc click để tắt)")
         else:
-            self.custom_icon.setToolTip("Vẽ vùng xóa ghim (-) hoặc bảo vệ (+)")
+            self.custom_icon.setToolTip("Vẽ vùng xóa ghim (S hoặc -) / bảo vệ (A hoặc +)")
 
     def get_draw_mode(self) -> Optional[str]:
         """Get current draw mode: 'remove', 'protect', or None"""

@@ -44,7 +44,7 @@ class TestCompactIconButton:
         btn = CompactIconButton('corner_tl', 'Top Left Corner')
         assert btn.icon_type == 'corner_tl'
         assert btn.toolTip() == 'Top Left Corner'
-        assert btn.width() == 38
+        assert btn.width() == 42  # Wider rectangle (42x38)
         assert btn.height() == 38
         btn.close()
     
