@@ -1834,8 +1834,30 @@ class MainWindow(QMainWindow):
             self.preview.add_thumbnail(i, thumb)
         self.preview.finish_thumbnail_loading()
 
+        # Set current file path on settings panel (for per-file zone tracking)
+        self.settings_panel.set_current_file_path(file_path)
+
         # Set preview pages
         self.preview.set_pages(self._all_pages)
+
+        # Re-apply Zone Chung after set_pages clears _per_page_zones
+        self.settings_panel._emit_zones()
+
+        # Apply text protection settings (triggers processing with zones)
+        text_protection_opts = self.settings_panel.get_text_protection_options()
+        self.preview.set_text_protection(text_protection_opts)
+
+        # Load Zone Riêng (per-file zones) AFTER set_pages and Zone Chung
+        if hasattr(self, '_pending_zone_file') and self._pending_zone_file:
+            zone_file = self._pending_zone_file
+            zone_idx = getattr(self, '_pending_zone_index', 0)
+            self._pending_zone_file = None
+
+            self.settings_panel.load_per_file_custom_zones(zone_file)
+            self.preview.load_per_file_zones(zone_file)
+            self.preview.set_file_index(zone_idx, len(self._batch_files) if self._batch_files else 1)
+            self.preview.before_panel._zones_loading = False
+            self._update_zone_counts()
 
         # Setup file paths display
         self.preview.set_file_paths(str(file_path), str(dest_path))
@@ -1843,20 +1865,26 @@ class MainWindow(QMainWindow):
         # Update window title
         self.setWindowTitle(f"Xóa Ghim PDF (5S) - {source_path.name}")
 
-        # Apply fit width for first file or preserve zoom
+        # Force thumbnails repaint
+        QTimer.singleShot(10, self.preview.repaint_thumbnails)
+
+        # Reset to first page
+        self.preview.set_current_page(0)
+
+        # Apply fit width for first file, preserve zoom for subsequent files
         if self._is_first_file_in_batch:
             self._is_first_file_in_batch = False
             QTimer.singleShot(50, self.preview.fit_width)
-        else:
-            self._apply_zoom_to_new_file()
+        # else: zoom is already preserved via _user_zoomed
+
+        # Clear pending values
+        self._pending_file_path = None
+        self._pending_dest_path = None
 
         # Finish loading
         self._background_loading = False
         self._stop_loading_flag = False
         self.statusBar().showMessage(f"Đã tải từ cache: {source_path.name}", 2000)
-
-        # Trigger zone loading after display
-        QTimer.singleShot(100, self._load_zones_after_thumbnails)
 
         self._update_ui_state()
 
