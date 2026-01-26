@@ -1728,12 +1728,20 @@ class MainWindow(QMainWindow):
 
         # Check if text protection (AI detection) is enabled
         text_protection_opts = self.settings_panel.get_text_protection_options()
-        detect_regions = text_protection_opts.get('enabled', False)
+        detect_regions = text_protection_opts.enabled
+
+        # Convert to dict for worker
+        opts_dict = {
+            'enabled': text_protection_opts.enabled,
+            'protected_labels': list(text_protection_opts.protected_labels),
+            'margin': text_protection_opts.margin,
+            'confidence': text_protection_opts.confidence
+        }
 
         self._preload_worker = PreloadWorker(
             next_file,
             detect_regions=detect_regions,
-            text_protection_options=text_protection_opts,
+            text_protection_options=opts_dict,
             parent=self
         )
         self._preload_worker.finished.connect(self._on_preload_finished)
