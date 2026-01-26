@@ -1483,8 +1483,8 @@ class MainWindow(QMainWindow):
     def _load_files_batch(self, pdf_files: list, base_dir: str):
         """Load multiple PDF files for batch processing"""
         # Free memory from previous session before loading new batch
-        # defer_scene_clear=False because _rebuild_scene() will clear the scene
-        self._cleanup_memory(defer_scene_clear=False)
+        # clear_scene=False because _rebuild_scene() will clear the scene
+        self._cleanup_memory(clear_scene=False)
 
         # Check if this is a NEW folder (different from current)
         is_new_folder = self._batch_base_dir != base_dir and self._batch_base_dir != ""
@@ -1802,8 +1802,8 @@ class MainWindow(QMainWindow):
         self.preview.clear_file_paths()
 
         # Free memory (caches, processed pages, etc.)
-        # defer_scene_clear=False because set_pages([]) already cleared the scene
-        self._cleanup_memory(defer_scene_clear=False)
+        # clear_scene=False because set_pages([]) already cleared the scene
+        self._cleanup_memory(clear_scene=False)
 
         # Reset zoom to 100% for placeholder icons
         self.zoom_combo.blockSignals(True)
@@ -1820,8 +1820,8 @@ class MainWindow(QMainWindow):
     def _load_pdf(self, file_path: str):
         """Load file PDF"""
         # Free memory from previous file before loading new one
-        # defer_scene_clear=False because _rebuild_scene() will clear the scene
-        self._cleanup_memory(defer_scene_clear=False)
+        # clear_scene=False because _rebuild_scene() will clear the scene
+        self._cleanup_memory(clear_scene=False)
 
         try:
             # Set flag FIRST to prevent eventFilter crashes during processEvents
@@ -2810,20 +2810,23 @@ class MainWindow(QMainWindow):
 
         self._process_thread = None
 
-    def _cleanup_memory(self, defer_scene_clear: bool = True):
+    def _cleanup_memory(self, clear_scene: bool = False):
         """Free memory after closing file or processing completes.
 
+        NOTE: Do NOT call scene.clear() here except when closing app.
+        Scene clearing is handled by _rebuild_scene() when loading new pages.
+        Calling scene.clear() while Qt is rendering causes crashes on Mac/Windows.
+
         Args:
-            defer_scene_clear: If True, defer scene.clear() via QTimer to avoid
-                               Windows crash when scene is being rendered.
+            clear_scene: If True, also clear scene (only use when closing app).
         """
         import gc
 
-        # Clear processed pages (Python lists only, not Qt objects)
+        # Clear processed pages (Python lists only)
         if hasattr(self, 'preview') and hasattr(self.preview, '_processed_pages'):
             self.preview._processed_pages.clear()
 
-        # Clear page data lists
+        # Clear page data lists (let _rebuild_scene handle scene items)
         if hasattr(self, 'preview') and hasattr(self.preview, 'before_panel'):
             self.preview.before_panel._pages.clear()
 
@@ -2842,35 +2845,25 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_all_pages'):
             self._all_pages.clear()
 
-        # Defer scene clearing to avoid Windows crash during render
-        if defer_scene_clear:
-            QTimer.singleShot(100, self._deferred_scene_clear)
-        else:
-            self._clear_scenes_now()
+        # Only clear scene when closing app (not during file operations)
+        if clear_scene:
+            self._clear_scenes_for_exit()
 
         # Force garbage collection
         gc.collect()
 
-    def _deferred_scene_clear(self):
-        """Clear scenes after Qt finishes rendering (prevents Windows crash)"""
+    def _clear_scenes_for_exit(self):
+        """Clear scenes when closing app (safe because app is exiting)"""
         try:
-            self._clear_scenes_now()
+            if hasattr(self, 'preview') and hasattr(self.preview, 'before_panel'):
+                self.preview.before_panel._page_items.clear()
+                self.preview.before_panel.scene.clear()
+
+            if hasattr(self, 'preview') and hasattr(self.preview, 'after_panel'):
+                self.preview.after_panel._page_items.clear()
+                self.preview.after_panel.scene.clear()
         except RuntimeError:
             pass  # Widget may be deleted during shutdown
-
-    def _clear_scenes_now(self):
-        """Actually clear the scenes and page items"""
-        import gc
-
-        if hasattr(self, 'preview') and hasattr(self.preview, 'before_panel'):
-            self.preview.before_panel._page_items.clear()
-            self.preview.before_panel.scene.clear()
-
-        if hasattr(self, 'preview') and hasattr(self.preview, 'after_panel'):
-            self.preview.after_panel._page_items.clear()
-            self.preview.after_panel.scene.clear()
-
-        gc.collect()
 
     def _show_single_progress_dialog(self, input_path: str, output_path: str,
                                      zones: List[Zone], settings: dict, zone_getter=None):
@@ -3513,8 +3506,8 @@ Thời gian: {time_str}"""
         if self._pdf_handler:
             self._pdf_handler.close()
 
-        # Force cleanup memory to release resources (no defer on exit)
-        self._cleanup_memory(defer_scene_clear=False)
+        # Force cleanup memory to release resources (clear scene on exit)
+        self._cleanup_memory(clear_scene=True)
 
         event.accept()
 
