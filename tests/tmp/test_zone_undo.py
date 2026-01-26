@@ -257,16 +257,16 @@ class TestSettingsPanelZoneSignals:
         """Test toggling a corner zone"""
         panel = SettingsPanel()
 
-        # Initially all zones are disabled by default (no saved config)
-        assert not panel._zones['corner_tl'].enabled
+        # Get initial state (may vary based on saved config)
+        initial_state = panel._zones['corner_tl'].enabled
 
-        # Enable it
-        panel.toggle_preset_zone('corner_tl', True)
-        assert panel._zones['corner_tl'].enabled
+        # Toggle to opposite state
+        panel.toggle_preset_zone('corner_tl', not initial_state)
+        assert panel._zones['corner_tl'].enabled == (not initial_state)
 
-        # Disable it
-        panel.toggle_preset_zone('corner_tl', False)
-        assert not panel._zones['corner_tl'].enabled
+        # Toggle back
+        panel.toggle_preset_zone('corner_tl', initial_state)
+        assert panel._zones['corner_tl'].enabled == initial_state
 
         panel.close()
 
@@ -274,16 +274,16 @@ class TestSettingsPanelZoneSignals:
         """Test toggling an edge zone"""
         panel = SettingsPanel()
 
-        # Initially edges are disabled
-        assert not panel._zones['margin_top'].enabled
+        # Get initial state (may vary based on saved config)
+        initial_state = panel._zones['margin_top'].enabled
 
-        # Enable it
-        panel.toggle_preset_zone('margin_top', True)
-        assert panel._zones['margin_top'].enabled
+        # Toggle to opposite state
+        panel.toggle_preset_zone('margin_top', not initial_state)
+        assert panel._zones['margin_top'].enabled == (not initial_state)
 
-        # Disable it
-        panel.toggle_preset_zone('margin_top', False)
-        assert not panel._zones['margin_top'].enabled
+        # Toggle back
+        panel.toggle_preset_zone('margin_top', initial_state)
+        assert panel._zones['margin_top'].enabled == initial_state
 
         panel.close()
 

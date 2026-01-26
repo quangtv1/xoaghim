@@ -1800,6 +1800,9 @@ class MainWindow(QMainWindow):
         self.preview.clear_thumbnails()  # Also clear thumbnail panel
         self.preview.clear_file_paths()
 
+        # Free memory (caches, processed pages, etc.)
+        self._cleanup_memory()
+
         # Reset zoom to 100% for placeholder icons
         self.zoom_combo.blockSignals(True)
         self.zoom_combo.setCurrentText("100%")
@@ -2805,12 +2808,18 @@ class MainWindow(QMainWindow):
         self._process_thread = None
 
     def _cleanup_memory(self):
-        """Free memory after processing completes"""
+        """Free memory after closing file or processing completes"""
         import gc
 
-        # Clear processed pages (keep original _pages for re-processing if needed)
+        # Clear processed pages
         if hasattr(self, 'preview') and hasattr(self.preview, '_processed_pages'):
             self.preview._processed_pages.clear()
+
+        # Clear before panel pages (original display)
+        if hasattr(self, 'preview') and hasattr(self.preview, 'before_panel'):
+            self.preview.before_panel._pages.clear()
+            self.preview.before_panel._page_items.clear()
+            self.preview.before_panel.scene.clear()
 
         # Clear after panel pages (result display)
         if hasattr(self, 'preview') and hasattr(self.preview, 'after_panel'):
@@ -2825,6 +2834,10 @@ class MainWindow(QMainWindow):
         # Clear cached detection regions
         if hasattr(self, 'preview') and hasattr(self.preview, '_cached_regions'):
             self.preview._cached_regions.clear()
+
+        # Clear main page list
+        if hasattr(self, '_all_pages'):
+            self._all_pages.clear()
 
         # Force garbage collection
         gc.collect()
