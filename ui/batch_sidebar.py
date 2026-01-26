@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QLineEdit, QCheckBox, QListWidget, QListWidgetItem,
     QAbstractItemView, QStyledItemDelegate, QStyle, QComboBox
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QSize, QRect
+from PyQt5.QtCore import Qt, pyqtSignal, QSize, QRect, QTimer
 from PyQt5.QtGui import QColor, QPainter, QFont
 
 
@@ -41,7 +41,7 @@ class FileItemDelegate(QStyledItemDelegate):
         file_path = index.data(Qt.UserRole)
         if file_path:
             page_count = self._page_counts.get(file_path, -1)
-            count_text = str(page_count) if page_count >= 0 else "?"
+            count_text = str(page_count) if page_count >= 0 else "..."
 
             painter.save()
 
@@ -70,6 +70,10 @@ class SidebarFileList(QListWidget):
     file_selected = pyqtSignal(str, int)  # (file_path, original_index)
     selection_changed = pyqtSignal(list)  # list of checked files
     checkbox_changed = pyqtSignal(int, bool)  # (original_index, is_checked)
+    page_counts_updated = pyqtSignal()  # emitted when new page counts are loaded
+
+    # Batch size for lazy loading page counts
+    LAZY_LOAD_BATCH_SIZE = 10
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -83,6 +87,13 @@ class SidebarFileList(QListWidget):
         self._sort_column: str = 'name'  # 'name' or 'pages'
         self._sort_asc: bool = True
         self._skip_row_change: bool = False  # Prevent double file_selected emit
+
+        # Lazy loading state
+        self._lazy_load_index: int = 0  # Next index to load in current filtered list
+        self._lazy_load_timer: QTimer = QTimer()
+        self._lazy_load_timer.setSingleShot(True)
+        self._lazy_load_timer.timeout.connect(self._load_next_batch)
+        self._filtered_files: List[str] = []  # Current filtered file list for lazy loading
 
         # Custom delegate for page count display
         self._delegate = FileItemDelegate(self._page_counts, self)
@@ -116,16 +127,24 @@ class SidebarFileList(QListWidget):
         self.currentRowChanged.connect(self._on_current_row_changed)
 
     def set_files(self, files: List[str], base_dir: str):
-        """Set file list and load page counts"""
+        """Set file list with lazy page count loading.
+
+        Files are displayed immediately with "..." as page count.
+        Page counts are loaded in batches of LAZY_LOAD_BATCH_SIZE.
+        """
+        # Stop any pending lazy load
+        self._lazy_load_timer.stop()
+
         self._files = files
         self._base_dir = base_dir
         self._filter_text = ""
         self._filter_pages = -1
         self._page_counts.clear()
 
-        # Load page counts
-        for file_path in files:
-            self._page_counts[file_path] = self._get_page_count(file_path)
+        # Don't load page counts here - use lazy loading
+        # Build filtered list (initially all files)
+        self._filtered_files = list(files)
+        self._lazy_load_index = 0
 
         self._rebuild_list()
 
@@ -137,6 +156,44 @@ class SidebarFileList(QListWidget):
             first_item = self.item(0)
             if first_item:
                 self.file_selected.emit(first_item.data(Qt.UserRole), 0)
+
+        # Start lazy loading page counts
+        self._start_lazy_load()
+
+    def _start_lazy_load(self):
+        """Start lazy loading page counts for filtered files"""
+        self._lazy_load_index = 0
+        # Start loading immediately
+        self._lazy_load_timer.start(10)  # 10ms delay to allow UI to render
+
+    def _load_next_batch(self):
+        """Load page counts for next batch of files"""
+        if self._lazy_load_index >= len(self._filtered_files):
+            return  # Done loading
+
+        # Load batch
+        end_index = min(self._lazy_load_index + self.LAZY_LOAD_BATCH_SIZE,
+                        len(self._filtered_files))
+
+        loaded_any = False
+        for i in range(self._lazy_load_index, end_index):
+            file_path = self._filtered_files[i]
+            if file_path not in self._page_counts:
+                self._page_counts[file_path] = self._get_page_count(file_path)
+                loaded_any = True
+
+        self._lazy_load_index = end_index
+
+        # Update UI to show loaded page counts
+        self.viewport().update()
+
+        # Emit signal to update pages combo
+        if loaded_any:
+            self.page_counts_updated.emit()
+
+        # Schedule next batch if more files to load
+        if self._lazy_load_index < len(self._filtered_files):
+            self._lazy_load_timer.start(5)  # 5ms between batches for responsive UI
 
     def _get_page_count(self, file_path: str) -> int:
         """Get PDF page count quickly"""
@@ -158,8 +215,12 @@ class SidebarFileList(QListWidget):
         """Get current sort info"""
         return (self._sort_column, self._sort_asc)
 
-    def _rebuild_list(self):
-        """Rebuild list with current filter and sort"""
+    def _rebuild_list(self, restart_lazy_load: bool = False):
+        """Rebuild list with current filter and sort
+
+        Args:
+            restart_lazy_load: If True, restart lazy loading for new filtered list
+        """
         self.blockSignals(True)
         self.clear()
         self._visible_indices = []
@@ -171,9 +232,11 @@ class SidebarFileList(QListWidget):
             if self._filter_text:
                 if self._filter_text.lower() not in file_path.lower():
                     continue
-            # Filter by pages
+            # Filter by pages (only apply if page count is loaded)
             if self._filter_pages > 0:
-                if self._page_counts.get(file_path, -1) != self._filter_pages:
+                page_count = self._page_counts.get(file_path, -1)
+                # If page count not loaded yet, include in list (will be filtered later)
+                if page_count >= 0 and page_count != self._filter_pages:
                     continue
             filtered.append((idx, file_path))
 
@@ -182,6 +245,9 @@ class SidebarFileList(QListWidget):
             filtered.sort(key=lambda x: os.path.basename(x[1]).lower(), reverse=not self._sort_asc)
         else:  # pages
             filtered.sort(key=lambda x: self._page_counts.get(x[1], -1), reverse=not self._sort_asc)
+
+        # Update filtered files list for lazy loading
+        self._filtered_files = [fp for _, fp in filtered]
 
         # Add items in sorted order
         for idx, file_path in filtered:
@@ -197,16 +263,20 @@ class SidebarFileList(QListWidget):
 
         self.blockSignals(False)
 
+        # Restart lazy loading if requested
+        if restart_lazy_load:
+            self._start_lazy_load()
+
     def set_filter(self, text: str):
         """Set filter text"""
         self._filter_text = text
-        self._rebuild_list()
+        self._rebuild_list(restart_lazy_load=True)
         self.selection_changed.emit(self.get_checked_files())
 
     def set_page_filter(self, pages: int):
         """Set page count filter. -1 = all."""
         self._filter_pages = pages
-        self._rebuild_list()
+        self._rebuild_list(restart_lazy_load=True)
         self.selection_changed.emit(self.get_checked_files())
 
     def get_unique_page_counts(self) -> List[int]:
@@ -555,6 +625,7 @@ class BatchSidebar(QFrame):
         self._file_list = SidebarFileList()
         self._file_list.file_selected.connect(self._on_file_selected)
         self._file_list.selection_changed.connect(self._on_selection_changed)
+        self._file_list.page_counts_updated.connect(self._on_page_counts_updated)
         list_layout.addWidget(self._file_list)
 
         content_layout.addWidget(self._list_container)
@@ -700,6 +771,10 @@ class BatchSidebar(QFrame):
         self._update_toggle_state()
         self.selection_changed.emit(checked_files)
 
+    def _on_page_counts_updated(self):
+        """Handle page counts updated from lazy loading"""
+        self._update_pages_combo()
+
     def _on_sort_clicked(self, column: str):
         """Handle sort header click"""
         current_col, current_asc = self._file_list.get_sort_info()
@@ -754,6 +829,25 @@ class BatchSidebar(QFrame):
             self._header_checkbox.setChecked(True)
         self._header_checkbox.blockSignals(False)
 
+    def _update_pages_combo(self):
+        """Update pages combo with current unique page counts"""
+        current_text = self._pages_combo.currentText()
+        self._pages_combo.blockSignals(True)
+        self._pages_combo.clear()
+        self._pages_combo.addItem("All")
+        for page_count in self._file_list.get_unique_page_counts():
+            self._pages_combo.addItem(str(page_count))
+
+        # Restore previous selection if still valid
+        index = self._pages_combo.findText(current_text)
+        if index >= 0:
+            self._pages_combo.setCurrentIndex(index)
+        else:
+            self._pages_combo.setCurrentIndex(0)
+
+        self._pages_combo.blockSignals(False)
+        self._update_pages_combo_style(self._pages_combo.currentIndex())
+
     # Public API
 
     def set_files(self, files: List[str], base_dir: str):
@@ -766,8 +860,7 @@ class BatchSidebar(QFrame):
         self._pages_combo.blockSignals(True)
         self._pages_combo.clear()
         self._pages_combo.addItem("All")
-        for page_count in self._file_list.get_unique_page_counts():
-            self._pages_combo.addItem(str(page_count))
+        # Page counts will be populated dynamically via _on_page_counts_updated
         self._pages_combo.setCurrentIndex(0)  # Select "All"
         self._pages_combo.blockSignals(False)
         self._update_pages_combo_style(0)  # Apply gray style for "All"
