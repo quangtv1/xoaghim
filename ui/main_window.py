@@ -2808,24 +2808,26 @@ class MainWindow(QMainWindow):
         self._process_thread = None
 
     def _cleanup_memory(self):
-        """Free memory after closing file or processing completes"""
+        """Free memory after closing file or processing completes.
+
+        NOTE: Do NOT call scene.clear() here - it causes crashes on Windows
+        when the scene is being rendered. Scene clearing is handled by
+        _rebuild_scene() when new pages are loaded.
+        """
         import gc
 
-        # Clear processed pages
+        # Clear processed pages (Python lists only, not Qt objects)
         if hasattr(self, 'preview') and hasattr(self.preview, '_processed_pages'):
             self.preview._processed_pages.clear()
 
-        # Clear before panel pages (original display)
+        # Clear page references (let Qt handle the actual item deletion via _rebuild_scene)
         if hasattr(self, 'preview') and hasattr(self.preview, 'before_panel'):
             self.preview.before_panel._pages.clear()
-            self.preview.before_panel._page_items.clear()
-            self.preview.before_panel.scene.clear()
+            # Don't clear _page_items or scene here - Qt handles this in _rebuild_scene
 
-        # Clear after panel pages (result display)
         if hasattr(self, 'preview') and hasattr(self.preview, 'after_panel'):
             self.preview.after_panel._pages.clear()
-            self.preview.after_panel._page_items.clear()
-            self.preview.after_panel.scene.clear()
+            # Don't clear _page_items or scene here - Qt handles this in _rebuild_scene
 
         # Clear PDF page cache
         if hasattr(self, '_pdf_handler') and self._pdf_handler:
