@@ -73,6 +73,7 @@ class SidebarFileList(QListWidget):
     selection_changed = pyqtSignal(list)  # list of checked files
     checkbox_changed = pyqtSignal(int, bool)  # (original_index, is_checked)
     page_counts_updated = pyqtSignal()  # emitted when new page counts are loaded
+    filter_changed = pyqtSignal()  # emitted when filter changes (for preload cancel)
 
     # Batch size for lazy loading page counts
     LAZY_LOAD_BATCH_SIZE = 10
@@ -286,12 +287,14 @@ class SidebarFileList(QListWidget):
         self._filter_text = text
         self._rebuild_list(restart_lazy_load=True)
         self.selection_changed.emit(self.get_checked_files())
+        self.filter_changed.emit()
 
     def set_page_filter(self, pages: int):
         """Set page count filter. -1 = all."""
         self._filter_pages = pages
         self._rebuild_list(restart_lazy_load=True)
         self.selection_changed.emit(self.get_checked_files())
+        self.filter_changed.emit()
 
     def get_unique_page_counts(self) -> List[int]:
         """Get sorted unique page counts for combobox."""

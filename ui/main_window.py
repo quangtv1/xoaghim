@@ -17,6 +17,7 @@ import os
 import time
 from pathlib import Path
 from typing import Optional, List
+from collections import OrderedDict
 import numpy as np
 
 from ui.continuous_preview import ContinuousPreviewWidget, LoadingOverlay
@@ -24,6 +25,7 @@ from ui.batch_sidebar import BatchSidebar
 from ui.settings_panel import SettingsPanel
 from core.processor import Zone, StapleRemover
 from core.pdf_handler import PDFHandler, PDFExporter
+from core.preload_worker import PreloadWorker, FileCache
 
 
 class ComboItemDelegate(QStyledItemDelegate):
@@ -462,6 +464,11 @@ class MainWindow(QMainWindow):
         self._bg_load_index = 0  # Current page index for background preview loading
         self._thumb_load_index = 0  # Current page index for background thumbnail loading
 
+        # Preload cache for next file (LRU, max 3 files)
+        self._file_cache: OrderedDict[str, FileCache] = OrderedDict()
+        self._preload_worker: Optional[PreloadWorker] = None
+        self._max_cache_size = 3
+
         self.setWindowTitle("Xóa Ghim PDF (5S)")
         self.setMinimumSize(1200, 800)
         self.setAcceptDrops(True)
@@ -540,6 +547,7 @@ class MainWindow(QMainWindow):
         self.batch_sidebar.selection_changed.connect(self._on_sidebar_selection_changed)
         self.batch_sidebar.close_requested.connect(self._on_close_file)
         self.batch_sidebar.collapsed_changed.connect(self._on_sidebar_collapsed_changed)
+        self.batch_sidebar._file_list.filter_changed.connect(self._on_filter_changed)
         self.batch_sidebar.setVisible(False)
         self.preview_splitter.addWidget(self.batch_sidebar)
         self.preview_splitter.setCollapsible(0, False)
@@ -1639,6 +1647,9 @@ class MainWindow(QMainWindow):
 
     def _on_sidebar_file_selected(self, file_path: str, original_idx: int):
         """Handle file selection from sidebar"""
+        # Cancel any ongoing preload
+        self._cancel_preload()
+
         # Save zones from current file before switching
         self.preview.save_per_file_zones()
         self.settings_panel.save_per_file_custom_zones()
@@ -1651,7 +1662,14 @@ class MainWindow(QMainWindow):
         self._pending_zone_file = file_path
         self._pending_zone_index = original_idx
 
-        self._load_pdf(file_path)
+        # Check cache first for instant display
+        if file_path in self._file_cache:
+            self._load_from_cache(file_path)
+        else:
+            self._load_pdf(file_path)
+
+        # Start preloading next file in background
+        self._preload_next_file(original_idx)
 
     def _load_zones_after_thumbnails(self):
         """Load zones after thumbnails have painted"""
@@ -1696,6 +1714,156 @@ class MainWindow(QMainWindow):
             sidebar_width = self.preview_splitter.sizes()[0]
             if sidebar_width > 0:
                 self.compact_toolbar.set_search_width(sidebar_width)
+
+    # === PRELOAD METHODS ===
+
+    def _preload_next_file(self, current_idx: int):
+        """Start preloading next file in filtered list (background thread)"""
+        if not self._batch_mode:
+            return
+
+        next_file = self._get_next_filtered_file(current_idx)
+        if not next_file or next_file in self._file_cache:
+            return  # Already cached or no next file
+
+        self._preload_worker = PreloadWorker(next_file, self)
+        self._preload_worker.finished.connect(self._on_preload_finished)
+        self._preload_worker.error.connect(self._on_preload_error)
+        self._preload_worker.start()
+
+    def _get_next_filtered_file(self, current_idx: int) -> Optional[str]:
+        """Get next file path from sidebar's filtered list"""
+        if not self.batch_sidebar.isVisible():
+            return None
+
+        filtered = self.batch_sidebar._file_list._filtered_files
+        if not filtered:
+            return None
+
+        # Get current file path
+        if current_idx >= len(self._batch_files):
+            return None
+        current_file = self._batch_files[current_idx]
+
+        # Find position in filtered list and get next
+        try:
+            pos = filtered.index(current_file)
+            if pos + 1 < len(filtered):
+                return filtered[pos + 1]
+        except ValueError:
+            pass
+        return None
+
+    def _on_preload_finished(self, file_path: str, cache: FileCache):
+        """Handle preload completion - store in cache"""
+        self._file_cache[file_path] = cache
+        # Move to end (LRU behavior)
+        self._file_cache.move_to_end(file_path)
+        # Evict oldest if over limit
+        while len(self._file_cache) > self._max_cache_size:
+            self._file_cache.popitem(last=False)
+
+    def _on_preload_error(self, file_path: str, error: str):
+        """Handle preload error (just log, don't crash)"""
+        print(f"Preload failed for {file_path}: {error}")
+
+    def _cancel_preload(self):
+        """Cancel any ongoing preload"""
+        if self._preload_worker and self._preload_worker.isRunning():
+            self._preload_worker.cancel()
+            self._preload_worker.wait(200)  # Brief wait for cleanup
+        self._preload_worker = None
+
+    def _on_filter_changed(self):
+        """Handle filter change - cancel preload and restart for new next file"""
+        self._cancel_preload()
+        # Preload new next file based on updated filter
+        if self._batch_mode and self._batch_files:
+            self._preload_next_file(self._batch_current_index)
+
+    def _load_from_cache(self, file_path: str):
+        """Load file from preload cache (instant display)"""
+        cache = self._file_cache[file_path]
+        # Move to end (LRU)
+        self._file_cache.move_to_end(file_path)
+
+        # Set flag to prevent eventFilter crashes
+        self._background_loading = True
+        self._stop_loading_flag = True
+
+        self.statusBar().showMessage("Đang tải từ cache...")
+        QApplication.processEvents()
+
+        # Close previous handler
+        if self._pdf_handler:
+            self._pdf_handler.close()
+
+        # Open new handler (needed for export and other operations)
+        self._pdf_handler = PDFHandler(file_path)
+        self._current_file_path = file_path
+        self.preview.set_current_file_path(file_path)
+
+        # Set total pages
+        self._total_pages = cache.page_count
+
+        # Update page navigation
+        self.page_spin.setMaximum(cache.page_count)
+        self.page_spin.setValue(1)
+        self.total_pages_label.setText(str(cache.page_count))
+
+        # Calculate paths for output
+        source_path = Path(file_path)
+        if self._batch_mode:
+            output_dir = self._batch_output_dir or str(source_path.parent)
+            settings = self.settings_panel.get_settings()
+            pattern = settings.get('filename_pattern', '{gốc}_clean.pdf')
+            output_name = pattern.replace('{gốc}', source_path.stem)
+            dest_path = Path(output_dir) / output_name
+        else:
+            dest_path = source_path.parent / f"{source_path.stem}_clean{source_path.suffix}"
+
+        self._pending_file_path = str(file_path)
+        self._pending_dest_path = str(dest_path)
+
+        # Use cached pages directly
+        self._all_pages = list(cache.pages)  # Copy list
+
+        # Set thumbnails from cache
+        self.preview.start_thumbnail_loading(cache.page_count)
+        for i, thumb in enumerate(cache.thumbnails):
+            self.preview.add_thumbnail(i, thumb)
+        self.preview.finish_thumbnail_loading()
+
+        # Set preview pages
+        self.preview.set_pages(self._all_pages)
+
+        # Setup file paths display
+        self.preview.set_file_paths(str(file_path), str(dest_path))
+
+        # Update window title
+        self.setWindowTitle(f"Xóa Ghim PDF (5S) - {source_path.name}")
+
+        # Apply fit width for first file or preserve zoom
+        if self._is_first_file_in_batch:
+            self._is_first_file_in_batch = False
+            QTimer.singleShot(50, self.preview.fit_width)
+        else:
+            self._apply_zoom_to_new_file()
+
+        # Finish loading
+        self._background_loading = False
+        self._stop_loading_flag = False
+        self.statusBar().showMessage(f"Đã tải từ cache: {source_path.name}", 2000)
+
+        # Trigger zone loading after display
+        QTimer.singleShot(100, self._load_zones_after_thumbnails)
+
+        self._update_ui_state()
+
+    def _clear_preload_cache(self):
+        """Clear all preload cache (called when closing folder)"""
+        self._cancel_preload()
+        self._file_cache.clear()
 
     def _on_splitter_moved(self, pos: int, index: int):
         """Handle splitter drag - enforce minimum sidebar width and sync search width"""
@@ -1759,6 +1927,9 @@ class MainWindow(QMainWindow):
 
     def _on_close_file(self):
         """Close currently opened file or folder"""
+        # Clear preload cache when closing
+        self._clear_preload_cache()
+
         if self._batch_mode:
             # Close batch mode
             self._batch_mode = False
@@ -2848,6 +3019,8 @@ class MainWindow(QMainWindow):
         # Only clear scene when closing app (not during file operations)
         if clear_scene:
             self._clear_scenes_for_exit()
+            # Also clear preload cache when closing
+            self._clear_preload_cache()
 
         # Force garbage collection
         gc.collect()
