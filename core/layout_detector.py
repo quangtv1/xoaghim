@@ -1310,6 +1310,14 @@ class YOLODocLayNetONNXDetector:
             sess_options = ort.SessionOptions()
             sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
+            # CRITICAL: Limit CPU threads to 80% to prevent system freeze
+            # Without this, ONNX uses ALL cores causing 100% CPU on Windows
+            cpu_count = os.cpu_count() or 1
+            max_threads = max(1, int(cpu_count * 0.8))  # 80% of cores
+            sess_options.intra_op_num_threads = max_threads
+            sess_options.inter_op_num_threads = 1  # Single thread for op parallelism
+            print(f"[ONNX] CPU threads limited to {max_threads}/{cpu_count} (80%)")
+
             # Try CUDA first (most reliable for V100)
             if 'CUDAExecutionProvider' in available_providers:
                 providers = [

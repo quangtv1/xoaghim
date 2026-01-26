@@ -1833,15 +1833,22 @@ class ContinuousPreviewPanel(QFrame):
         event.ignore()
     
     def _numpy_to_pixmap(self, image: np.ndarray) -> QPixmap:
-        """Convert numpy BGR to QPixmap"""
+        """Convert numpy BGR to QPixmap
+
+        IMPORTANT: QImage must be copied BEFORE numpy array goes out of scope.
+        The .copy() on QImage copies the underlying buffer, preventing dangling
+        pointer issues that cause Windows GDI handle leaks and crashes.
+        """
         if len(image.shape) == 3:
             rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb.shape
-            qimg = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
+            # CRITICAL: Copy QImage buffer immediately to prevent dangling pointer
+            qimg = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()
         else:
             h, w = image.shape
-            qimg = QImage(image.data, w, h, w, QImage.Format_Grayscale8)
-        return QPixmap.fromImage(qimg.copy())
+            # CRITICAL: Copy QImage buffer immediately to prevent dangling pointer
+            qimg = QImage(image.data, w, h, w, QImage.Format_Grayscale8).copy()
+        return QPixmap.fromImage(qimg)
     
     def set_zone_definitions(self, zones: List[Zone]):
         """Set zone definitions - add new zones to pages based on current filter
@@ -2103,10 +2110,29 @@ class ContinuousPreviewPanel(QFrame):
         )
 
     def _clear_zone_overlays(self):
-        """Remove all zone overlay items from scene"""
+        """Remove all zone overlay items from scene
+
+        CRITICAL: Must disconnect signals and call deleteLater() to prevent
+        memory leaks. Windows GDI has strict handle limits (~10K per process).
+        Without proper cleanup, each zone edit leaks ~13 objects (1 ZoneItem +
+        8 HandleItems + signal connections), causing crashes after 20-30 operations.
+        """
         for zone in self._zones:
             try:
-                self.scene.removeItem(zone)
+                # Disconnect all signals to prevent slot reference leaks
+                zone.signals.zone_changed.disconnect()
+                zone.signals.zone_selected.disconnect()
+                zone.signals.zone_delete.disconnect()
+                zone.signals.zone_drag_started.disconnect()
+                zone.signals.zone_drag_ended.disconnect()
+            except (RuntimeError, TypeError):
+                pass  # Signal already disconnected or never connected
+
+            try:
+                if zone.scene():
+                    self.scene.removeItem(zone)
+                # CRITICAL: Must call deleteLater() to properly free Qt objects
+                zone.deleteLater()
             except RuntimeError:
                 pass  # Item already deleted
         self._zones.clear()
@@ -2378,12 +2404,18 @@ class ContinuousPreviewPanel(QFrame):
         self.scene.update()
 
     def clear_protected_regions(self):
-        """Clear all protected region overlays"""
+        """Clear all protected region overlays
+
+        CRITICAL: Must call deleteLater() after removeItem() to properly
+        free Qt graphics objects and prevent Windows GDI handle leaks.
+        """
         if hasattr(self, '_protected_region_items'):
             for page_idx, items in self._protected_region_items.items():
                 for item in items:
                     try:
-                        self.scene.removeItem(item)
+                        if item.scene():
+                            self.scene.removeItem(item)
+                        item.deleteLater()
                     except RuntimeError:
                         pass  # Item already deleted
             self._protected_region_items.clear()

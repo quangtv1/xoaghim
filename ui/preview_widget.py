@@ -136,14 +136,16 @@ class PreviewPanel(QFrame):
         self._image_height, self._image_width = image.shape[:2]
         
         # Convert to QPixmap
+        # CRITICAL: Copy QImage buffer immediately to prevent dangling pointer
+        # when numpy array goes out of scope. Fixes Windows GDI handle leaks.
         if len(image.shape) == 3:
             rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb.shape
-            qimg = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
+            qimg = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()
         else:
             h, w = image.shape
-            qimg = QImage(image.data, w, h, w, QImage.Format_Grayscale8)
-        
+            qimg = QImage(image.data, w, h, w, QImage.Format_Grayscale8).copy()
+
         pixmap = QPixmap.fromImage(qimg)
         self.image_item.setPixmap(pixmap)
         
@@ -176,9 +178,24 @@ class PreviewPanel(QFrame):
         self._zones.append(zone_item)
     
     def clear_zones(self):
-        """Xóa tất cả zones"""
+        """Xóa tất cả zones
+
+        CRITICAL: Must disconnect signals and call deleteLater() to prevent
+        memory leaks on Windows (GDI handle exhaustion).
+        """
         for zone in self._zones:
-            self.scene.removeItem(zone)
+            try:
+                # Disconnect signals to prevent slot reference leaks
+                zone.signals.zone_changed.disconnect()
+                zone.signals.zone_selected.disconnect()
+            except (RuntimeError, TypeError):
+                pass  # Signal already disconnected
+            try:
+                if zone.scene():
+                    self.scene.removeItem(zone)
+                zone.deleteLater()
+            except RuntimeError:
+                pass  # Item already deleted
         self._zones.clear()
     
     def update_zone(self, zone_id: str, x: float, y: float, w: float, h: float):
