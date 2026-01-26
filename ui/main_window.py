@@ -1483,7 +1483,8 @@ class MainWindow(QMainWindow):
     def _load_files_batch(self, pdf_files: list, base_dir: str):
         """Load multiple PDF files for batch processing"""
         # Free memory from previous session before loading new batch
-        self._cleanup_memory()
+        # defer_scene_clear=False because _rebuild_scene() will clear the scene
+        self._cleanup_memory(defer_scene_clear=False)
 
         # Check if this is a NEW folder (different from current)
         is_new_folder = self._batch_base_dir != base_dir and self._batch_base_dir != ""
@@ -1801,7 +1802,8 @@ class MainWindow(QMainWindow):
         self.preview.clear_file_paths()
 
         # Free memory (caches, processed pages, etc.)
-        self._cleanup_memory()
+        # defer_scene_clear=False because set_pages([]) already cleared the scene
+        self._cleanup_memory(defer_scene_clear=False)
 
         # Reset zoom to 100% for placeholder icons
         self.zoom_combo.blockSignals(True)
@@ -1818,7 +1820,8 @@ class MainWindow(QMainWindow):
     def _load_pdf(self, file_path: str):
         """Load file PDF"""
         # Free memory from previous file before loading new one
-        self._cleanup_memory()
+        # defer_scene_clear=False because _rebuild_scene() will clear the scene
+        self._cleanup_memory(defer_scene_clear=False)
 
         try:
             # Set flag FIRST to prevent eventFilter crashes during processEvents
