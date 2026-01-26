@@ -2112,10 +2112,13 @@ class ContinuousPreviewPanel(QFrame):
     def _clear_zone_overlays(self):
         """Remove all zone overlay items from scene
 
-        CRITICAL: Must disconnect signals and call deleteLater() to prevent
-        memory leaks. Windows GDI has strict handle limits (~10K per process).
-        Without proper cleanup, each zone edit leaks ~13 objects (1 ZoneItem +
-        8 HandleItems + signal connections), causing crashes after 20-30 operations.
+        CRITICAL: Must disconnect signals to prevent memory leaks.
+        Windows GDI has strict handle limits (~10K per process).
+        Signal connections keep references alive, preventing GC.
+
+        Note: ZoneItem inherits from QGraphicsRectItem (not QObject),
+        so deleteLater() is not available. Python GC handles cleanup
+        after removeItem() and clearing references.
         """
         for zone in self._zones:
             try:
@@ -2131,8 +2134,6 @@ class ContinuousPreviewPanel(QFrame):
             try:
                 if zone.scene():
                     self.scene.removeItem(zone)
-                # CRITICAL: Must call deleteLater() to properly free Qt objects
-                zone.deleteLater()
             except RuntimeError:
                 pass  # Item already deleted
         self._zones.clear()
@@ -2406,8 +2407,8 @@ class ContinuousPreviewPanel(QFrame):
     def clear_protected_regions(self):
         """Clear all protected region overlays
 
-        CRITICAL: Must call deleteLater() after removeItem() to properly
-        free Qt graphics objects and prevent Windows GDI handle leaks.
+        Note: QGraphicsRectItem doesn't inherit from QObject, so deleteLater()
+        is not available. Python GC handles cleanup after removeItem().
         """
         if hasattr(self, '_protected_region_items'):
             for page_idx, items in self._protected_region_items.items():
@@ -2415,7 +2416,6 @@ class ContinuousPreviewPanel(QFrame):
                     try:
                         if item.scene():
                             self.scene.removeItem(item)
-                        item.deleteLater()
                     except RuntimeError:
                         pass  # Item already deleted
             self._protected_region_items.clear()

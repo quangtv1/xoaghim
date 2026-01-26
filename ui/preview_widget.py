@@ -180,8 +180,9 @@ class PreviewPanel(QFrame):
     def clear_zones(self):
         """Xóa tất cả zones
 
-        CRITICAL: Must disconnect signals and call deleteLater() to prevent
-        memory leaks on Windows (GDI handle exhaustion).
+        Disconnect signals to prevent memory leaks on Windows.
+        Note: ZoneItem inherits from QGraphicsRectItem (not QObject),
+        so deleteLater() is not available. Python GC handles cleanup.
         """
         for zone in self._zones:
             try:
@@ -193,7 +194,6 @@ class PreviewPanel(QFrame):
             try:
                 if zone.scene():
                     self.scene.removeItem(zone)
-                zone.deleteLater()
             except RuntimeError:
                 pass  # Item already deleted
         self._zones.clear()
