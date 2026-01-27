@@ -419,8 +419,8 @@ class ContinuousGraphicsView(QGraphicsView):
         r, g, b = color.red(), color.green(), color.blue()
         argb = (255 << 24) | (r << 16) | (g << 8) | b  # 0xFFrrggbb
 
-        # Line thickness = 2 pixels (no DPI scaling)
-        thickness = 2
+        # Line thickness = 2 screen pixels (scaled by DPI for consistency)
+        thickness = max(1, int(2 * dpr))
         half_t = thickness // 2
 
         # Draw horizontal line with thickness
