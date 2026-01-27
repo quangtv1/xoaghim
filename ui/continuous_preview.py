@@ -651,7 +651,7 @@ class ContinuousPreviewPanel(QFrame):
             self.prev_btn = QPushButton("◂")
             self.prev_btn.setFixedSize(22, 22)
             self.prev_btn.setCursor(Qt.PointingHandCursor)
-            self.prev_btn.setToolTip("File trước")
+            self.prev_btn.setToolTip("File trước ( [ )")
             self.prev_btn.setStyleSheet("""
                 QPushButton {
                     background-color: #D1D5DB;
@@ -678,7 +678,7 @@ class ContinuousPreviewPanel(QFrame):
             self.next_btn = QPushButton("▸")
             self.next_btn.setFixedSize(22, 22)
             self.next_btn.setCursor(Qt.PointingHandCursor)
-            self.next_btn.setToolTip("File tiếp theo")
+            self.next_btn.setToolTip("File tiếp theo ( ] )")
             self.next_btn.setStyleSheet("""
                 QPushButton {
                     background-color: #D1D5DB;
