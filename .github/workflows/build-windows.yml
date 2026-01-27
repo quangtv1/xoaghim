@@ -116,48 +116,65 @@ jobs:
           name: XoaGhim-${{ steps.version.outputs.VERSION }}-Windows
           path: dist/XoaGhim-${{ steps.version.outputs.VERSION }}-Windows.zip
 
-      - name: Create Release
+      - name: Check if release exists and get notes
+        id: check_release
+        run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
+          $tag = "v$version"
+
+          # Check if release exists
+          $releaseExists = $false
+          $existingNotes = ""
+
+          try {
+            $release = gh release view $tag --json body 2>&1
+            if ($LASTEXITCODE -eq 0) {
+              $releaseExists = $true
+              $existingNotes = ($release | ConvertFrom-Json).body
+              Write-Host "Release exists, preserving notes"
+            }
+          } catch {
+            Write-Host "Release does not exist"
+          }
+
+          # Determine release notes
+          $notesFile = "release-notes/$version.md"
+          if ($releaseExists -and $existingNotes) {
+            # Same version rebuild: preserve existing notes
+            $notes = $existingNotes
+            Write-Host "Using existing release notes"
+          } elseif (Test-Path $notesFile) {
+            # New version: read from file
+            $notes = Get-Content $notesFile -Raw
+            Write-Host "Using notes from $notesFile"
+          } else {
+            # Fallback: generate from recent commits
+            $notes = @"
+          ## Xóa Vết Ghim PDF v$version
+
+          ### Thay đổi
+          $(git log --oneline -10 | ForEach-Object { "- $_" })
+
+          ### Tải về
+          - **XoaGhim-Windows.zip** - Giải nén và chạy ``XoaGhim.exe``
+          "@
+            Write-Host "Using auto-generated notes from commits"
+          }
+
+          # Save notes to file for release step
+          $notes | Out-File -FilePath "RELEASE_NOTES.md" -Encoding utf8
+
+          echo "RELEASE_EXISTS=$releaseExists" >> $env:GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create or Update Release
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v1
         with:
           files: dist/XoaGhim-${{ steps.version.outputs.VERSION }}-Windows.zip
           tag_name: v${{ steps.version.outputs.VERSION }}
           name: "Xóa Ghim PDF v${{ steps.version.outputs.VERSION }}"
-          body: |
-            ## Xóa Vết Ghim PDF v${{ steps.version.outputs.VERSION }}
-
-            ### Tính năng mới
-            - **Xử lý song song (Parallel Processing)** - Xử lý nhiều file PDF đồng thời, tự động scale theo CPU/RAM (max 80%)
-            - **In-Memory Buffer** - Loại bỏ ghi file tạm, giảm I/O đáng kể
-            - **Skip Unchanged Pages** - Trang không có vùng chọn được copy trực tiếp (không render)
-            - **Hiển thị số Processes** - Popup tiến trình hiện số processes đang sử dụng
-            - **Undo (Ctrl+Z)** - Hoàn tác thao tác vùng chọn (thêm/xóa/sửa) tối đa 79 lần
-            - **Phím Delete** - Xóa vùng chọn đang được chọn bằng phím Delete/Backspace
-            - **Hybrid Zone Sizing** - Góc dùng pixel cố định, cạnh dùng % chiều dài + pixel độ sâu
-
-            ### Cải tiến
-            - Tăng tốc xử lý batch: song song hóa + in-memory buffer
-            - Undo hoạt động cho cả vùng tùy biến và vùng preset (góc/cạnh)
-            - Giữ nguyên zoom khi chuyển file trong batch mode
-            - Loading overlay khi phát hiện layout
-            - Batch dialog hiển thị số file và tiến trình trang
-            - Lưu zoom % và sidebar width vào config ngay lập tức
-
-            ### Sửa lỗi
-            - **Fix nhập số trang nhảy số** - Nhập số trang ở bottom bar giờ chính xác
-            - **Fix Preview/Clean mismatch** - Vùng chọn giờ khớp giữa Preview Đích và file Clean
-            - **Fix Zone Riêng batch mode** - Zone Riêng (Từng trang) giờ hoạt động đúng trong chế độ thư mục
-            - **Fix double file loading** - Khắc phục lỗi số trang bị nhân đôi khi chuyển file
-            - **Fix sidebar không kéo được** - Thanh sidebar giờ có thể kéo rộng/thu hẹp
-            - **Fix zone toggle không cập nhật preview** - Bật/tắt zone giờ cập nhật đúng trên preview
-            - **Bỏ mặc định corner_tl** - Nạp trạng thái zone từ file config thay vì hardcode
-
-            ### Cải tiến giao diện
-            - **Zone Riêng màu xanh lá** - Phân biệt Zone Riêng (xanh lá) với Zone Chung (xanh dương)
-            - **Kích thước zone mặc định mới** - Góc: 130x130px, Cạnh: 50px depth
-            - **Reset zone size khi bật lại** - Tắt/bật zone sẽ reset về kích thước mặc định
-
-            ### Tải về
-            - **XoaGhim-Windows.zip** - Giải nén và chạy `XoaGhim.exe`
+          body_path: RELEASE_NOTES.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
