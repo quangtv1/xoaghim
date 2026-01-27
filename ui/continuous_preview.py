@@ -401,8 +401,8 @@ class ContinuousGraphicsView(QGraphicsView):
         return super().eventFilter(obj, event)
 
     def _create_crosshair_cursor(self, color: QColor) -> QCursor:
-        """Create custom crosshair cursor with specified color (3x longer arms)"""
-        line_length = 30  # 3x longer than default ~10px
+        """Create custom crosshair cursor with specified color (10x longer arms)"""
+        line_length = 100  # 10x longer than default ~10px
         size = line_length * 2 + 1  # Odd size for center pixel
         center = size // 2
 
@@ -420,8 +420,8 @@ class ContinuousGraphicsView(QGraphicsView):
         r, g, b = color.red(), color.green(), color.blue()
         argb = (255 << 24) | (r << 16) | (g << 8) | b  # 0xFFrrggbb
 
-        # Line thickness = 2 screen pixels (scaled by DPI for consistency)
-        thickness = max(1, int(2 * dpr))
+        # Line thickness = 1 logical pixel (matches zone border)
+        thickness = max(1, int(1 * dpr))
         half_t = thickness // 2
 
         # Draw horizontal line with thickness
