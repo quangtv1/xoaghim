@@ -994,6 +994,12 @@ class MainWindow(QMainWindow):
         self.draw_remove_minus.setAutoRepeat(False)
         self.draw_remove_minus.activated.connect(self._toggle_draw_remove)
 
+        # Keyboard shortcuts for file navigation in batch mode
+        self.prev_file_shortcut = QShortcut(QKeySequence("["), self)
+        self.prev_file_shortcut.activated.connect(self._on_prev_file)
+        self.next_file_shortcut = QShortcut(QKeySequence("]"), self)
+        self.next_file_shortcut.activated.connect(self._on_next_file)
+
         # Cancel button (hidden by default)
         self.cancel_btn = QPushButton("Dừng")
         self.cancel_btn.setStyleSheet("""
