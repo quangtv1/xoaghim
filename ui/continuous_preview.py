@@ -3,6 +3,7 @@ Continuous Preview - Preview liên tục nhiều trang với nền đen
 """
 
 import os
+from pathlib import Path
 
 from .undo_manager import UndoManager, UndoAction
 from .page_thumbnail_sidebar import ThumbnailPanel
@@ -1242,8 +1243,8 @@ class ContinuousPreviewPanel(QFrame):
             changed = True
         # else: no zones and path not in storage - nothing to do
 
-        # Only persist if we actually changed something
-        if changed and persist and self._batch_base_dir:
+        # Persist if we actually changed something
+        if changed and persist:
             self._persist_zones_to_disk()
 
     def load_per_file_zones(self, file_path: str) -> bool:
@@ -1303,21 +1304,22 @@ class ContinuousPreviewPanel(QFrame):
         """
         self._per_file_zones.clear()
         # Persist the empty state to disk (unless closing batch mode)
-        if not reset_paths and self._batch_base_dir:
+        if not reset_paths:
             self._persist_zones_to_disk()
         if reset_paths:
             self._current_file_path = ""
             self._batch_base_dir = ""
 
     def _persist_zones_to_disk(self):
-        """Persist per-file zones to disk for crash recovery."""
-        if not self._batch_base_dir:
+        """Persist per-file zones to disk (.xoaghim.json)."""
+        # Use batch_base_dir or current file's parent folder
+        base_dir = self._batch_base_dir
+        if not base_dir and self._current_file_path:
+            base_dir = str(Path(self._current_file_path).parent)
+        if not base_dir:
             return
         from core.config_manager import get_config_manager
-        get_config_manager().save_per_file_zones(
-            self._batch_base_dir,
-            self._per_file_zones
-        )
+        get_config_manager().save_per_file_zones(base_dir, self._per_file_zones)
 
     def load_persisted_zones(self, batch_base_dir: str):
         """Load persisted zones from disk for crash recovery.

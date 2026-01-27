@@ -1,23 +1,17 @@
 """
 Config Manager - Quản lý lưu/load cấu hình zones
 
-Hỗ trợ 2 chế độ:
-1. Portable Mode: Lưu .xoaghim.json trong thư mục PDF
-   - Copy folder = copy config → hoạt động trên máy khác
-   - Dùng relative path cho tên file
+Portable Mode: Lưu .xoaghim.json trong thư mục PDF
+- Copy folder = copy config → hoạt động trên máy khác
+- Dùng relative path cho tên file
+- ONLY source of truth for zones
 
-2. App Data Mode (fallback): Lưu trong thư mục user
-   - macOS: ~/Library/Application Support/XoaGhim/config.json
-   - Windows: %APPDATA%/XoaGhim/config.json
-   - Linux: ~/.config/XoaGhim/config.json
-
-Ưu tiên: .xoaghim.json > app data
+App Data (config.json): UI preferences only (zoom, toolbar state, sidebar width)
 """
 
 import json
 import os
 import sys
-import hashlib
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -47,32 +41,6 @@ def get_config_dir() -> Path:
 def get_config_path() -> Path:
     """Get full path to config file"""
     return get_config_dir() / 'config.json'
-
-
-def get_zones_dir() -> Path:
-    """Get directory for per-file zone storage"""
-    zones_dir = get_config_dir() / 'zones'
-    zones_dir.mkdir(parents=True, exist_ok=True)
-    return zones_dir
-
-
-def _path_to_hash(path: str) -> str:
-    """Convert absolute path to a short hash for filename"""
-    # Use MD5 hash (truncated) for reasonable filename length
-    return hashlib.md5(path.encode('utf-8')).hexdigest()[:16]
-
-
-def _get_zones_file_path(source_path: str) -> Path:
-    """Get JSON file path for a specific source (file or folder)
-
-    Args:
-        source_path: Absolute path to file or folder
-
-    Returns:
-        Path to zones JSON file
-    """
-    hash_name = _path_to_hash(source_path)
-    return get_zones_dir() / f'{hash_name}.json'
 
 
 def get_portable_config_path(folder_path: str) -> Path:
@@ -160,11 +128,7 @@ class PortableConfigManager:
         return result
 
     def save_per_file_zones(self, per_file_zones: Dict[str, Dict[int, Dict[str, Any]]]):
-        """Save per-file zones with absolute paths converted to relative"""
-        # Load existing to preserve zones for files not in current batch
-        existing = self._data.get('per_file_zones', {})
-
-        # Convert absolute paths to relative
+        """Save per-file zones - full replacement, no merge"""
         zones_serializable = {}
         for file_path, page_zones in per_file_zones.items():
             rel_path = _to_relative_path(file_path, self._folder_path)
@@ -172,12 +136,6 @@ class PortableConfigManager:
                 str(page_idx): zone_data
                 for page_idx, zone_data in page_zones.items()
             }
-
-        # Merge: keep existing zones for files not in current update
-        for rel_path, page_zones in existing.items():
-            if rel_path not in zones_serializable:
-                zones_serializable[rel_path] = page_zones
-
         self._data['per_file_zones'] = zones_serializable
         self._dirty = True
         self._save()
@@ -193,19 +151,11 @@ class PortableConfigManager:
         return result
 
     def save_custom_zones(self, custom_zones: Dict[str, Dict[str, Any]]):
-        """Save custom zones with absolute paths converted to relative"""
-        existing = self._data.get('custom_zones', {})
-
+        """Save custom zones - full replacement, no merge"""
         zones_serializable = {}
         for file_path, zones in custom_zones.items():
             rel_path = _to_relative_path(file_path, self._folder_path)
             zones_serializable[rel_path] = zones
-
-        # Merge
-        for rel_path, zones in existing.items():
-            if rel_path not in zones_serializable:
-                zones_serializable[rel_path] = zones
-
         self._data['custom_zones'] = zones_serializable
         self._dirty = True
         self._save()
@@ -233,33 +183,46 @@ class ConfigManager:
         self._config: Dict[str, Any] = {}
         self._current_source: Optional[str] = None  # Current folder/file being worked on
         self._portable_config: Optional[PortableConfigManager] = None
+        self._warned_hash_files = False
         self._load()
+        self._check_obsolete_hash_files()
+
+    def _check_obsolete_hash_files(self):
+        """One-time check for obsolete hash-based zone files."""
+        if self._warned_hash_files:
+            return
+        zones_dir = get_config_dir() / 'zones'
+        if zones_dir.exists():
+            hash_files = list(zones_dir.glob('*.json'))
+            if hash_files:
+                print(f"[Config] Found {len(hash_files)} obsolete hash files in {zones_dir}")
+                print("[Config] These are no longer used - zones now stored in .xoaghim.json per folder")
+                print("[Config] You can safely delete the 'zones' folder to clean up")
+                self._warned_hash_files = True
 
     def set_current_source(self, source_path: str):
         """Set the current folder/file being worked on.
 
-        If source is a folder with .xoaghim.json, enables portable mode.
-        Call this when opening a folder or file.
+        Always enables portable mode - saves to .xoaghim.json in:
+        - Folder itself (if source is folder)
+        - Parent folder (if source is file)
         """
         self._current_source = source_path
 
-        # Check if it's a folder and has/should have .xoaghim.json
+        # Always enable portable mode
         source = Path(source_path)
         if source.is_dir():
+            # Folder mode: save .xoaghim.json in the folder
             self._portable_config = PortableConfigManager(source_path)
-            print(f"[Config] Portable mode: {source_path}")
+            print(f"[Config] Portable mode (folder): {source_path}")
         elif source.is_file():
-            # Single file mode - use parent folder if .xoaghim.json exists there
-            parent = source.parent
-            portable_path = get_portable_config_path(str(parent))
-            if portable_path.exists():
-                self._portable_config = PortableConfigManager(str(parent))
-                print(f"[Config] Portable mode (single file): {parent}")
-            else:
-                self._portable_config = None
-                print(f"[Config] App data mode: {source_path}")
+            # Single file mode: save .xoaghim.json in parent folder
+            parent = str(source.parent)
+            self._portable_config = PortableConfigManager(parent)
+            print(f"[Config] Portable mode (single file): {parent}")
         else:
             self._portable_config = None
+            print(f"[Config] No portable mode: {source_path}")
 
     def clear_current_source(self):
         """Clear current source (when closing file/folder)"""
@@ -330,8 +293,10 @@ class ConfigManager:
             'text_protection': True,
         }
         """
+        print(f"[Config] save_zone_config called, portable_config={self._portable_config is not None}")
         # Portable mode: save to .xoaghim.json
         if self._portable_config:
+            print(f"[Config] Saving to portable config: {self._portable_config._config_path}")
             self._portable_config.save_global_settings(zone_config)
 
         # Always save to app data as well (for default settings)
@@ -362,79 +327,20 @@ class ConfigManager:
         self._config[key] = value
         self._save()
 
-    # === Per-source zone persistence (each file/folder has its own JSON) ===
-
-    def _load_source_zones(self, source_path: str) -> Dict[str, Any]:
-        """Load zones for a specific source (file or folder)
-
-        Args:
-            source_path: Absolute path to file or folder
-
-        Returns:
-            Zone data dict or empty dict if not found
-        """
-        try:
-            zones_file = _get_zones_file_path(source_path)
-            if zones_file.exists():
-                with open(zones_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    # Verify source path matches (hash collision protection)
-                    if data.get('source_path') == source_path:
-                        return data
-        except Exception as e:
-            print(f"[Config] Failed to load zones for {source_path}: {e}")
-        return {}
-
-    def _save_source_zones(self, source_path: str, data: Dict[str, Any]):
-        """Save zones for a specific source (file or folder)
-
-        Args:
-            source_path: Absolute path to file or folder
-            data: Zone data to save
-        """
-        try:
-            zones_file = _get_zones_file_path(source_path)
-            data['source_path'] = source_path  # Store source path for verification
-            with open(zones_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-                f.flush()
-                os.fsync(f.fileno())  # Force write to disk
-        except Exception as e:
-            print(f"[Config] Failed to save zones for {source_path}: {e}")
+    # === Per-source zone persistence (portable mode only - .xoaghim.json) ===
 
     def save_per_file_zones(self, source_path: str, per_file_zones: Dict[str, Dict[int, Dict[str, tuple]]]):
-        """Save per-file zones for a source (file or folder)
-
-        In portable mode: saves to .xoaghim.json with relative paths
-        Otherwise: saves to zones/<hash>.json with absolute paths
+        """Save per-file zones to .xoaghim.json (portable mode only)
 
         Args:
             source_path: Absolute path to source (file or folder)
             per_file_zones: {file_path: {page_idx: {zone_id: zone_data}}}
         """
-        # Portable mode: use .xoaghim.json
         if self._portable_config:
             self._portable_config.save_per_file_zones(per_file_zones)
-            return
-
-        # Fallback: use hash-based storage
-        data = self._load_source_zones(source_path)
-
-        # Convert page indices from int to str for JSON
-        zones_serializable = {}
-        for file_path, page_zones in per_file_zones.items():
-            zones_serializable[file_path] = {
-                str(page_idx): zone_data
-                for page_idx, zone_data in page_zones.items()
-            }
-        data['per_page_zones'] = zones_serializable
-        self._save_source_zones(source_path, data)
 
     def get_per_file_zones(self, source_path: str) -> Dict[str, Dict[int, Dict[str, tuple]]]:
-        """Load per-file zones for a source
-
-        In portable mode: loads from .xoaghim.json with relative paths converted
-        Otherwise: loads from zones/<hash>.json
+        """Load per-file zones from .xoaghim.json (portable mode only)
 
         Args:
             source_path: Absolute path to source (file or folder)
@@ -442,48 +348,22 @@ class ConfigManager:
         Returns:
             {file_path: {page_idx: {zone_id: zone_data}}} or empty dict
         """
-        # Portable mode: use .xoaghim.json
-        if self._portable_config and self._portable_config.exists():
+        if self._portable_config:
             return self._portable_config.get_per_file_zones()
-
-        # Fallback: use hash-based storage
-        data = self._load_source_zones(source_path)
-
-        # Convert page indices from str back to int
-        raw_zones = data.get('per_page_zones', {})
-        result = {}
-        for file_path, page_zones in raw_zones.items():
-            result[file_path] = {
-                int(page_idx): zone_data
-                for page_idx, zone_data in page_zones.items()
-            }
-        return result
+        return {}
 
     def save_per_file_custom_zones(self, source_path: str, per_file_custom_zones: Dict[str, Dict[str, Any]]):
-        """Save per-file custom Zone objects for a source
-
-        In portable mode: saves to .xoaghim.json
-        Otherwise: saves to zones/<hash>.json
+        """Save per-file custom zones to .xoaghim.json (portable mode only)
 
         Args:
             source_path: Absolute path to source (file or folder)
             per_file_custom_zones: {file_path: {zone_id: zone_dict}}
         """
-        # Portable mode: use .xoaghim.json
         if self._portable_config:
             self._portable_config.save_custom_zones(per_file_custom_zones)
-            return
-
-        # Fallback: use hash-based storage
-        data = self._load_source_zones(source_path)
-        data['custom_zones'] = per_file_custom_zones
-        self._save_source_zones(source_path, data)
 
     def get_per_file_custom_zones(self, source_path: str) -> Dict[str, Dict[str, Any]]:
-        """Load per-file custom zones for a source
-
-        In portable mode: loads from .xoaghim.json
-        Otherwise: loads from zones/<hash>.json
+        """Load per-file custom zones from .xoaghim.json (portable mode only)
 
         Args:
             source_path: Absolute path to source (file or folder)
@@ -491,32 +371,14 @@ class ConfigManager:
         Returns:
             {file_path: {zone_id: zone_dict}} or empty dict
         """
-        # Portable mode: use .xoaghim.json
-        if self._portable_config and self._portable_config.exists():
+        if self._portable_config:
             return self._portable_config.get_custom_zones()
-
-        # Fallback: use hash-based storage
-        data = self._load_source_zones(source_path)
-        return data.get('custom_zones', {})
+        return {}
 
     def clear_source_zones(self, source_path: str):
-        """Clear zones for a specific source
-
-        In portable mode: clears .xoaghim.json
-        Otherwise: deletes zones/<hash>.json
-        """
-        # Portable mode: clear .xoaghim.json
+        """Clear zones for current source (clears .xoaghim.json)"""
         if self._portable_config:
             self._portable_config.clear()
-            return
-
-        # Fallback: delete hash-based file
-        try:
-            zones_file = _get_zones_file_path(source_path)
-            if zones_file.exists():
-                zones_file.unlink()
-        except Exception as e:
-            print(f"[Config] Failed to clear zones for {source_path}: {e}")
 
     # Legacy compatibility - redirect to new API
     def clear_batch_zones(self):

@@ -1370,8 +1370,13 @@ class SettingsPanel(QWidget):
             self._batch_base_dir = ""
 
     def _persist_custom_zones_to_disk(self):
-        """Persist per-file custom zones to disk for crash recovery."""
-        if not self._batch_base_dir:
+        """Persist per-file custom zones to disk (.xoaghim.json)."""
+        # Use batch_base_dir or current file's parent folder
+        base_dir = self._batch_base_dir
+        if not base_dir and self._current_file_path:
+            from pathlib import Path
+            base_dir = str(Path(self._current_file_path).parent)
+        if not base_dir:
             return
         from core.config_manager import get_config_manager
         # Convert Zone objects to serializable dicts
@@ -1381,10 +1386,7 @@ class SettingsPanel(QWidget):
                 zone_id: self._zone_to_dict(zone)
                 for zone_id, zone in zones.items()
             }
-        get_config_manager().save_per_file_custom_zones(
-            self._batch_base_dir,
-            serializable
-        )
+        get_config_manager().save_per_file_custom_zones(base_dir, serializable)
 
     def _zone_to_dict(self, zone: Zone) -> dict:
         """Convert Zone to serializable dict."""

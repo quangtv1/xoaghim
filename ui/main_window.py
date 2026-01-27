@@ -2710,6 +2710,7 @@ class MainWindow(QMainWindow):
 
     def _persist_all_zones(self):
         """Persist all zones immediately to memory and disk (crash recovery)"""
+        print(f"[DEBUG] _persist_all_zones called, batch_base_dir={self._batch_base_dir}")
         # Save Zone chung (preset + custom with filter != 'none') to config.json
         self.settings_panel._save_zone_config()
         # Save Zone riêng (Tự do zones) - works for both batch and single file mode
