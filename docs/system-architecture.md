@@ -1,7 +1,7 @@
 # XoaGhim PDF - System Architecture
 
-**Last Updated:** 2026-01-26
-**Version:** 1.1.22
+**Last Updated:** 2026-01-27
+**Version:** 1.1.23
 
 ---
 
@@ -101,18 +101,18 @@ XoaGhim follows a **layered architecture pattern** with clear separation of conc
 │      - User interactions             │
 └────────────┬────────────────────────┘
              │
-    ┌────────┴──────────┐
-    │                   │
-┌───▼──────────────┐  ┌─▼───────────────┐
-│  ProcessThread   │  │ BatchProcess    │
-│  (single file)   │  │ Thread (multiple)│
-│  - PDF loading   │  │ - Parallel exec │
-│  - Processing    │  │ - File iteration│
-│  - Exporting     │  │ - Progress track│
-│  - Signals:      │  │ - Error recovery│
-│    progress,     │  │                 │
-│    finished      │  │                 │
-└──────────────────┘  └─────────────────┘
+    ┌────────┴──────────┬─────────────┐
+    │                   │             │
+┌───▼──────────────┐  ┌─▼────────────┐ ┌─▼──────────────┐
+│  ProcessThread   │  │ BatchProcess │ │ ThreadPoolExec │
+│  (single file)   │  │ Thread       │ │ (v1.1.23)      │
+│  - PDF loading   │  │ - Parallel   │ │ - Page counts  │
+│  - Processing    │  │   exec       │ │ - File preload │
+│  - Exporting     │  │ - File iter  │ │ - AI preload   │
+│  - Signals:      │  │ - Progress   │ │ - Non-blocking │
+│    progress,     │  │ - Recovery   │ │   I/O          │
+│    finished      │  │              │ │                │
+└──────────────────┘  └──────────────┘ └────────────────┘
 ```
 
 **State Management:**
@@ -120,6 +120,10 @@ XoaGhim follows a **layered architecture pattern** with clear separation of conc
 - Shared via signals/slots
 - Config persistence via ConfigManager
 - Per-document state in handler objects
+- Background task coordination (v1.1.23)
+  - Lazy page count loading tracked by sidebar
+  - File preload status monitored by batch thread
+  - AI preload completion signaled from worker thread
 
 ### 3. Business Logic Layer (core/)
 
@@ -267,14 +271,26 @@ File System                    Application Memory
 
 **Caching Strategy:**
 ```
+Sliding Window Preview (v1.1.23):
+  ├─ Current page ±5 pages = 10-page window max in RAM
+  ├─ Auto-purges pages outside window
+  ├─ Reduces memory for large PDFs (100+ pages)
+  └─ Maintains smooth scrolling experience
+
 Page Cache (LRU):
   Page N-2 ← Page N-1 ← Page N (current) → Page N+1 → Page N+2
-  [Keep max 10 pages in memory]
+  [Keep max 10 pages in memory, auto-purge outside window]
 
 AI Model Cache:
   - Downloaded to: ~/.cache/XoaGhim/ or %APPDATA%/XoaGhim/models/
   - Lazy loaded on first use
+  - Auto-preload when text protection enabled (v1.1.23)
   - Reused for subsequent detections
+
+Background File Preload (v1.1.23):
+  - Pre-render next file in batch mode
+  - Parallel with current file processing
+  - Reduces wait time between batch files
 ```
 
 ---

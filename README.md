@@ -2,7 +2,7 @@
 
 Ứng dụng desktop dùng AI để xóa vết ghim (staple marks) từ tài liệu PDF scan.
 
-**Phiên bản:** 1.1.22 | **Tổ chức:** HUCE | **Framework:** PyQt5 | **Python 3.8+** | **Ngày cập nhật:** 2026-01-26
+**Phiên bản:** 1.1.23 | **Tổ chức:** HUCE | **Framework:** PyQt5 | **Python 3.8+** | **Ngày cập nhật:** 2026-01-27
 
 ## Tính Năng Nổi Bật
 
@@ -11,8 +11,10 @@
 - **Drag & Drop** - Hỗ trợ kéo thả trên macOS/Windows
 - **Lọc trang** - Tất cả/lẻ/chẵn/trang hiện tại
 - **Bộ lọc Sidebar** - Lọc file theo tên và số trang (batch mode)
+- **Lazy page count loading** - Tải số trang từng lô (v1.1.23)
 - **Loading overlay** - Spinner khi mở file PDF lớn (>20 trang)
 - **Auto-recovery** - Tự động khôi phục file/folder và vùng chọn khi crash
+- **Keyboard nav batch** - Phím [ ] chuyển file trước/sau (v1.1.23)
 
 ### Chọn Vùng Xử Lý
 - **8 Preset Zones** - 4 góc + 4 cạnh
@@ -33,14 +35,17 @@
 - **AI Layout Detection** - YOLO DocLayNet với ONNX Runtime
   - Tự động nhận diện: text, table, figure, caption
   - Loại trừ vùng bảo vệ khỏi xử lý
+  - **Auto preload AI** khi bật bảo vệ text (v1.1.23)
 
 ### Preview & Xuất File
 - **Song song** - Gốc | Đích (realtime sync)
 - **Trang thu nhỏ** - Thumbnail sidebar với highlight trang hiện tại
 - **Sync scroll/zoom** - Đồng bộ giữa 2 panel
 - **Giữ zoom** - Batch mode giữ nguyên zoom khi chuyển file
+- **Sliding window preview** - Chỉ tải 10 trang trong RAM (±5 từ trang hiện tại) (v1.1.23)
 - **Liên tiếp/Trang** - Chế độ xem lựa chọn
 - **DPI 72-300** - Nén JPEG tùy chọn
+- **Background preload** - Tải file tiếp theo trong batch mode (v1.1.23)
 
 ## Cài Đặt
 
@@ -54,7 +59,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-**Windows Build:** [XoaGhim-1.1.22-Windows.zip](https://github.com/quangtv1/xoaghim/releases/latest)
+**Windows Build:** [XoaGhim-1.1.23-Windows.zip](https://github.com/quangtv1/xoaghim/releases/latest)
 
 ## Sử Dụng
 

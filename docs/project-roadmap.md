@@ -1,13 +1,28 @@
 # XoaGhim PDF - Project Roadmap
 
-**Last Updated:** 2026-01-26
-**Current Version:** 1.1.22
+**Last Updated:** 2026-01-27
+**Current Version:** 1.1.23
 
 ---
 
 ## Release Timeline
 
-### v1.1.22 (Current - Stable)
+### v1.1.23 (Current - Stable)
+
+**Status:** Major Performance & UX Improvements Released
+- Sliding window preview (10-page RAM window ±5 from current)
+- AI detection preload when text protection enabled
+- Background file preload in batch mode
+- Lazy page count loading in batch sidebar
+- Keyboard shortcuts for batch navigation ([ ] prev/next file)
+- Fixed panel centering with different page sizes
+- Fixed TextProtectionOptions attribute access
+- Fixed _load_from_cache invalid method call
+
+**Release Date:** 2026-01-27
+**Status:** Stable/Production
+
+### v1.1.22 (Previous - Stable)
 
 **Status:** All Bug Fixes & Features Complete
 - Fixed "Xóa tất cả" not persisting to JSON in single/batch mode
@@ -19,7 +34,12 @@
 **Release Date:** 2026-01-26
 **Status:** Stable/Production
 
-**Cumulative v1.1.x Features:**
+**Cumulative v1.1.x Features (v1.1.23):**
+- Sliding window preview (10-page RAM window ±5) for large PDFs
+- AI detection preload when text protection enabled
+- Background file preload in batch mode
+- Lazy page count loading (ThreadPoolExecutor) in sidebar
+- Keyboard batch navigation ([ ] prev/next file)
 - Sidebar file filters (name + page count)
 - Loading overlay for large PDFs (>20 pages)
 - Zone counter on status bar (global + per-file + per-page)
@@ -461,6 +481,7 @@ Before each release:
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
+| 1.3 | 2026-01-27 | Docs Manager | Updated for v1.1.23 release (sliding window + performance) |
 | 1.2 | 2026-01-26 | Docs Manager | Updated for v1.1.22 release (bug fixes + stability) |
 | 1.1 | 2026-01-19 | Docs Manager | Updated for v1.1.21 release (all core features complete) |
 | 1.0 | 2026-01-17 | Team | Initial roadmap (v1.1.18 baseline) |
