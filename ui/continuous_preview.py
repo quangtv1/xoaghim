@@ -248,6 +248,8 @@ class ContinuousGraphicsView(QGraphicsView):
         # Draw mode: None, 'remove', or 'protect'
         self._draw_mode = None
         self._drawing = False
+        # Custom crosshair cursors (cached)
+        self._crosshair_cursors = {}
         self._draw_start = None
         self._draw_rect_item = None
         self._page_bounds = None  # (x, y, w, h) of current page (fallback)
@@ -359,9 +361,9 @@ class ContinuousGraphicsView(QGraphicsView):
             self.viewport().setMouseTracking(True)
             # Install event filter on viewport to catch enter/leave
             self.viewport().installEventFilter(self)
-            # Set CrossCursor immediately if mouse is inside viewport
+            # Set custom crosshair cursor immediately if mouse is inside viewport
             if self.viewport().underMouse():
-                self.viewport().setCursor(Qt.CrossCursor)
+                self.viewport().setCursor(self._get_draw_cursor())
         else:
             # Remove event filter and restore cursor
             self.viewport().removeEventFilter(self)
@@ -381,7 +383,7 @@ class ContinuousGraphicsView(QGraphicsView):
         """Handle viewport events for cursor in draw mode"""
         if obj == self.viewport() and self._draw_mode:
             if event.type() == QEvent.Enter:
-                self.viewport().setCursor(Qt.CrossCursor)
+                self.viewport().setCursor(self._get_draw_cursor())
             elif event.type() == QEvent.Leave:
                 self.viewport().unsetCursor()
             elif event.type() == QEvent.MouseMove:
@@ -393,9 +395,47 @@ class ContinuousGraphicsView(QGraphicsView):
                     # Over zone - let zone set its own cursor (resize handles, move cursor)
                     self.viewport().unsetCursor()
                 else:
-                    # Over empty space - show CrossCursor
-                    self.viewport().setCursor(Qt.CrossCursor)
+                    # Over empty space - show custom crosshair cursor
+                    self.viewport().setCursor(self._get_draw_cursor())
         return super().eventFilter(obj, event)
+
+    def _create_crosshair_cursor(self, color: QColor) -> QCursor:
+        """Create custom crosshair cursor with specified color (3x larger than default)"""
+        size = 48  # 3x larger than default ~16px
+        center = size // 2
+        line_length = 20  # Length of each arm
+
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        pen = QPen(color, 2)
+        painter.setPen(pen)
+
+        # Draw horizontal line
+        painter.drawLine(center - line_length, center, center + line_length, center)
+        # Draw vertical line
+        painter.drawLine(center, center - line_length, center, center + line_length)
+
+        painter.end()
+
+        return QCursor(pixmap, center, center)
+
+    def _get_draw_cursor(self) -> QCursor:
+        """Get crosshair cursor for current draw mode (cached)"""
+        if self._draw_mode == 'protect':
+            color_key = 'pink'
+            color = QColor(244, 114, 182)  # Pink #F472B6
+        else:
+            color_key = 'green'
+            color = QColor(34, 197, 94)  # Green #22C55E
+
+        if color_key not in self._crosshair_cursors:
+            self._crosshair_cursors[color_key] = self._create_crosshair_cursor(color)
+
+        return self._crosshair_cursors[color_key]
 
     def _get_draw_colors(self):
         """Get pen and brush colors based on draw mode"""
