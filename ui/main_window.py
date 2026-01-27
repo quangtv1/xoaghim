@@ -17,7 +17,6 @@ import os
 import time
 from pathlib import Path
 from typing import Optional, List
-from collections import OrderedDict
 import numpy as np
 
 from ui.continuous_preview import ContinuousPreviewWidget, LoadingOverlay
@@ -25,7 +24,6 @@ from ui.batch_sidebar import BatchSidebar
 from ui.settings_panel import SettingsPanel
 from core.processor import Zone, StapleRemover
 from core.pdf_handler import PDFHandler, PDFExporter
-from core.preload_worker import PreloadWorker, FileCache
 
 
 class ComboItemDelegate(QStyledItemDelegate):
@@ -464,10 +462,11 @@ class MainWindow(QMainWindow):
         self._bg_load_index = 0  # Current page index for background preview loading
         self._thumb_load_index = 0  # Current page index for background thumbnail loading
 
-        # Preload cache for next file (LRU, max 3 files)
-        self._file_cache: OrderedDict[str, FileCache] = OrderedDict()
-        self._preload_worker: Optional[PreloadWorker] = None
-        self._max_cache_size = 3
+        # Sliding window settings
+        self.WINDOW_SIZE = 10  # Keep 10 pages in RAM
+        self.WINDOW_HALF = 5   # Pages before/after current
+        self._sliding_window_mode = False
+        self._window_center = 0  # Current center page in window
 
         self.setWindowTitle("Xóa Ghim PDF (5S)")
         self.setMinimumSize(1200, 800)
@@ -507,6 +506,7 @@ class MainWindow(QMainWindow):
         self.settings_panel.draw_mode_changed.connect(self._on_draw_mode_changed)
         self.settings_panel.zones_reset.connect(self._on_zones_reset)
         self.settings_panel.zone_preset_toggled.connect(self._on_preset_zone_toggled)
+        self.settings_panel.batch_render_changed.connect(self._on_batch_render_changed)
 
         # === COMPACT TOOLBAR (above splitter) ===
         # Move compact_toolbar from settings_panel to main layout
@@ -547,7 +547,6 @@ class MainWindow(QMainWindow):
         self.batch_sidebar.selection_changed.connect(self._on_sidebar_selection_changed)
         self.batch_sidebar.close_requested.connect(self._on_close_file)
         self.batch_sidebar.collapsed_changed.connect(self._on_sidebar_collapsed_changed)
-        self.batch_sidebar._file_list.filter_changed.connect(self._on_filter_changed)
         self.batch_sidebar.setVisible(False)
         self.preview_splitter.addWidget(self.batch_sidebar)
         self.preview_splitter.setCollapsible(0, False)
@@ -1647,9 +1646,6 @@ class MainWindow(QMainWindow):
 
     def _on_sidebar_file_selected(self, file_path: str, original_idx: int):
         """Handle file selection from sidebar"""
-        # Cancel any ongoing preload
-        self._cancel_preload()
-
         # Save zones from current file before switching
         self.preview.save_per_file_zones()
         self.settings_panel.save_per_file_custom_zones()
@@ -1662,14 +1658,8 @@ class MainWindow(QMainWindow):
         self._pending_zone_file = file_path
         self._pending_zone_index = original_idx
 
-        # Check cache first for instant display
-        if file_path in self._file_cache:
-            self._load_from_cache(file_path)
-        else:
-            self._load_pdf(file_path)
-
-        # Start preloading next file in background
-        self._preload_next_file(original_idx)
+        # Load the file
+        self._load_pdf(file_path)
 
     def _load_zones_after_thumbnails(self):
         """Load zones after thumbnails have painted"""
@@ -1714,206 +1704,6 @@ class MainWindow(QMainWindow):
             sidebar_width = self.preview_splitter.sizes()[0]
             if sidebar_width > 0:
                 self.compact_toolbar.set_search_width(sidebar_width)
-
-    # === PRELOAD METHODS ===
-
-    def _preload_next_file(self, current_idx: int):
-        """Start preloading next file in filtered list (background thread)"""
-        if not self._batch_mode:
-            return
-
-        next_file = self._get_next_filtered_file(current_idx)
-        if not next_file or next_file in self._file_cache:
-            return  # Already cached or no next file
-
-        # Check if text protection (AI detection) is enabled
-        text_protection_opts = self.settings_panel.get_text_protection_options()
-        detect_regions = text_protection_opts.enabled
-
-        # Convert to dict for worker
-        opts_dict = {
-            'enabled': text_protection_opts.enabled,
-            'protected_labels': list(text_protection_opts.protected_labels),
-            'margin': text_protection_opts.margin,
-            'confidence': text_protection_opts.confidence
-        }
-
-        self._preload_worker = PreloadWorker(
-            next_file,
-            detect_regions=detect_regions,
-            text_protection_options=opts_dict,
-            parent=self
-        )
-        self._preload_worker.finished.connect(self._on_preload_finished)
-        self._preload_worker.error.connect(self._on_preload_error)
-        self._preload_worker.start()
-
-    def _get_next_filtered_file(self, current_idx: int) -> Optional[str]:
-        """Get next file path from sidebar's filtered list"""
-        if not self.batch_sidebar.isVisible():
-            return None
-
-        filtered = self.batch_sidebar._file_list._filtered_files
-        if not filtered:
-            return None
-
-        # Get current file path
-        if current_idx >= len(self._batch_files):
-            return None
-        current_file = self._batch_files[current_idx]
-
-        # Find position in filtered list and get next
-        try:
-            pos = filtered.index(current_file)
-            if pos + 1 < len(filtered):
-                return filtered[pos + 1]
-        except ValueError:
-            pass
-        return None
-
-    def _on_preload_finished(self, file_path: str, cache: FileCache):
-        """Handle preload completion - store in cache"""
-        self._file_cache[file_path] = cache
-        # Move to end (LRU behavior)
-        self._file_cache.move_to_end(file_path)
-        # Evict oldest if over limit
-        while len(self._file_cache) > self._max_cache_size:
-            self._file_cache.popitem(last=False)
-
-    def _on_preload_error(self, file_path: str, error: str):
-        """Handle preload error (just log, don't crash)"""
-        print(f"Preload failed for {file_path}: {error}")
-
-    def _cancel_preload(self):
-        """Cancel any ongoing preload"""
-        if self._preload_worker and self._preload_worker.isRunning():
-            self._preload_worker.cancel()
-            self._preload_worker.wait(200)  # Brief wait for cleanup
-        self._preload_worker = None
-
-    def _on_filter_changed(self):
-        """Handle filter change - cancel preload and restart for new next file"""
-        self._cancel_preload()
-        # Preload new next file based on updated filter
-        if self._batch_mode and self._batch_files:
-            self._preload_next_file(self._batch_current_index)
-
-    def _load_from_cache(self, file_path: str):
-        """Load file from preload cache (instant display)"""
-        cache = self._file_cache[file_path]
-        # Move to end (LRU)
-        self._file_cache.move_to_end(file_path)
-
-        # Set flag to prevent eventFilter crashes
-        self._background_loading = True
-        self._stop_loading_flag = True
-
-        self.statusBar().showMessage("Đang tải từ cache...")
-        QApplication.processEvents()
-
-        # Close previous handler
-        if self._pdf_handler:
-            self._pdf_handler.close()
-
-        # Open new handler (needed for export and other operations)
-        self._pdf_handler = PDFHandler(file_path)
-        self._current_file_path = file_path
-        self.preview.set_current_file_path(file_path)
-
-        # Set total pages
-        self._total_pages = cache.page_count
-
-        # Update page navigation
-        self.page_spin.setMaximum(cache.page_count)
-        self.page_spin.setValue(1)
-        self.total_pages_label.setText(str(cache.page_count))
-
-        # Calculate paths for output
-        source_path = Path(file_path)
-        if self._batch_mode:
-            output_dir = self._batch_output_dir or str(source_path.parent)
-            settings = self.settings_panel.get_settings()
-            pattern = settings.get('filename_pattern', '{gốc}_clean.pdf')
-            output_name = pattern.replace('{gốc}', source_path.stem)
-            dest_path = Path(output_dir) / output_name
-        else:
-            dest_path = source_path.parent / f"{source_path.stem}_clean{source_path.suffix}"
-
-        self._pending_file_path = str(file_path)
-        self._pending_dest_path = str(dest_path)
-
-        # Use cached pages directly
-        self._all_pages = list(cache.pages)  # Copy list
-
-        # Set thumbnails from cache
-        self.preview.start_thumbnail_loading(cache.page_count)
-        for i, thumb in enumerate(cache.thumbnails):
-            self.preview.add_thumbnail(i, thumb)
-        self.preview.finish_thumbnail_loading()
-
-        # Set current file path on settings panel (for per-file zone tracking)
-        self.settings_panel.set_current_file_path(file_path)
-
-        # Set preview pages
-        self.preview.set_pages(self._all_pages)
-
-        # Apply cached detection regions BEFORE text protection processing
-        if cache.detected_regions:
-            self.preview._cached_regions = dict(cache.detected_regions)
-
-        # Re-apply Zone Chung after set_pages clears _per_page_zones
-        self.settings_panel._emit_zones()
-
-        # Apply text protection settings (uses cached regions if available)
-        text_protection_opts = self.settings_panel.get_text_protection_options()
-        self.preview.set_text_protection(text_protection_opts)
-
-        # Load Zone Riêng (per-file zones) AFTER set_pages and Zone Chung
-        if hasattr(self, '_pending_zone_file') and self._pending_zone_file:
-            zone_file = self._pending_zone_file
-            zone_idx = getattr(self, '_pending_zone_index', 0)
-            self._pending_zone_file = None
-
-            self.settings_panel.load_per_file_custom_zones(zone_file)
-            self.preview.load_per_file_zones(zone_file)
-            self.preview.set_file_index(zone_idx, len(self._batch_files) if self._batch_files else 1)
-            self.preview.before_panel._zones_loading = False
-            self._update_zone_counts()
-
-        # Setup file paths display
-        self.preview.set_file_paths(str(file_path), str(dest_path))
-
-        # Update window title
-        self.setWindowTitle(f"Xóa Ghim PDF (5S) - {source_path.name}")
-
-        # Force thumbnails repaint
-        QTimer.singleShot(10, self.preview.repaint_thumbnails)
-
-        # Reset to first page
-        self.preview.set_current_page(0)
-
-        # Apply fit width for first file, preserve zoom for subsequent files
-        if self._is_first_file_in_batch:
-            self._is_first_file_in_batch = False
-            QTimer.singleShot(50, self.preview.fit_width)
-        # else: zoom is already preserved via _user_zoomed
-
-        # Clear pending values
-        self._pending_file_path = None
-        self._pending_dest_path = None
-
-        # Finish loading
-        self._background_loading = False
-        self._stop_loading_flag = False
-        self.statusBar().showMessage(f"Đã tải từ cache: {source_path.name}", 2000)
-
-        self._update_ui_state()
-
-    def _clear_preload_cache(self):
-        """Clear all preload cache (called when closing folder)"""
-        self._cancel_preload()
-        self._file_cache.clear()
-
     def _on_splitter_moved(self, pos: int, index: int):
         """Handle splitter drag - enforce minimum sidebar width and sync search width"""
         if not self.batch_sidebar.isVisible():
@@ -1976,9 +1766,6 @@ class MainWindow(QMainWindow):
 
     def _on_close_file(self):
         """Close currently opened file or folder"""
-        # Clear preload cache when closing
-        self._clear_preload_cache()
-
         if self._batch_mode:
             # Close batch mode
             self._batch_mode = False
@@ -2065,6 +1852,10 @@ class MainWindow(QMainWindow):
             num_pages = self._total_pages
             self._all_pages = []
             initial_pages = min(self.INITIAL_LOAD_PAGES, num_pages)
+
+            # Check sliding window mode
+            self._sliding_window_mode = self.settings_panel.is_batch_render_enabled()
+            self._window_center = 0
 
             # Set total pages for detection progress (before loading starts)
             self.preview.set_detection_total_pages(self._total_pages)
@@ -2175,7 +1966,11 @@ class MainWindow(QMainWindow):
         self.settings_panel.set_current_file_path(self._pending_file_path)
 
         # Set initial pages - this rebuilds the graphics scene
-        self.preview.set_pages(self._all_pages)
+        if self._sliding_window_mode:
+            # Sliding window: init with placeholders and fill in loaded pages
+            self.preview.init_sliding_window(self._total_pages, self._all_pages)
+        else:
+            self.preview.set_pages(self._all_pages)
 
         # Re-apply Zone Chung after set_pages clears _per_page_zones
         self.settings_panel._emit_zones()
@@ -2280,33 +2075,52 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(15, self._load_next_background_page)
 
     def _load_next_background_page(self):
-        """Load one page at a time with delay to keep UI responsive"""
+        """Load pages - sliding window or full load"""
         # Check if should stop
         if self._stop_loading_flag or not self._pdf_handler:
             self._finish_background_loading()
             return
 
-        # Check if done
-        if self._bg_load_index >= self._total_pages:
-            self._finish_background_loading()
-            return
+        # Sliding window mode: stop after WINDOW_SIZE pages
+        if self._sliding_window_mode:
+            window_limit = min(self.WINDOW_SIZE, self._total_pages)
+            if self._bg_load_index >= window_limit:
+                self._finish_background_loading()
+                return
+        else:
+            # Full mode: check if done
+            if self._bg_load_index >= self._total_pages:
+                self._finish_background_loading()
+                return
 
-        # Load current page
+        # Load one page at a time
         i = self._bg_load_index
         preview_img = self._pdf_handler.render_page(i, dpi=self.PREVIEW_DPI)
+
         if preview_img is not None:
-            self._all_pages.append(preview_img)
-            self.preview.add_preview_page(preview_img)
+            if self._sliding_window_mode:
+                # Window mode: just track in _all_pages, preview already has placeholders
+                if i < len(self._all_pages):
+                    self._all_pages[i] = preview_img
+                else:
+                    self._all_pages.append(preview_img)
+                # Update preview page
+                self.preview.update_window_pages({i: preview_img})
+            else:
+                # Full mode: append and add to preview
+                self._all_pages.append(preview_img)
+                self.preview.add_preview_page(preview_img)
 
         # Update progress
-        progress = int((i + 1) * 100 / self._total_pages)
+        total_to_load = min(self.WINDOW_SIZE, self._total_pages) if self._sliding_window_mode else self._total_pages
+        progress = int((i + 1) * 100 / total_to_load)
         self.preview.set_progress(progress)
 
         # Update status periodically
-        if (i + 1) % 10 == 0:
-            self.statusBar().showMessage(f"Đang tải trang {i+1}/{self._total_pages}...")
+        if (i + 1) % 5 == 0:
+            mode_text = "cửa sổ " if self._sliding_window_mode else ""
+            self.statusBar().showMessage(f"Đang tải {mode_text}trang {i+1}/{total_to_load}...")
 
-        # Move to next page
         self._bg_load_index += 1
 
         # Schedule next page with small delay (15ms) to yield to UI
@@ -2422,13 +2236,9 @@ class MainWindow(QMainWindow):
         if not self._pdf_handler:
             return
 
-        max_loaded = len(self._all_pages)
-        if max_loaded == 0:
-            return
-
         # Convert 0-based index to 1-based page number
         page_num = page_index + 1
-        page_num = max(1, min(page_num, max_loaded))
+        page_num = max(1, min(page_num, self._total_pages))
 
         # Update spinbox without triggering _on_page_changed
         self.page_spin.blockSignals(True)
@@ -2437,7 +2247,63 @@ class MainWindow(QMainWindow):
 
         # Update prev/next button states
         self.prev_page_btn.setEnabled(page_num > 1)
-        self.next_page_btn.setEnabled(page_num < max_loaded)
+        self.next_page_btn.setEnabled(page_num < self._total_pages)
+
+        # Update sliding window if enabled
+        if self._sliding_window_mode:
+            self._update_sliding_window(page_index)
+
+    def _update_sliding_window(self, center_page: int):
+        """Update sliding window - load pages around center, unload others"""
+        if not self._pdf_handler or not self._sliding_window_mode:
+            return
+
+        # Check if window needs to shift (debounce)
+        if abs(center_page - self._window_center) < 2:
+            return
+
+        self._window_center = center_page
+
+        # Calculate new window range
+        start = max(0, center_page - self.WINDOW_HALF)
+        end = min(self._total_pages, center_page + self.WINDOW_HALF + 1)
+
+        # Find pages to load/unload
+        new_window = set(range(start, end))
+        currently_loaded = set(i for i, p in enumerate(self._all_pages) if p is not None)
+        pages_to_load = new_window - currently_loaded
+        pages_to_unload = currently_loaded - new_window
+
+        if not pages_to_load:
+            return
+
+        # Show status
+        self.statusBar().showMessage(f"Đang tải trang {start+1}-{end}...")
+
+        # Prepare updates dict
+        page_updates = {}
+
+        # Unload old pages (set to None to free memory)
+        for page_idx in pages_to_unload:
+            if 0 <= page_idx < len(self._all_pages):
+                self._all_pages[page_idx] = None
+                page_updates[page_idx] = None
+
+        # Load new pages
+        for page_idx in sorted(pages_to_load):
+            preview_img = self._pdf_handler.render_page(page_idx, dpi=self.PREVIEW_DPI)
+            if preview_img is not None:
+                # Extend _all_pages if needed
+                while len(self._all_pages) <= page_idx:
+                    self._all_pages.append(None)
+                self._all_pages[page_idx] = preview_img
+                page_updates[page_idx] = preview_img
+
+        # Update preview
+        if page_updates:
+            self.preview.update_window_pages(page_updates)
+
+        self.statusBar().showMessage(f"Đã tải cửa sổ trang {start+1}-{end}", 2000)
 
     def _on_zoom_in(self):
         """Zoom in by 5%, snapping to nearest multiple of 5"""
@@ -2657,6 +2523,13 @@ class MainWindow(QMainWindow):
     def _on_text_protection_changed(self, options):
         """Handle text protection settings change"""
         self.preview.set_text_protection(options)
+
+    def _on_batch_render_changed(self, enabled: bool):
+        """Handle sliding window toggle change"""
+        if enabled:
+            self.statusBar().showMessage("Đã bật cửa sổ 10 trang (tiết kiệm RAM)", 2000)
+        else:
+            self.statusBar().showMessage("Đã tắt cửa sổ 10 trang (load full)", 2000)
 
     def _on_draw_mode_changed(self, mode):
         """Handle draw mode toggle from settings panel (mode: 'remove', 'protect', or None)"""
@@ -3068,8 +2941,6 @@ class MainWindow(QMainWindow):
         # Only clear scene when closing app (not during file operations)
         if clear_scene:
             self._clear_scenes_for_exit()
-            # Also clear preload cache when closing
-            self._clear_preload_cache()
 
         # Force garbage collection
         gc.collect()

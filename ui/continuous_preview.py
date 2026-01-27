@@ -596,10 +596,13 @@ class ContinuousPreviewPanel(QFrame):
     
     def __init__(self, title: str, show_overlay: bool = False, parent=None):
         super().__init__(parent)
-        
+
+        self._panel_title = title  # Store for debug
         self.show_overlay = show_overlay
-        self._pages: List[np.ndarray] = []  # List of page images
+        self._pages: List[np.ndarray] = []  # List of page images (can contain None for unloaded)
         self._page_items: List[QGraphicsPixmapItem] = []  # Graphics items
+        self._total_pages: int = 0  # Total pages in file (for sliding window)
+        self._page_sizes: List[tuple] = []  # (width, height) for each page (estimated from first loaded)
         self._zones: List[ZoneItem] = []
         self._zone_definitions: List[Zone] = []  # Zone definitions (shared across pages)
         self._last_zone_ids: set = set()  # Track zone IDs from previous set_zone_definitions call
@@ -1317,16 +1320,102 @@ class ContinuousPreviewPanel(QFrame):
         """Set danh sách ảnh các trang"""
         # Create own list to avoid reference issues with parent widget
         self._pages = list(pages) if pages else []
+        self._total_pages = len(self._pages)
         self._current_page = 0  # Reset to first page
         # Clear per_page_zones when loading new file
         # This ensures zones will be re-added by set_zone_definitions
         self._per_page_zones.clear()
         self._rebuild_scene()
 
+    def init_sliding_window(self, total_pages: int, initial_pages: List[np.ndarray] = None):
+        """Initialize sliding window mode with placeholder pages
+
+        Args:
+            total_pages: Total number of pages in file
+            initial_pages: First few pages already loaded (optional)
+        """
+        self._total_pages = total_pages
+        # Initialize with None placeholders
+        self._pages = [None] * total_pages
+        # Fill in initial pages if provided
+        if initial_pages:
+            for i, page in enumerate(initial_pages):
+                if i < total_pages:
+                    self._pages[i] = page
+        self._current_page = 0
+        self._per_page_zones.clear()
+        self._rebuild_scene()
+
+    def update_window_pages(self, page_updates: dict):
+        """Update specific pages in sliding window
+
+        Args:
+            page_updates: {page_idx: image} dict, image can be None to unload
+        """
+        need_recenter = False
+        for page_idx, image in page_updates.items():
+            if 0 <= page_idx < len(self._pages):
+                self._pages[page_idx] = image
+                # Update graphics item if exists
+                if page_idx < len(self._page_items):
+                    old_pixmap = self._page_items[page_idx].pixmap()
+                    old_w = old_pixmap.width() if old_pixmap else 0
+
+                    if image is not None:
+                        pixmap = self._numpy_to_pixmap(image)
+                    else:
+                        # Get size from existing item or default
+                        w = old_pixmap.width() if old_pixmap else 800
+                        h = old_pixmap.height() if old_pixmap else 1100
+                        pixmap = self._create_placeholder_pixmap(w, h, page_idx)
+
+                    self._page_items[page_idx].setPixmap(pixmap)
+
+                    # Check if size changed - need to recenter
+                    if pixmap.width() != old_w:
+                        need_recenter = True
+
+        # Recenter all pages if any page changed size
+        if need_recenter:
+            self._recenter_all_pages()
+
         # Update thumbnail panel if exists (Gốc panel only) - only if not using progressive loading
         # When using progressive loading, thumbnails are set separately via set_thumbnail_pages()
         # if self._thumbnail_panel is not None:
         #     self._thumbnail_panel.set_pages(pages)
+
+    def _recenter_all_pages(self):
+        """Recenter all pages horizontally after size changes"""
+        if not self._page_items:
+            return
+
+        # Find max width from ALL page items (loaded + placeholders)
+        max_width = 0
+        for item in self._page_items:
+            pixmap = item.pixmap()
+            if pixmap:
+                max_width = max(max_width, pixmap.width())
+
+        if max_width == 0:
+            return
+
+        # Recenter ALL pages (position calc is fast)
+        for item in self._page_items:
+            pixmap = item.pixmap()
+            if pixmap:
+                x = (max_width - pixmap.width()) / 2
+                item.setPos(x, item.pos().y())
+
+        # Update scene rect
+        scene_rect = self.scene.sceneRect()
+        self.scene.setSceneRect(0, 0, max_width, scene_rect.height())
+
+        # Refresh zone overlays after position change (only loaded pages)
+        if self.show_overlay:
+            self._recreate_zone_overlays()
+
+        # Refresh draw mode bounds
+        self._refresh_draw_mode_bounds()
 
     def set_thumbnail_pages(self, pages: List[np.ndarray]):
         """Set thumbnail images separately (can be different DPI from preview)"""
@@ -1347,6 +1436,11 @@ class ContinuousPreviewPanel(QFrame):
         """Finish thumbnail loading"""
         if self._thumbnail_panel is not None:
             self._thumbnail_panel.finish_loading()
+
+    def set_thumbnails(self, thumbnails: list):
+        """Set all thumbnails at once from cache (optimized bulk loading)"""
+        if self._thumbnail_panel is not None:
+            self._thumbnail_panel.set_thumbnails_bulk(thumbnails)
 
     def pause_thumbnail_updates(self):
         """Pause thumbnail updates for bulk loading"""
@@ -1459,29 +1553,42 @@ class ContinuousPreviewPanel(QFrame):
         """Build scene with all pages (continuous scroll mode)"""
         y_offset = self.PAGE_SPACING
         max_width = 0
-        
+
+        # Get default size from first loaded page or use default
+        default_size = (800, 1100)  # A4 approx at 150 DPI
+        for page_img in self._pages:
+            if page_img is not None:
+                default_size = (page_img.shape[1], page_img.shape[0])
+                break
+
         for page_idx, page_img in enumerate(self._pages):
-            # Convert to QPixmap
-            pixmap = self._numpy_to_pixmap(page_img)
-            
+            if page_img is not None:
+                # Convert to QPixmap
+                pixmap = self._numpy_to_pixmap(page_img)
+                page_w, page_h = pixmap.width(), pixmap.height()
+            else:
+                # Create placeholder for unloaded page
+                pixmap = self._create_placeholder_pixmap(default_size[0], default_size[1], page_idx)
+                page_w, page_h = default_size
+
             # Create item
             item = QGraphicsPixmapItem(pixmap)
-            
+
             # Center horizontally (sẽ điều chỉnh sau)
             item.setPos(0, y_offset)
-            
+
             self.scene.addItem(item)
             self._page_items.append(item)
             self._page_positions.append(y_offset)
-            
-            max_width = max(max_width, pixmap.width())
-            y_offset += pixmap.height() + self.PAGE_SPACING
-        
+
+            max_width = max(max_width, page_w)
+            y_offset += page_h + self.PAGE_SPACING
+
         # Center all pages horizontally
         for item in self._page_items:
             x = (max_width - item.pixmap().width()) / 2
             item.setPos(x, item.pos().y())
-        
+
         # Update scene rect
         self.scene.setSceneRect(0, 0, max_width, y_offset)
 
@@ -1491,6 +1598,38 @@ class ContinuousPreviewPanel(QFrame):
 
         # Refresh draw mode bounds after page positions changed
         self._refresh_draw_mode_bounds()
+
+    def _create_placeholder_pixmap(self, width: int, height: int, page_idx: int) -> QPixmap:
+        """Create placeholder pixmap for unloaded page"""
+        pixmap = QPixmap(width, height)
+        pixmap.fill(QColor("#F3F4F6"))  # Light gray background
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Draw border
+        painter.setPen(QPen(QColor("#D1D5DB"), 2))
+        painter.drawRect(1, 1, width - 2, height - 2)
+
+        # Draw page number text
+        painter.setPen(QColor("#9CA3AF"))
+        font = QFont("Arial", 24)
+        painter.setFont(font)
+        text = f"Trang {page_idx + 1}"
+        text_rect = painter.fontMetrics().boundingRect(text)
+        x = (width - text_rect.width()) // 2
+        y = (height + text_rect.height()) // 2
+        painter.drawText(x, y, text)
+
+        # Draw loading hint
+        font.setPointSize(12)
+        painter.setFont(font)
+        hint = "Đang tải..."
+        hint_rect = painter.fontMetrics().boundingRect(hint)
+        painter.drawText((width - hint_rect.width()) // 2, y + 30, hint)
+
+        painter.end()
+        return pixmap
 
     def _rebuild_scene_single(self):
         """Build scene with single page only"""
@@ -1502,7 +1641,11 @@ class ContinuousPreviewPanel(QFrame):
             self._current_page = 0
 
         page_img = self._pages[self._current_page]
-        pixmap = self._numpy_to_pixmap(page_img)
+        if page_img is not None:
+            pixmap = self._numpy_to_pixmap(page_img)
+        else:
+            # Create placeholder for unloaded page in sliding window mode
+            pixmap = self._create_placeholder_pixmap(800, 1000, self._current_page)
         
         # Create item
         item = QGraphicsPixmapItem(pixmap)
@@ -2139,8 +2282,15 @@ class ContinuousPreviewPanel(QFrame):
         return zone_item
 
     def _recreate_zone_overlays(self):
-        """Tạo lại overlay zones cho tất cả trang (continuous mode)"""
-        self._recreate_zone_overlays_for_pages(self._page_items, enumerate(self._page_items))
+        """Tạo lại overlay zones cho tất cả trang (continuous mode)
+
+        Optimization: Only create overlays for loaded pages (non-None in _pages)
+        to improve performance with large files in sliding window mode.
+        """
+        # Only process pages that are actually loaded (not None placeholders)
+        loaded_pages = [(i, item) for i, item in enumerate(self._page_items)
+                        if i < len(self._pages) and self._pages[i] is not None]
+        self._recreate_zone_overlays_for_pages(self._page_items, loaded_pages)
 
     def _recreate_zone_overlays_single(self):
         """Tạo lại overlay zones cho trang hiện tại (single page mode)"""
@@ -2220,10 +2370,14 @@ class ContinuousPreviewPanel(QFrame):
     
     def update_page(self, page_idx: int, image: np.ndarray):
         """Cập nhật ảnh một trang"""
+        print(f"[DEBUG] [{self._panel_title}] update_page: page_idx={page_idx}")
         if 0 <= page_idx < len(self._page_items) and page_idx < len(self._pages):
             pixmap = self._numpy_to_pixmap(image)
             self._page_items[page_idx].setPixmap(pixmap)
             self._pages[page_idx] = image
+            print(f"[DEBUG] [{self._panel_title}] UPDATED page {page_idx}")
+        else:
+            print(f"[DEBUG] [{self._panel_title}] SKIPPED page {page_idx} (out of bounds)")
     
     def _on_zone_changed(self, zone_id: str):
         """Handle zone change - sync to other pages if in sync mode"""
@@ -2856,14 +3010,28 @@ class ContinuousPreviewWidget(QWidget):
         """Clear thumbnails from the before panel"""
         self.before_panel.clear_thumbnails()
 
-    def set_pages(self, pages: List[np.ndarray]):
-        """Set danh sách ảnh các trang"""
+    def set_pages(self, pages: List[np.ndarray], from_cache: bool = False):
+        """Set danh sách ảnh các trang
+
+        Args:
+            pages: List of page images as numpy arrays
+            from_cache: If True, skip deep copy for _pages (read-only) to improve
+                        performance when loading from preload cache. _processed_pages
+                        still gets copied since it's modified during processing.
+        """
         # Stop any running detection first
         self._stop_detection()
         self._hide_loading()
 
-        self._pages = [p.copy() for p in pages]
-        self._processed_pages = [p.copy() for p in pages]
+        if from_cache:
+            # Optimized: keep reference for _pages (read-only)
+            # Only copy _processed_pages since it gets modified
+            self._pages = list(pages)
+            self._processed_pages = [p.copy() for p in pages]
+        else:
+            # Normal mode: deep copy both for safety
+            self._pages = [p.copy() for p in pages]
+            self._processed_pages = [p.copy() for p in pages]
 
         # Clear cached regions khi load pages mới
         self._cached_regions.clear()
@@ -2903,6 +3071,10 @@ class ContinuousPreviewWidget(QWidget):
         """Finish thumbnail loading"""
         self.before_panel.finish_thumbnail_loading()
 
+    def set_thumbnails(self, thumbnails: list):
+        """Set all thumbnails at once from cache (optimized bulk loading)"""
+        self.before_panel.set_thumbnails(thumbnails)
+
     def pause_thumbnail_updates(self):
         """Pause thumbnail updates for bulk loading"""
         self.before_panel.pause_thumbnail_updates()
@@ -2922,6 +3094,63 @@ class ContinuousPreviewWidget(QWidget):
     def set_progress(self, percent: int):
         """Set progress bar percentage (0-100)"""
         self.before_panel.set_progress(percent)
+
+    # === Sliding Window Methods ===
+
+    def init_sliding_window(self, total_pages: int, initial_pages: List[np.ndarray] = None):
+        """Initialize sliding window mode with placeholder pages"""
+        # Stop any running detection
+        self._stop_detection()
+        self._hide_loading()
+
+        self._pages = [None] * total_pages
+        self._processed_pages = [None] * total_pages
+
+        # Fill in initial pages
+        if initial_pages:
+            for i, page in enumerate(initial_pages):
+                if i < total_pages and page is not None:
+                    self._pages[i] = page.copy()
+                    self._processed_pages[i] = page.copy()
+
+        # Clear cached regions
+        self._cached_regions.clear()
+        self._detection_displayed_pages.clear()
+        self._detection_progress_shown = False
+
+        # Clear undo history
+        self._undo_manager.clear()
+
+        # Initialize panels
+        self.before_panel.init_sliding_window(total_pages, initial_pages)
+        self.after_panel.init_sliding_window(total_pages, initial_pages)
+
+        self._schedule_process()
+
+    def update_window_pages(self, page_updates: dict):
+        """Update specific pages in sliding window
+
+        Args:
+            page_updates: {page_idx: image} dict, image can be None to unload
+        """
+        # Update internal lists - only _pages (raw), NOT _processed_pages
+        # _processed_pages will be updated by _schedule_process
+        for page_idx, image in page_updates.items():
+            if 0 <= page_idx < len(self._pages):
+                if image is not None:
+                    self._pages[page_idx] = image.copy()
+                    # Temporarily set processed to raw, will be replaced by processing
+                    self._processed_pages[page_idx] = image.copy()
+                else:
+                    self._pages[page_idx] = None
+                    self._processed_pages[page_idx] = None
+
+        # Update before_panel only (shows raw image with zone overlays)
+        self.before_panel.update_window_pages(page_updates)
+
+        # DON'T update after_panel directly - let _schedule_process handle it
+        # This ensures zones are applied before showing in after_panel
+        self._schedule_process()
 
     def show_detection_progress(self):
         """Show detection progress bar (red)"""
@@ -3337,19 +3566,24 @@ class ContinuousPreviewWidget(QWidget):
 
     def _schedule_process(self):
         """Schedule processing với minimal debounce cho response nhanh"""
+        print("[DEBUG] _schedule_process called")
         self._process_timer.start(30)  # Fast response for zone drawing
     
     def _do_process_all(self):
         """Xử lý tất cả các trang"""
+        print(f"[DEBUG] _do_process_all called, _pages len={len(self._pages) if self._pages else 0}")
         if not self._pages:
+            print("[DEBUG] _do_process_all: _pages is empty, returning")
             return
 
         # Check if we need YOLO detection (when text protection enabled and pages not cached)
         pages_to_detect = []
         if self._text_protection_enabled:
             for i in range(len(self._pages)):
-                if i not in self._cached_regions:
+                if i not in self._cached_regions and self._pages[i] is not None:
                     pages_to_detect.append(i)
+
+        print(f"[DEBUG] _do_process_all: text_protection={self._text_protection_enabled}, pages_to_detect={pages_to_detect}")
 
         # If detection needed, run in background thread
         if pages_to_detect:
@@ -3357,6 +3591,7 @@ class ContinuousPreviewWidget(QWidget):
             return  # Will continue processing after detection finishes
 
         # No detection needed, process directly
+        print("[DEBUG] _do_process_all: calling _process_pages_with_cached_regions")
         self._process_pages_with_cached_regions()
 
     def set_detection_total_pages(self, total: int):
@@ -3409,8 +3644,8 @@ class ContinuousPreviewWidget(QWidget):
             self.set_detection_progress(initial_progress)
 
         # Create a copy of pages for the thread to avoid thread safety issues
-        # Filter to only valid indices to prevent index errors
-        valid_indices = [i for i in pages_to_detect if i < len(self._pages)]
+        # Filter to only valid indices AND pages that are actually loaded (not None)
+        valid_indices = [i for i in pages_to_detect if i < len(self._pages) and self._pages[i] is not None]
         if not valid_indices:
             return
         pages_copy = [self._pages[i].copy() for i in valid_indices]
@@ -3503,7 +3738,18 @@ class ContinuousPreviewWidget(QWidget):
         if not self._pages:
             return
 
+        # Ensure _processed_pages has correct length
+        if len(self._processed_pages) != len(self._pages):
+            self._processed_pages = [None] * len(self._pages)
+
+        # Track which pages were processed for incremental update
+        processed_updates = {}
+
         for i, page in enumerate(self._pages):
+            # Skip None pages (unloaded in sliding window mode)
+            if page is None:
+                continue
+
             page_zones = self._get_zones_for_page(i)
 
             if page_zones:
@@ -3511,13 +3757,32 @@ class ContinuousPreviewWidget(QWidget):
                     regions = self._cached_regions.get(i, [])
                     processed = self._processor.process_image(page, page_zones, protected_regions=regions)
                     self._processed_pages[i] = processed
+                    processed_updates[i] = processed
                 else:
                     processed = self._processor.process_image(page, page_zones)
                     self._processed_pages[i] = processed
+                    processed_updates[i] = processed
             else:
                 self._processed_pages[i] = page.copy()
+                processed_updates[i] = self._processed_pages[i]
 
-        self.after_panel.set_pages(self._processed_pages)
+        # Update after_panel incrementally instead of full rebuild
+        need_recenter = False
+        for page_idx, processed_img in processed_updates.items():
+            # Check if size changed
+            if page_idx < len(self.after_panel._page_items):
+                old_pixmap = self.after_panel._page_items[page_idx].pixmap()
+                old_w = old_pixmap.width() if old_pixmap else 0
+                self.after_panel.update_page(page_idx, processed_img)
+                new_pixmap = self.after_panel._page_items[page_idx].pixmap()
+                if new_pixmap and new_pixmap.width() != old_w:
+                    need_recenter = True
+            else:
+                self.after_panel.update_page(page_idx, processed_img)
+
+        # Recenter after_panel if any page changed size
+        if need_recenter:
+            self.after_panel._recenter_all_pages()
 
         # Force UI refresh
         from PyQt5.QtWidgets import QApplication
@@ -3533,12 +3798,29 @@ class ContinuousPreviewWidget(QWidget):
             self._hide_loading()
             return
 
+        # Ensure _processed_pages has correct length
+        if len(self._processed_pages) != len(self._pages):
+            self._processed_pages = [None] * len(self._pages)
+
         # Clear protected regions display before processing
         self.before_panel.clear_protected_regions()
 
+        # Track which pages were processed for incremental update
+        processed_updates = {}
+
+        # Debug: print sliding window state
+        loaded_pages = [i for i, p in enumerate(self._pages) if p is not None]
+        print(f"[DEBUG] _process_pages_with_cached_regions: loaded_pages={loaded_pages}")
+        print(f"[DEBUG] before_panel._per_page_zones keys: {list(self.before_panel._per_page_zones.keys())}")
+
         for i, page in enumerate(self._pages):
+            # Skip None pages (unloaded in sliding window mode)
+            if page is None:
+                continue
+
             # Get zones for this specific page from per_page_zones
             page_zones = self._get_zones_for_page(i)
+            print(f"[DEBUG] Page {i}: zones count = {len(page_zones)}")
 
             # Always display protected regions overlay if text protection is enabled
             if self._text_protection_enabled:
@@ -3550,14 +3832,33 @@ class ContinuousPreviewWidget(QWidget):
                     regions = self._cached_regions.get(i, [])
                     processed = self._processor.process_image(page, page_zones, protected_regions=regions)
                     self._processed_pages[i] = processed
+                    processed_updates[i] = processed
                 else:
                     processed = self._processor.process_image(page, page_zones)
                     self._processed_pages[i] = processed
+                    processed_updates[i] = processed
             else:
                 # No zones for this page - keep original
                 self._processed_pages[i] = page.copy()
+                processed_updates[i] = self._processed_pages[i]
 
-        self.after_panel.set_pages(self._processed_pages)
+        # Update after_panel incrementally instead of full rebuild
+        need_recenter = False
+        for page_idx, processed_img in processed_updates.items():
+            # Check if size changed
+            if page_idx < len(self.after_panel._page_items):
+                old_pixmap = self.after_panel._page_items[page_idx].pixmap()
+                old_w = old_pixmap.width() if old_pixmap else 0
+                self.after_panel.update_page(page_idx, processed_img)
+                new_pixmap = self.after_panel._page_items[page_idx].pixmap()
+                if new_pixmap and new_pixmap.width() != old_w:
+                    need_recenter = True
+            else:
+                self.after_panel.update_page(page_idx, processed_img)
+
+        # Recenter after_panel if any page changed size
+        if need_recenter:
+            self.after_panel._recenter_all_pages()
 
         # Force UI refresh on Windows (Mac does this automatically)
         from PyQt5.QtWidgets import QApplication
@@ -3609,7 +3910,7 @@ class ContinuousPreviewWidget(QWidget):
                 page_rect = self.before_panel._page_items[page_idx].boundingRect()
                 img_w, img_h = int(page_rect.width()), int(page_rect.height())
             # Fallback to _pages numpy array if page_items not available
-            elif page_idx < len(self._pages):
+            elif page_idx < len(self._pages) and self._pages[page_idx] is not None:
                 img_h, img_w = self._pages[page_idx].shape[:2]
 
             # Safety check: if we can't get valid dimensions, return empty

@@ -302,6 +302,10 @@ class SidebarFileList(QListWidget):
         counts.discard(-1)  # Remove error values
         return sorted(counts)
 
+    def get_page_count(self, file_path: str) -> int:
+        """Get page count for a specific file. Returns -1 if not loaded yet."""
+        return self._page_counts.get(file_path, -1)
+
     def get_visible_count(self) -> int:
         """Get count of visible (filtered) items."""
         return len(self._visible_indices)
@@ -899,6 +903,10 @@ class BatchSidebar(QFrame):
     def get_page_counts(self) -> Dict[str, int]:
         """Return dict of {file_path: page_count}"""
         return self._file_list.get_page_counts()
+
+    def get_page_count(self, file_path: str) -> int:
+        """Get page count for a specific file. Returns -1 if not loaded yet."""
+        return self._file_list.get_page_count(file_path)
 
     def select_by_original_index(self, original_idx: int):
         """Select file by original index"""

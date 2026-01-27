@@ -70,6 +70,8 @@ class SettingsPanel(QWidget):
     zones_reset = pyqtSignal(str, str)  # scope, reset_type - 'page'/'folder', 'manual'/'auto'/'all'
     # Undo signal for preset zones (corners/edges): zone_id, enabled, zone_data (w_px, h_px) or (length_pct, depth_px)
     zone_preset_toggled = pyqtSignal(str, bool, tuple)
+    # Batch render toggle (render 10 pages at once)
+    batch_render_changed = pyqtSignal(bool)  # enabled
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -170,6 +172,10 @@ class SettingsPanel(QWidget):
         text_protection = config.get('text_protection', True)
         self.text_protection_cb.setChecked(text_protection)
 
+        # Restore preload cache setting
+        batch_render = config.get('batch_render', True)  # Default: enabled
+        self.batch_render_cb.setChecked(batch_render)
+
         # Update zone selector UI to match
         self.zone_selector.blockSignals(True)
         self.zone_selector.reset_all()
@@ -228,6 +234,7 @@ class SettingsPanel(QWidget):
             'threshold': self.threshold_slider.value(),
             'filter_mode': self._get_current_filter(),
             'text_protection': self.text_protection_cb.isChecked(),
+            'batch_render': self.batch_render_cb.isChecked(),
         }
 
         get_config_manager().save_zone_config(config)
@@ -602,6 +609,19 @@ class SettingsPanel(QWidget):
         """)
         self.text_protection_settings_btn.clicked.connect(self._open_text_protection_dialog)
         protection_row.addWidget(self.text_protection_settings_btn)
+
+        # Batch render checkbox (same row)
+        protection_row.addSpacing(16)
+        self.batch_render_cb = QCheckBox("Render 10 trang một")
+        self.batch_render_cb.setChecked(True)  # Default: enabled
+        self.batch_render_cb.setToolTip(
+            "Chỉ giữ 10 trang trong bộ nhớ Preview (trang hiện tại ± 5).\n"
+            "Tiết kiệm RAM cho file lớn. Scroll ra ngoài cửa sổ\n"
+            "sẽ tự động load trang mới và giải phóng trang cũ."
+        )
+        self.batch_render_cb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
+        self.batch_render_cb.stateChanged.connect(self._on_batch_render_changed)
+        protection_row.addWidget(self.batch_render_cb)
 
         protection_row.addStretch()
         params_container.addLayout(protection_row)
@@ -1462,6 +1482,16 @@ class SettingsPanel(QWidget):
         # Emit signal with current options
         self.text_protection_changed.emit(self._text_protection_options)
         self._save_zone_config()  # Save config when text protection changes
+
+    def _on_batch_render_changed(self):
+        """Handle batch render checkbox change"""
+        enabled = self.batch_render_cb.isChecked()
+        self.batch_render_changed.emit(enabled)
+        self._save_zone_config()  # Save config
+
+    def is_batch_render_enabled(self) -> bool:
+        """Check if batch render is enabled"""
+        return self.batch_render_cb.isChecked()
 
     def _open_text_protection_dialog(self):
         """Open text protection settings dialog"""

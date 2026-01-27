@@ -507,6 +507,65 @@ class ThumbnailPanel(QWidget):
         self._scroll_area.setUpdatesEnabled(True)
         self._scroll_area.update()
 
+    def set_thumbnails_bulk(self, thumbnails: list):
+        """Set all thumbnails at once from cache (optimized for fast loading).
+
+        This method is optimized for loading from preload cache:
+        - Pauses visual updates during widget creation
+        - Creates all widgets in a single batch
+        - Single repaint at the end
+
+        Args:
+            thumbnails: List of numpy arrays (thumbnail images)
+        """
+        if not thumbnails:
+            return
+
+        # Clear and prepare
+        self._loading = True
+        self._total_pages = len(thumbnails)
+        self._pages = []
+        self._current_page = -1
+
+        # Clear existing items
+        for item in self._items:
+            item.deleteLater()
+        self._items.clear()
+
+        # Clear layout
+        while self._thumbnail_layout.count():
+            item = self._thumbnail_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Pause updates during bulk creation
+        self._scroll_area.setUpdatesEnabled(False)
+
+        # Create all items without individual updates
+        thumb_width = self.width() - 20
+        for idx, img in enumerate(thumbnails):
+            if img is None:
+                continue
+            item = ThumbnailItem(idx, thumbnail_width=thumb_width)
+            item.clicked.connect(self._on_item_clicked)
+            pixmap = self._numpy_to_pixmap(img)
+            item.set_pixmap(pixmap)
+            self._thumbnail_layout.addWidget(item)
+            self._items.append(item)
+            self._pages.append(img)
+
+        # Add stretch and finalize
+        self._thumbnail_layout.addStretch()
+        self._loading = False
+
+        # Single repaint at end
+        self._scroll_area.setUpdatesEnabled(True)
+        self._scroll_area.update()
+
+        # Highlight first page
+        if self._items:
+            self.set_current_page(0)
+
     def _numpy_to_pixmap(self, img: np.ndarray) -> QPixmap:
         """Convert numpy array (BGR or RGB) to QPixmap
 
