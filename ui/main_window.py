@@ -994,11 +994,37 @@ class MainWindow(QMainWindow):
         self.draw_remove_minus.setAutoRepeat(False)
         self.draw_remove_minus.activated.connect(self._toggle_draw_remove)
 
+        # Keyboard shortcut Esc to cancel draw mode
+        self.cancel_draw_mode_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
+        self.cancel_draw_mode_shortcut.activated.connect(self._cancel_draw_mode)
+
         # Keyboard shortcuts for file navigation in batch mode
         self.prev_file_shortcut = QShortcut(QKeySequence("["), self)
         self.prev_file_shortcut.activated.connect(self._on_prev_file)
         self.next_file_shortcut = QShortcut(QKeySequence("]"), self)
         self.next_file_shortcut.activated.connect(self._on_next_file)
+
+        # Keyboard shortcut Delete to delete selected zone
+        self.delete_zone_shortcut = QShortcut(QKeySequence(Qt.Key_Delete), self)
+        self.delete_zone_shortcut.activated.connect(self._on_delete_selected_zone)
+        self.backspace_zone_shortcut = QShortcut(QKeySequence(Qt.Key_Backspace), self)
+        self.backspace_zone_shortcut.activated.connect(self._on_delete_selected_zone)
+
+        # Keyboard shortcut Ctrl+Delete to show "Xóa vùng chọn" popup
+        # On Mac: Ctrl+Backspace (since Delete key = Backspace)
+        import sys
+        if sys.platform == 'darwin':
+            self.reset_zones_shortcut = QShortcut(QKeySequence("Ctrl+Backspace"), self)
+            self.reset_zones_shortcut.activated.connect(self._on_reset_zones_shortcut)
+            # Also add Cmd+Backspace for Mac
+            self.reset_zones_shortcut2 = QShortcut(QKeySequence("Meta+Backspace"), self)
+            self.reset_zones_shortcut2.activated.connect(self._on_reset_zones_shortcut)
+        else:
+            self.reset_zones_shortcut = QShortcut(QKeySequence("Ctrl+Delete"), self)
+            self.reset_zones_shortcut.activated.connect(self._on_reset_zones_shortcut)
+
+        # Initialize selected zone tracker
+        self._selected_zone_id = None
 
         # Cancel button (hidden by default)
         self.cancel_btn = QPushButton("Dừng")
@@ -2542,6 +2568,11 @@ class MainWindow(QMainWindow):
         self._current_draw_mode = mode
         self.preview.set_draw_mode(mode)
 
+    def _cancel_draw_mode(self):
+        """Cancel current draw mode (Esc key)"""
+        if self._current_draw_mode is not None:
+            self._set_draw_mode_with_filter(None)
+
     def _toggle_draw_protect(self):
         """Toggle protection zone (+) draw mode.
         Keyboard shortcuts: Cmd+A (macOS), Alt+A (Windows), +, =
@@ -2660,6 +2691,8 @@ class MainWindow(QMainWindow):
 
     def _on_zone_selected_from_preview(self, zone_id: str):
         """Khi click vào zone trong preview → chuyển filter theo zone"""
+        # Track selected zone for Delete shortcut
+        self._selected_zone_id = zone_id
         # Tìm zone và lấy page_filter của nó
         zone = self.settings_panel.get_zone_by_id(zone_id)
         if zone and hasattr(zone, 'page_filter'):
@@ -2701,6 +2734,16 @@ class MainWindow(QMainWindow):
             self.preview.save_per_file_zones()
         # Update zone counts
         self._update_zone_counts()
+
+    def _on_delete_selected_zone(self):
+        """Handle Delete key shortcut - delete selected zone"""
+        if self._selected_zone_id:
+            self._on_zone_delete_from_preview(self._selected_zone_id)
+            self._selected_zone_id = None
+
+    def _on_reset_zones_shortcut(self):
+        """Handle Ctrl+Delete shortcut - show Xóa vùng chọn popup"""
+        self.settings_panel._on_reset_zones_clicked()
 
     def _on_clean_shortcut(self):
         """Handle Ctrl+Enter shortcut - only trigger if button is enabled"""
