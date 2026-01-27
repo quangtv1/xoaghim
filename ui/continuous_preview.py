@@ -400,27 +400,45 @@ class ContinuousGraphicsView(QGraphicsView):
         return super().eventFilter(obj, event)
 
     def _create_crosshair_cursor(self, color: QColor) -> QCursor:
-        """Create custom crosshair cursor with specified color (3x larger than default)"""
-        size = 48  # 3x larger than default ~16px
+        """Create custom crosshair cursor with specified color (3x longer arms)"""
+        line_length = 30  # 3x longer than default ~10px
+        size = line_length * 2 + 1  # Odd size for center pixel
         center = size // 2
-        line_length = 20  # Length of each arm
 
-        pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.transparent)
+        # Handle Retina display
+        dpr = QApplication.instance().devicePixelRatio() if QApplication.instance() else 1.0
+        actual_size = int(size * dpr)
+        actual_center = int(center * dpr)
+        actual_length = int(line_length * dpr)
 
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.Antialiasing)
+        # Use QImage with premultiplied alpha for proper transparency
+        image = QImage(actual_size, actual_size, QImage.Format_ARGB32_Premultiplied)
+        image.fill(0)  # Fully transparent (0x00000000)
 
-        pen = QPen(color, 2)
-        painter.setPen(pen)
+        # Get color as ARGB with full opacity
+        r, g, b = color.red(), color.green(), color.blue()
+        argb = (255 << 24) | (r << 16) | (g << 8) | b  # 0xFFrrggbb
 
-        # Draw horizontal line
-        painter.drawLine(center - line_length, center, center + line_length, center)
-        # Draw vertical line
-        painter.drawLine(center, center - line_length, center, center + line_length)
+        # Line thickness = 2 pixels (no DPI scaling)
+        thickness = 2
+        half_t = thickness // 2
 
-        painter.end()
+        # Draw horizontal line with thickness
+        for x in range(actual_center - actual_length, actual_center + actual_length + 1):
+            for t in range(-half_t, half_t + 1):
+                y = actual_center + t
+                if 0 <= x < actual_size and 0 <= y < actual_size:
+                    image.setPixel(x, y, argb)
 
+        # Draw vertical line with thickness
+        for y in range(actual_center - actual_length, actual_center + actual_length + 1):
+            for t in range(-half_t, half_t + 1):
+                x = actual_center + t
+                if 0 <= x < actual_size and 0 <= y < actual_size:
+                    image.setPixel(x, y, argb)
+
+        image.setDevicePixelRatio(dpr)
+        pixmap = QPixmap.fromImage(image)
         return QCursor(pixmap, center, center)
 
     def _get_draw_cursor(self) -> QCursor:
