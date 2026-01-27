@@ -1538,6 +1538,15 @@ class MainWindow(QMainWindow):
         self._batch_base_dir = base_dir
         self._batch_files = pdf_files
 
+        # Set current source for portable config detection (.xoaghim.json)
+        from core.config_manager import get_config_manager
+        config_manager = get_config_manager()
+        config_manager.set_current_source(base_dir)
+
+        # If portable mode, reload zone config from .xoaghim.json
+        if config_manager.is_portable_mode():
+            self.settings_panel._load_saved_config()
+
         # Set batch base dir for crash recovery persistence
         self.preview.set_batch_base_dir(base_dir)
         self.settings_panel.set_batch_base_dir(base_dir)
@@ -1624,6 +1633,15 @@ class MainWindow(QMainWindow):
         self._batch_mode = True
         self._batch_base_dir = folder_path
         self._batch_files = pdf_files
+
+        # Set current source for portable config detection (.xoaghim.json)
+        from core.config_manager import get_config_manager
+        config_manager = get_config_manager()
+        config_manager.set_current_source(folder_path)
+
+        # If portable mode, reload zone config from .xoaghim.json
+        if config_manager.is_portable_mode():
+            self.settings_panel._load_saved_config()
 
         # Set batch base dir for crash recovery persistence
         self.preview.set_batch_base_dir(folder_path)
@@ -1912,6 +1930,16 @@ class MainWindow(QMainWindow):
                 output_dir = file_folder
                 self.settings_panel.set_output_path(output_dir)
                 dest_path = source_path.parent / f"{source_path.stem}_clean{source_path.suffix}"
+
+                # Set current source for portable config detection (.xoaghim.json)
+                from core.config_manager import get_config_manager
+                config_manager = get_config_manager()
+                config_manager.set_current_source(file_path_str)
+
+                # If portable mode (parent folder has .xoaghim.json), reload zone config
+                if config_manager.is_portable_mode():
+                    self.settings_panel._load_saved_config()
+
                 # Set batch base dir for zone persistence (use file path for single file mode)
                 self.preview.set_batch_base_dir(file_path_str)
                 self.settings_panel.set_batch_base_dir(file_path_str)
