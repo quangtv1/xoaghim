@@ -1287,16 +1287,22 @@ class ContinuousPreviewPanel(QFrame):
         Returns:
             True if zones were loaded, False if no saved zones exist.
         """
+        print(f"[DEBUG] load_per_file_zones: file_path={file_path}")
+        print(f"[DEBUG] load_per_file_zones: _per_file_zones keys={list(self._per_file_zones.keys())[:5]}")
+
         if file_path not in self._per_file_zones:
+            print(f"[DEBUG] load_per_file_zones: file_path NOT in _per_file_zones, returning False")
             return False
 
         saved_zones = self._per_file_zones[file_path]
+        print(f"[DEBUG] load_per_file_zones: saved_zones has {len(saved_zones)} pages")
 
         # Restore only Tự do zones (custom_*, protect_*) to _per_page_zones
         # Skip Zone Chung (corner_*, margin_*) - they use current global values
         # NOTE: Store zones for ALL pages, not just loaded ones. Visual overlays
         # will be created only for loaded pages, and zones for later pages will
         # appear when those pages load and scene rebuilds.
+        loaded_count = 0
         for page_idx, page_zones in saved_zones.items():
             if page_idx not in self._per_page_zones:
                 self._per_page_zones[page_idx] = {}
@@ -1304,6 +1310,10 @@ class ContinuousPreviewPanel(QFrame):
                 # Only load Tự do zones, skip Zone Chung
                 if not zone_id.startswith('corner_') and not zone_id.startswith('margin_'):
                     self._per_page_zones[page_idx][zone_id] = zone_data
+                    loaded_count += 1
+                    print(f"[DEBUG] load_per_file_zones: loaded {zone_id} for page {page_idx}: {zone_data}")
+
+        print(f"[DEBUG] load_per_file_zones: loaded {loaded_count} custom zones total")
 
         # Recreate visual overlays for loaded zones
         if self.show_overlay:
@@ -2396,6 +2406,12 @@ class ContinuousPreviewPanel(QFrame):
         # Only process pages that are actually loaded (not None placeholders)
         loaded_pages = [(i, item) for i, item in enumerate(self._page_items)
                         if i < len(self._pages) and self._pages[i] is not None]
+        # Debug: log zone recreation info
+        print(f"[DEBUG] _recreate_zone_overlays: loaded_pages={len(loaded_pages)}, _per_page_zones={len(self._per_page_zones)}, page_items={len(self._page_items)}")
+        for page_idx, zones in self._per_page_zones.items():
+            custom_zones = {k: v for k, v in zones.items() if k.startswith('custom_') or k.startswith('protect_')}
+            if custom_zones:
+                print(f"[DEBUG]   Page {page_idx}: {len(custom_zones)} custom zones: {list(custom_zones.keys())}")
         self._recreate_zone_overlays_for_pages(self._page_items, loaded_pages)
 
     def _recreate_zone_overlays_single(self):
@@ -2455,6 +2471,7 @@ class ContinuousPreviewPanel(QFrame):
         # Convert to list to iterate and count
         page_list = list(page_iterator)
 
+        zones_created = 0
         for page_idx, page_item in page_list:
             page_rect = page_item.boundingRect()
             page_pos = page_item.pos()
@@ -2471,11 +2488,18 @@ class ContinuousPreviewPanel(QFrame):
                 zx, zy, zw, zh = self._calculate_zone_pixels(zone_def, zone_coords, img_w, img_h)
                 rect = QRectF(zx, zy, zw, zh)
 
+                # Debug: log zone creation
+                if zone_id.startswith('custom_') or zone_id.startswith('protect_'):
+                    print(f"[DEBUG] Creating zone: {zone_id} on page {page_idx}, rect=({zx:.0f},{zy:.0f},{zw:.0f},{zh:.0f}), page_pos=({page_pos.x():.0f},{page_pos.y():.0f}), img_size=({img_w},{img_h})")
+
                 zone_item = self._create_zone_overlay_item(
                     zone_id, zone_def, rect, page_idx, page_pos, page_rect
                 )
                 self.scene.addItem(zone_item)
                 self._zones.append(zone_item)
+                zones_created += 1
+
+        print(f"[DEBUG] _recreate_zone_overlays_for_pages: created {zones_created} zone items, total _zones={len(self._zones)}")
     
     def update_page(self, page_idx: int, image: np.ndarray):
         """Cập nhật ảnh một trang"""
