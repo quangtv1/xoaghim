@@ -1311,8 +1311,13 @@ class ContinuousPreviewPanel(QFrame):
                 self._recreate_zone_overlays_single()
             else:
                 self._recreate_zone_overlays()
+            # Windows needs deferred update for zone rendering
+            import sys
+            if sys.platform == 'win32':
+                QTimer.singleShot(50, self._recreate_zone_overlays if self._view_mode != 'single' else self._recreate_zone_overlays_single)
         # Force scene update
         self.scene.update()
+        self.view.viewport().update()
 
         # Clear loading flag - zones are now fully loaded, safe to save
         self._zones_loading = False
@@ -1471,6 +1476,10 @@ class ContinuousPreviewPanel(QFrame):
         # This ensures zones saved in JSON are displayed for newly loaded pages
         if self.show_overlay and any(img is not None for img in page_updates.values()):
             self._recreate_zone_overlays()
+            # Windows needs deferred update for zone rendering
+            import sys
+            if sys.platform == 'win32':
+                QTimer.singleShot(50, self._recreate_zone_overlays)
 
         # Update thumbnail panel if exists (Gốc panel only) - only if not using progressive loading
         # When using progressive loading, thumbnails are set separately via set_thumbnail_pages()
@@ -1688,6 +1697,10 @@ class ContinuousPreviewPanel(QFrame):
         # Recreate zone overlays
         if self.show_overlay:
             self._recreate_zone_overlays()
+            # Windows needs deferred update for zone rendering
+            import sys
+            if sys.platform == 'win32':
+                QTimer.singleShot(50, self._recreate_zone_overlays)
 
         # Refresh draw mode bounds after page positions changed
         self._refresh_draw_mode_bounds()
@@ -3376,12 +3389,7 @@ class ContinuousPreviewWidget(QWidget):
         """
         loaded = self.before_panel.load_per_file_zones(file_path)
         if loaded:
-            # Recreate zone overlays to show loaded zones
-            if self.before_panel.show_overlay:
-                if self.before_panel._view_mode == 'single':
-                    self.before_panel._recreate_zone_overlays_single()
-                else:
-                    self.before_panel._recreate_zone_overlays()
+            # Zone overlays already recreated by before_panel.load_per_file_zones()
             self._schedule_process()
         return loaded
 
