@@ -1127,7 +1127,12 @@ class ContinuousPreviewPanel(QFrame):
     def get_current_page(self) -> int:
         """Get current page index"""
         return self._current_page
-    
+
+    def scroll_to_top(self):
+        """Force scroll to top of view"""
+        self.view.verticalScrollBar().setValue(0)
+        self.view.horizontalScrollBar().setValue(0)
+
     def set_page_filter(self, filter_mode: str):
         """Set page filter: 'all', 'odd', 'even', 'none'
 
@@ -3324,7 +3329,12 @@ class ContinuousPreviewWidget(QWidget):
     def get_current_page(self) -> int:
         """Get current page index"""
         return self.before_panel.get_current_page()
-    
+
+    def scroll_to_top(self):
+        """Force scroll to top of both panels"""
+        self.before_panel.scroll_to_top()
+        self.after_panel.scroll_to_top()
+
     def set_page_filter(self, filter_mode: str):
         """Set page filter: 'all', 'odd', 'even'"""
         self.before_panel.set_page_filter(filter_mode)
