@@ -531,7 +531,8 @@ class MainWindow(QMainWindow):
         # === MAIN CONTENT AREA (Sidebar + Right Panel) ===
         # Horizontal splitter: Sidebar | Right content
         self.preview_splitter = QSplitter(Qt.Horizontal)
-        self.preview_splitter.setHandleWidth(1)  # Thin handle
+        self.preview_splitter.setHandleWidth(2)  # Thin but grabbable handle
+        self.preview_splitter.setChildrenCollapsible(False)  # Allow resize without collapse
         self.preview_splitter.setStyleSheet("""
             QSplitter::handle {
                 background-color: #D1D5DB;
@@ -547,6 +548,7 @@ class MainWindow(QMainWindow):
         self.batch_sidebar.selection_changed.connect(self._on_sidebar_selection_changed)
         self.batch_sidebar.close_requested.connect(self._on_close_file)
         self.batch_sidebar.collapsed_changed.connect(self._on_sidebar_collapsed_changed)
+        self.batch_sidebar.filter_changed.connect(self._on_sidebar_filter_changed)
         self.batch_sidebar.setVisible(False)
         self.preview_splitter.addWidget(self.batch_sidebar)
         self.preview_splitter.setCollapsible(0, False)
@@ -1722,7 +1724,17 @@ class MainWindow(QMainWindow):
         # Restore zones for this file
         self.settings_panel.load_per_file_custom_zones(file_path)
         self.preview.load_per_file_zones(file_path)
-        self.preview.set_file_index(original_idx, len(self._batch_files))
+
+        # Update file counter with sorted/filtered position
+        visible_pos = self.batch_sidebar._file_list.get_visible_position(original_idx)
+        visible_count = self.batch_sidebar._file_list.get_visible_count()
+        # If file is not in filtered list, show original position in full list
+        if visible_pos < 0:
+            visible_pos = original_idx
+            visible_count = len(self._batch_files)
+        has_prev = self.batch_sidebar.has_prev_file(original_idx)
+        has_next = self.batch_sidebar.has_next_file(original_idx)
+        self.preview.set_file_index(visible_pos, visible_count, has_prev, has_next)
 
         # Clear zone loading flag (may not be cleared if no zones existed)
         self.preview.before_panel._zones_loading = False
@@ -1733,6 +1745,21 @@ class MainWindow(QMainWindow):
     def _on_sidebar_selection_changed(self, checked_files: List[str]):
         """Handle checkbox selection change in sidebar"""
         self._update_ui_state()
+
+    def _on_sidebar_filter_changed(self):
+        """Handle filter/sort change in sidebar - update file counter"""
+        if not self._batch_mode:
+            return
+        # Update file counter with new sorted/filtered position
+        visible_pos = self.batch_sidebar._file_list.get_visible_position(self._batch_current_index)
+        visible_count = self.batch_sidebar._file_list.get_visible_count()
+        # If file is not in filtered list, show original position in full list
+        if visible_pos < 0:
+            visible_pos = self._batch_current_index
+            visible_count = len(self._batch_files)
+        has_prev = self.batch_sidebar.has_prev_file(self._batch_current_index)
+        has_next = self.batch_sidebar.has_next_file(self._batch_current_index)
+        self.preview.set_file_index(visible_pos, visible_count, has_prev, has_next)
 
     def _on_sidebar_collapsed_changed(self, collapsed: bool):
         """Handle sidebar collapse/expand"""
@@ -1777,42 +1804,54 @@ class MainWindow(QMainWindow):
             get_config_manager().save_ui_config(ui_config)
 
     def _on_prev_file(self):
-        """Navigate to previous file in batch mode"""
-        if self._batch_current_index > 0:
-            # Save zones from current file before switching
-            self.preview.save_per_file_zones()
-            self.settings_panel.save_per_file_custom_zones()
+        """Navigate to previous file in batch mode (respects sort/filter order)"""
+        if not self._batch_mode:
+            return
 
-            self._batch_current_index -= 1
-            file_path = self._batch_files[self._batch_current_index]
-            self.batch_sidebar.select_by_original_index(self._batch_current_index)
-            # Clear custom zones with 'none' filter (Tự do) - will be restored from per-file storage
-            self.settings_panel.clear_custom_zones_with_free_filter()
+        # Get prev file from sorted/filtered list
+        file_path, original_idx = self.batch_sidebar.get_prev_file_info(self._batch_current_index)
+        if file_path is None:
+            return
 
-            # Store pending zone info - will be loaded after set_pages() completes
-            self._pending_zone_file = file_path
-            self._pending_zone_index = self._batch_current_index
+        # Save zones from current file before switching
+        self.preview.save_per_file_zones()
+        self.settings_panel.save_per_file_custom_zones()
 
-            self._load_pdf(file_path)
+        self._batch_current_index = original_idx
+        self.batch_sidebar.select_by_original_index(original_idx)
+        # Clear custom zones with 'none' filter (Tự do) - will be restored from per-file storage
+        self.settings_panel.clear_custom_zones_with_free_filter()
+
+        # Store pending zone info - will be loaded after set_pages() completes
+        self._pending_zone_file = file_path
+        self._pending_zone_index = original_idx
+
+        self._load_pdf(file_path)
 
     def _on_next_file(self):
-        """Navigate to next file in batch mode"""
-        if self._batch_current_index < len(self._batch_files) - 1:
-            # Save zones from current file before switching
-            self.preview.save_per_file_zones()
-            self.settings_panel.save_per_file_custom_zones()
+        """Navigate to next file in batch mode (respects sort/filter order)"""
+        if not self._batch_mode:
+            return
 
-            self._batch_current_index += 1
-            file_path = self._batch_files[self._batch_current_index]
-            self.batch_sidebar.select_by_original_index(self._batch_current_index)
-            # Clear custom zones with 'none' filter (Tự do) - will be restored from per-file storage
-            self.settings_panel.clear_custom_zones_with_free_filter()
+        # Get next file from sorted/filtered list
+        file_path, original_idx = self.batch_sidebar.get_next_file_info(self._batch_current_index)
+        if file_path is None:
+            return
 
-            # Store pending zone info - will be loaded after set_pages() completes
-            self._pending_zone_file = file_path
-            self._pending_zone_index = self._batch_current_index
+        # Save zones from current file before switching
+        self.preview.save_per_file_zones()
+        self.settings_panel.save_per_file_custom_zones()
 
-            self._load_pdf(file_path)
+        self._batch_current_index = original_idx
+        self.batch_sidebar.select_by_original_index(original_idx)
+        # Clear custom zones with 'none' filter (Tự do) - will be restored from per-file storage
+        self.settings_panel.clear_custom_zones_with_free_filter()
+
+        # Store pending zone info - will be loaded after set_pages() completes
+        self._pending_zone_file = file_path
+        self._pending_zone_index = original_idx
+
+        self._load_pdf(file_path)
 
     def _on_close_file(self):
         """Close currently opened file or folder"""
@@ -2049,7 +2088,20 @@ class MainWindow(QMainWindow):
             # Restore zones for this file
             self.settings_panel.load_per_file_custom_zones(file_path)
             self.preview.load_per_file_zones(file_path)
-            self.preview.set_file_index(original_idx, len(self._batch_files) if self._batch_files else 1)
+
+            # Update file counter with sorted/filtered position
+            if self._batch_mode and self.batch_sidebar:
+                visible_pos = self.batch_sidebar._file_list.get_visible_position(original_idx)
+                visible_count = self.batch_sidebar._file_list.get_visible_count()
+                # If file is not in filtered list, show original position in full list
+                if visible_pos < 0:
+                    visible_pos = original_idx
+                    visible_count = len(self._batch_files)
+                has_prev = self.batch_sidebar.has_prev_file(original_idx)
+                has_next = self.batch_sidebar.has_next_file(original_idx)
+                self.preview.set_file_index(visible_pos, visible_count, has_prev, has_next)
+            else:
+                self.preview.set_file_index(0, 1)
 
             # Clear zone loading flag (may not be cleared if no zones existed)
             self.preview.before_panel._zones_loading = False

@@ -208,6 +208,12 @@ class SidebarFileList(QListWidget):
         # Schedule next batch if more files to load
         if self._lazy_load_index < len(self._filtered_files):
             self._lazy_load_timer.start(5)  # 5ms between batches for responsive UI
+        else:
+            # Lazy loading complete - rebuild list if page filter is active
+            # This removes files whose actual page count doesn't match the filter
+            if self._filter_pages > 0:
+                self._rebuild_list(restart_lazy_load=False)
+                self.filter_changed.emit()
 
     @staticmethod
     def _get_page_count(file_path: str) -> int:
@@ -225,6 +231,7 @@ class SidebarFileList(QListWidget):
         self._sort_column = column
         self._sort_asc = ascending
         self._rebuild_list()
+        self.filter_changed.emit()
 
     def get_sort_info(self) -> tuple:
         """Get current sort info"""
@@ -404,6 +411,41 @@ class SidebarFileList(QListWidget):
                 self.setCurrentRow(i)
                 return
 
+    def get_visible_position(self, original_idx: int) -> int:
+        """Get the visible row position for an original index. Returns -1 if not visible."""
+        for i in range(self.count()):
+            item = self.item(i)
+            if item.data(Qt.UserRole + 1) == original_idx:
+                return i
+        return -1
+
+    def get_prev_file_info(self, original_idx: int) -> tuple:
+        """Get (file_path, original_idx) of previous file in visible order.
+        Returns (None, -1) if no previous file."""
+        visible_pos = self.get_visible_position(original_idx)
+        if visible_pos > 0:
+            item = self.item(visible_pos - 1)
+            return (item.data(Qt.UserRole), item.data(Qt.UserRole + 1))
+        return (None, -1)
+
+    def get_next_file_info(self, original_idx: int) -> tuple:
+        """Get (file_path, original_idx) of next file in visible order.
+        Returns (None, -1) if no next file."""
+        visible_pos = self.get_visible_position(original_idx)
+        if visible_pos >= 0 and visible_pos < self.count() - 1:
+            item = self.item(visible_pos + 1)
+            return (item.data(Qt.UserRole), item.data(Qt.UserRole + 1))
+        return (None, -1)
+
+    def has_prev_file(self, original_idx: int) -> bool:
+        """Check if there's a previous file in visible order."""
+        return self.get_visible_position(original_idx) > 0
+
+    def has_next_file(self, original_idx: int) -> bool:
+        """Check if there's a next file in visible order."""
+        visible_pos = self.get_visible_position(original_idx)
+        return visible_pos >= 0 and visible_pos < self.count() - 1
+
 
 class BatchSidebar(QFrame):
     """
@@ -424,6 +466,7 @@ class BatchSidebar(QFrame):
     selection_changed = pyqtSignal(list)  # list of checked files
     close_requested = pyqtSignal()
     collapsed_changed = pyqtSignal(bool)  # emitted when collapsed state changes
+    filter_changed = pyqtSignal()  # emitted when filter/sort changes (to update file counter)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -438,6 +481,7 @@ class BatchSidebar(QFrame):
         """Setup UI components"""
         self.setFrameStyle(QFrame.NoFrame)
         self.setMinimumWidth(self.COLLAPSED_WIDTH)
+        self.setMaximumWidth(16777215)  # Qt QWIDGETSIZE_MAX - allow resize on Windows
 
         # Main layout
         self._main_layout = QVBoxLayout(self)
@@ -647,6 +691,7 @@ class BatchSidebar(QFrame):
         self._file_list.file_selected.connect(self._on_file_selected)
         self._file_list.selection_changed.connect(self._on_selection_changed)
         self._file_list.page_counts_updated.connect(self._on_page_counts_updated)
+        self._file_list.filter_changed.connect(self.filter_changed.emit)
         list_layout.addWidget(self._file_list)
 
         content_layout.addWidget(self._list_container)
@@ -911,6 +956,22 @@ class BatchSidebar(QFrame):
     def select_by_original_index(self, original_idx: int):
         """Select file by original index"""
         self._file_list.select_by_original_index(original_idx)
+
+    def get_prev_file_info(self, original_idx: int) -> tuple:
+        """Get (file_path, original_idx) of previous file in visible/sorted order."""
+        return self._file_list.get_prev_file_info(original_idx)
+
+    def get_next_file_info(self, original_idx: int) -> tuple:
+        """Get (file_path, original_idx) of next file in visible/sorted order."""
+        return self._file_list.get_next_file_info(original_idx)
+
+    def has_prev_file(self, original_idx: int) -> bool:
+        """Check if there's a previous file in visible order."""
+        return self._file_list.has_prev_file(original_idx)
+
+    def has_next_file(self, original_idx: int) -> bool:
+        """Check if there's a next file in visible order."""
+        return self._file_list.has_next_file(original_idx)
 
     def resizeEvent(self, event):
         """Auto-collapse when dragged too small"""

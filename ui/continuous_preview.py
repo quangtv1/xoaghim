@@ -1089,14 +1089,21 @@ class ContinuousPreviewPanel(QFrame):
         if enabled:
             self.set_file_index(current, total)
 
-    def set_file_index(self, current: int, total: int):
-        """Update file counter and button states. current is 0-based."""
+    def set_file_index(self, current: int, total: int, has_prev: bool = None, has_next: bool = None):
+        """Update file counter and button states. current is 0-based.
+
+        Args:
+            current: Current visible position (0-based)
+            total: Total visible files
+            has_prev: Override for prev button state (for sorted/filtered lists)
+            has_next: Override for next button state (for sorted/filtered lists)
+        """
         if self.file_counter_label:
             self.file_counter_label.setText(f"({current + 1}/{total})")
         if self.prev_btn:
-            self.prev_btn.setEnabled(current > 0)
+            self.prev_btn.setEnabled(has_prev if has_prev is not None else current > 0)
         if self.next_btn:
-            self.next_btn.setEnabled(current < total - 1)
+            self.next_btn.setEnabled(has_next if has_next is not None else current < total - 1)
 
     def set_view_mode(self, mode: str):
         """Set view mode: 'continuous' or 'single'"""
@@ -3056,9 +3063,9 @@ class ContinuousPreviewWidget(QWidget):
         """Enable/disable batch mode navigation in before_panel"""
         self.before_panel.set_batch_mode(enabled, current, total)
 
-    def set_file_index(self, current: int, total: int):
+    def set_file_index(self, current: int, total: int, has_prev: bool = None, has_next: bool = None):
         """Update file counter and navigation button states"""
-        self.before_panel.set_file_index(current, total)
+        self.before_panel.set_file_index(current, total, has_prev, has_next)
 
     def _on_file_dropped(self, file_path: str):
         """Handle file dropped - forward to parent"""
