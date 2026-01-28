@@ -401,8 +401,8 @@ class ContinuousGraphicsView(QGraphicsView):
         return super().eventFilter(obj, event)
 
     def _create_crosshair_cursor(self, color: QColor) -> QCursor:
-        """Create custom crosshair cursor with specified color (10x longer arms)"""
-        line_length = 100  # 10x longer than default ~10px
+        """Create custom crosshair cursor with specified color (3x longer arms)"""
+        line_length = 24  # 3x longer than default ~8px (49x49 total, safe for Linux X11)
         size = line_length * 2 + 1  # Odd size for center pixel
         center = size // 2
 
