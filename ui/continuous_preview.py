@@ -1287,14 +1287,30 @@ class ContinuousPreviewPanel(QFrame):
         Returns:
             True if zones were loaded, False if no saved zones exist.
         """
-        print(f"[DEBUG] load_per_file_zones: file_path={file_path}")
+        import os
+        # Normalize path for cross-platform compatibility (Windows uses backslashes)
+        file_path_normalized = os.path.normpath(file_path)
+
+        print(f"[DEBUG] load_per_file_zones: file_path={file_path}, normalized={file_path_normalized}")
         print(f"[DEBUG] load_per_file_zones: _per_file_zones keys={list(self._per_file_zones.keys())[:5]}")
 
-        if file_path not in self._per_file_zones:
+        # Try both original and normalized paths
+        saved_zones = None
+        if file_path_normalized in self._per_file_zones:
+            saved_zones = self._per_file_zones[file_path_normalized]
+        elif file_path in self._per_file_zones:
+            saved_zones = self._per_file_zones[file_path]
+        else:
+            # Try normalizing all keys and compare
+            for key in self._per_file_zones.keys():
+                if os.path.normpath(key) == file_path_normalized:
+                    saved_zones = self._per_file_zones[key]
+                    break
+
+        if saved_zones is None:
             print(f"[DEBUG] load_per_file_zones: file_path NOT in _per_file_zones, returning False")
             return False
 
-        saved_zones = self._per_file_zones[file_path]
         print(f"[DEBUG] load_per_file_zones: saved_zones has {len(saved_zones)} pages")
 
         # Restore only Tự do zones (custom_*, protect_*) to _per_page_zones
