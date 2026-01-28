@@ -401,8 +401,12 @@ class ContinuousGraphicsView(QGraphicsView):
         return super().eventFilter(obj, event)
 
     def _create_crosshair_cursor(self, color: QColor) -> QCursor:
-        """Create custom crosshair cursor with specified color (3x longer arms)"""
-        line_length = 24  # 3x longer than default ~8px (49x49 total, safe for Linux X11)
+        """Create custom crosshair cursor with specified color (10x longer arms)
+
+        Note: Linux X11 has issues with custom cursors (transparency, size limits)
+        so we use standard Qt.CrossCursor on Linux via _get_draw_cursor()
+        """
+        line_length = 100  # 10x longer than default ~8px (201x201 total)
         size = line_length * 2 + 1  # Odd size for center pixel
         center = size // 2
 
@@ -441,15 +445,21 @@ class ContinuousGraphicsView(QGraphicsView):
         image.setDevicePixelRatio(dpr)
         pixmap = QPixmap.fromImage(image)
 
-        # Create mask from transparent pixels for Linux X11 compatibility
-        # X11 needs explicit mask for transparency to work
-        mask = pixmap.createMaskFromColor(QColor(0, 0, 0, 0), Qt.MaskInColor)
-        pixmap.setMask(mask)
-
         return QCursor(pixmap, center, center)
 
     def _get_draw_cursor(self) -> QCursor:
-        """Get crosshair cursor for current draw mode (cached)"""
+        """Get crosshair cursor for current draw mode (cached)
+
+        Linux X11 has issues with custom cursors (size limits, transparency)
+        so we use standard Qt.CrossCursor on Linux for compatibility.
+        Mac/Windows get custom colored crosshair.
+        """
+        import sys
+        # Linux X11 doesn't render custom cursors reliably - use standard cursor
+        if sys.platform.startswith('linux'):
+            return QCursor(Qt.CrossCursor)
+
+        # Mac/Windows: use custom colored crosshair
         if self._draw_mode == 'protect':
             color_key = 'pink'
             color = QColor(244, 114, 182)  # Pink #F472B6
