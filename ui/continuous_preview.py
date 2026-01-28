@@ -440,6 +440,12 @@ class ContinuousGraphicsView(QGraphicsView):
 
         image.setDevicePixelRatio(dpr)
         pixmap = QPixmap.fromImage(image)
+
+        # Create mask from transparent pixels for Linux X11 compatibility
+        # X11 needs explicit mask for transparency to work
+        mask = pixmap.createMaskFromColor(QColor(0, 0, 0, 0), Qt.MaskInColor)
+        pixmap.setMask(mask)
+
         return QCursor(pixmap, center, center)
 
     def _get_draw_cursor(self) -> QCursor:
