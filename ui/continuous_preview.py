@@ -1462,6 +1462,11 @@ class ContinuousPreviewPanel(QFrame):
         if need_recenter:
             self._recenter_all_pages()
 
+        # Recreate zone overlays when new pages load in sliding window mode
+        # This ensures zones saved in JSON are displayed for newly loaded pages
+        if self.show_overlay and any(img is not None for img in page_updates.values()):
+            self._recreate_zone_overlays()
+
         # Update thumbnail panel if exists (Gốc panel only) - only if not using progressive loading
         # When using progressive loading, thumbnails are set separately via set_thumbnail_pages()
         # if self._thumbnail_panel is not None:
@@ -2429,7 +2434,10 @@ class ContinuousPreviewPanel(QFrame):
         if not self._pages:
             return
 
-        for page_idx, page_item in page_iterator:
+        # Convert to list to iterate and count
+        page_list = list(page_iterator)
+
+        for page_idx, page_item in page_list:
             page_rect = page_item.boundingRect()
             page_pos = page_item.pos()
             img_w, img_h = int(page_rect.width()), int(page_rect.height())
@@ -2453,14 +2461,10 @@ class ContinuousPreviewPanel(QFrame):
     
     def update_page(self, page_idx: int, image: np.ndarray):
         """Cập nhật ảnh một trang"""
-        print(f"[DEBUG] [{self._panel_title}] update_page: page_idx={page_idx}")
         if 0 <= page_idx < len(self._page_items) and page_idx < len(self._pages):
             pixmap = self._numpy_to_pixmap(image)
             self._page_items[page_idx].setPixmap(pixmap)
             self._pages[page_idx] = image
-            print(f"[DEBUG] [{self._panel_title}] UPDATED page {page_idx}")
-        else:
-            print(f"[DEBUG] [{self._panel_title}] SKIPPED page {page_idx} (out of bounds)")
     
     def _on_zone_changed(self, zone_id: str):
         """Handle zone change - sync to other pages if in sync mode"""

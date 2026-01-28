@@ -467,6 +467,7 @@ class MainWindow(QMainWindow):
         self.WINDOW_HALF = 5   # Pages before/after current
         self._sliding_window_mode = False
         self._window_center = 0  # Current center page in window
+        self._wave_pages_to_load = []  # Pages pending in wave loading
 
         self.setWindowTitle("Xóa Ghim PDF (5S)")
         self.setMinimumSize(1200, 800)
@@ -1713,35 +1714,6 @@ class MainWindow(QMainWindow):
         # Load the file
         self._load_pdf(file_path)
 
-    def _load_zones_after_thumbnails(self):
-        """Load zones after thumbnails have painted"""
-        if not hasattr(self, '_pending_zone_file') or not self._pending_zone_file:
-            return
-        file_path = self._pending_zone_file
-        original_idx = self._pending_zone_index
-        self._pending_zone_file = None
-
-        # Restore zones for this file
-        self.settings_panel.load_per_file_custom_zones(file_path)
-        self.preview.load_per_file_zones(file_path)
-
-        # Update file counter with sorted/filtered position
-        visible_pos = self.batch_sidebar._file_list.get_visible_position(original_idx)
-        visible_count = self.batch_sidebar._file_list.get_visible_count()
-        # If file is not in filtered list, show original position in full list
-        if visible_pos < 0:
-            visible_pos = original_idx
-            visible_count = len(self._batch_files)
-        has_prev = self.batch_sidebar.has_prev_file(original_idx)
-        has_next = self.batch_sidebar.has_next_file(original_idx)
-        self.preview.set_file_index(visible_pos, visible_count, has_prev, has_next)
-
-        # Clear zone loading flag (may not be cleared if no zones existed)
-        self.preview.before_panel._zones_loading = False
-
-        # Update zone counts display
-        self._update_zone_counts()
-
     def _on_sidebar_selection_changed(self, checked_files: List[str]):
         """Handle checkbox selection change in sidebar"""
         self._update_ui_state()
@@ -2366,7 +2338,10 @@ class MainWindow(QMainWindow):
             self._update_sliding_window(page_index)
 
     def _update_sliding_window(self, center_page: int):
-        """Update sliding window - load pages around center, unload others"""
+        """Update sliding window - load pages around center, unload others
+
+        Uses wave pattern for jumps (>3 pages), sequential for small scrolls.
+        """
         if not self._pdf_handler or not self._sliding_window_mode:
             return
 
@@ -2389,20 +2364,88 @@ class MainWindow(QMainWindow):
         if not pages_to_load:
             return
 
-        # Show status
-        self.statusBar().showMessage(f"Đang tải trang {start+1}-{end}...")
+        # Unload old pages first (free memory immediately)
+        if pages_to_unload:
+            unload_updates = {}
+            for page_idx in pages_to_unload:
+                if 0 <= page_idx < len(self._all_pages):
+                    self._all_pages[page_idx] = None
+                    unload_updates[page_idx] = None
+            if unload_updates:
+                self.preview.update_window_pages(unload_updates)
 
-        # Prepare updates dict
+        # Sequential scroll (≤3 pages): load immediately without timer
+        if len(pages_to_load) <= 3:
+            self._load_pages_immediate(sorted(pages_to_load), start, end)
+            return
+
+        # Jump (>3 pages): use wave pattern for better UX
+        # Sort pages: center first, then spread outward
+        # E.g., center=30, pages=[25,26,27,28,29,31,32,33,34,35]
+        # Wave order: 30, 31, 29, 32, 28, 33, 27, 34, 26, 35, 25
+        wave_order = []
+        for delta in range(self.WINDOW_HALF + 1):
+            if delta == 0:
+                if center_page in pages_to_load:
+                    wave_order.append(center_page)
+            else:
+                # Forward first (next page), then backward (previous page)
+                forward = center_page + delta
+                backward = center_page - delta
+                if forward in pages_to_load:
+                    wave_order.append(forward)
+                if backward in pages_to_load:
+                    wave_order.append(backward)
+
+        # Store wave loading state
+        self._wave_pages_to_load = wave_order
+        self._wave_load_index = 0
+        self._wave_start = start
+        self._wave_end = end
+
+        # Start wave loading - load first 2 pages immediately (center + next)
+        self._load_wave_batch(batch_size=2)
+
+    def _load_pages_immediate(self, pages: list, start: int, end: int):
+        """Load pages immediately without timer (for sequential scroll)"""
         page_updates = {}
+        for page_idx in pages:
+            preview_img = self._pdf_handler.render_page(page_idx, dpi=self.PREVIEW_DPI)
+            if preview_img is not None:
+                while len(self._all_pages) <= page_idx:
+                    self._all_pages.append(None)
+                self._all_pages[page_idx] = preview_img
+                page_updates[page_idx] = preview_img
 
-        # Unload old pages (set to None to free memory)
-        for page_idx in pages_to_unload:
-            if 0 <= page_idx < len(self._all_pages):
-                self._all_pages[page_idx] = None
-                page_updates[page_idx] = None
+        if page_updates:
+            self.preview.update_window_pages(page_updates)
+        self.statusBar().showMessage(f"Đã tải cửa sổ trang {start+1}-{end}", 2000)
 
-        # Load new pages
-        for page_idx in sorted(pages_to_load):
+    def _load_wave_batch(self, batch_size: int = 1):
+        """Load next batch of pages in wave pattern"""
+        if not hasattr(self, '_wave_pages_to_load') or not self._wave_pages_to_load:
+            return
+
+        if self._wave_load_index >= len(self._wave_pages_to_load):
+            # Done loading
+            self.statusBar().showMessage(
+                f"Đã tải cửa sổ trang {self._wave_start+1}-{self._wave_end}", 2000
+            )
+            self._wave_pages_to_load = []
+            return
+
+        page_updates = {}
+        loaded_count = 0
+
+        while (self._wave_load_index < len(self._wave_pages_to_load)
+               and loaded_count < batch_size):
+            page_idx = self._wave_pages_to_load[self._wave_load_index]
+            self._wave_load_index += 1
+
+            # Show status for first page
+            if loaded_count == 0:
+                self.statusBar().showMessage(f"Đang tải trang {page_idx + 1}...")
+
             preview_img = self._pdf_handler.render_page(page_idx, dpi=self.PREVIEW_DPI)
             if preview_img is not None:
                 # Extend _all_pages if needed
@@ -2410,12 +2453,16 @@ class MainWindow(QMainWindow):
                     self._all_pages.append(None)
                 self._all_pages[page_idx] = preview_img
                 page_updates[page_idx] = preview_img
+                loaded_count += 1
 
-        # Update preview
+        # Update preview immediately after batch
         if page_updates:
             self.preview.update_window_pages(page_updates)
+            QApplication.processEvents()
 
-        self.statusBar().showMessage(f"Đã tải cửa sổ trang {start+1}-{end}", 2000)
+        # Schedule next batch with small delay to keep UI responsive
+        if self._wave_load_index < len(self._wave_pages_to_load):
+            QTimer.singleShot(10, lambda: self._load_wave_batch(batch_size=1))
 
     def _on_zoom_in(self):
         """Zoom in by 5%, snapping to nearest multiple of 5"""
