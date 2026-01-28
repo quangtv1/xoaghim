@@ -15,7 +15,7 @@ from PyQt5.QtWidgets import (
     QGraphicsOpacityEffect, QApplication
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QRectF, QTimer, QPointF, QPropertyAnimation, QEasingCurve, QEvent
-from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QBrush, QPen, QCursor, QPainterPath, QFont
+from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QBrush, QPen, QCursor, QPainterPath, QFont, QBitmap
 
 
 class SpinnerWidget(QWidget):
@@ -401,8 +401,12 @@ class ContinuousGraphicsView(QGraphicsView):
         return super().eventFilter(obj, event)
 
     def _create_crosshair_cursor(self, color: QColor) -> QCursor:
-        """Create custom crosshair cursor with specified color (10x longer arms)"""
-        line_length = 100  # 10x longer than default ~10px
+        """Create custom crosshair cursor with specified color.
+
+        Reduced to 24px arms (49x49 total) for Linux X11 compatibility.
+        X11 has ~64x64 cursor size limit.
+        """
+        line_length = 24  # 3x longer than default ~8px (total 49x49, safe for X11)
         size = line_length * 2 + 1  # Odd size for center pixel
         center = size // 2
 
@@ -415,6 +419,10 @@ class ContinuousGraphicsView(QGraphicsView):
         # Use QImage with premultiplied alpha for proper transparency
         image = QImage(actual_size, actual_size, QImage.Format_ARGB32_Premultiplied)
         image.fill(0)  # Fully transparent (0x00000000)
+
+        # Create 1-bit mask for X11 transparency compatibility
+        mask = QImage(actual_size, actual_size, QImage.Format_Mono)
+        mask.fill(0)  # 0 = transparent
 
         # Get color as ARGB with full opacity
         r, g, b = color.red(), color.green(), color.blue()
@@ -430,6 +438,7 @@ class ContinuousGraphicsView(QGraphicsView):
                 y = actual_center + t
                 if 0 <= x < actual_size and 0 <= y < actual_size:
                     image.setPixel(x, y, argb)
+                    mask.setPixel(x, y, 1)  # 1 = opaque in mask
 
         # Draw vertical line with thickness
         for y in range(actual_center - actual_length, actual_center + actual_length + 1):
@@ -437,9 +446,14 @@ class ContinuousGraphicsView(QGraphicsView):
                 x = actual_center + t
                 if 0 <= x < actual_size and 0 <= y < actual_size:
                     image.setPixel(x, y, argb)
+                    mask.setPixel(x, y, 1)  # 1 = opaque in mask
 
         image.setDevicePixelRatio(dpr)
         pixmap = QPixmap.fromImage(image)
+
+        # Set explicit mask for Linux X11 compatibility
+        pixmap.setMask(QBitmap.fromImage(mask))
+
         return QCursor(pixmap, center, center)
 
     def _get_draw_cursor(self) -> QCursor:
