@@ -209,6 +209,9 @@ class SettingsPanel(QWidget):
         if enabled_zones:
             self._selected_zone_id = enabled_zones[-1]
 
+        # Emit zones to preview widget so they are applied on folder reopen
+        self._emit_zones()
+
     def _on_auto_save_timer_fired(self):
         """Timer callback: save pending changes (zone config and/or per-file zones)."""
         if self._pending_save:
