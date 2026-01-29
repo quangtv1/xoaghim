@@ -861,6 +861,11 @@ class SettingsPanel(QWidget):
                 self.zone_selector.edge_icon.set_zone_selected(zone_id, enabled)
             self.zone_selector.blockSignals(False)
 
+            # Auto-switch to "Tất cả" filter when toggling corner/edge zones
+            if not self.apply_all_rb.isChecked():
+                self.apply_all_rb.setChecked(True)
+                self.compact_toolbar.set_filter_state('all')
+
             self._update_zone_combo()
             self._emit_zones()
             self._save_zone_config()
@@ -973,6 +978,10 @@ class SettingsPanel(QWidget):
         # Update zone states
         for zone_id in self._zones:
             self._zones[zone_id].enabled = (zone_id in selected_zones)
+
+        # Auto-switch to "Tất cả" filter when toggling corner/edge zones
+        if not self.apply_all_rb.isChecked():
+            self.apply_all_rb.setChecked(True)
 
         self._update_zone_combo()
         self._emit_zones()
