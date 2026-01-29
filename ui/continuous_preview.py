@@ -3118,6 +3118,10 @@ class ContinuousPreviewWidget(QWidget):
 
     def set_file_paths(self, source_path: str, dest_path: str):
         """Update title labels with file paths"""
+        import os
+        # Normalize paths for consistent display (fixes mixed slashes on Windows)
+        source_path = os.path.normpath(source_path) if source_path else ""
+        dest_path = os.path.normpath(dest_path) if dest_path else ""
         self.before_panel.set_title(f"Gốc: {source_path}")
         self.after_panel.set_title(f"Đích: {dest_path}")
     

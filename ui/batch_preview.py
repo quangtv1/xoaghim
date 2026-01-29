@@ -502,11 +502,11 @@ class BatchFileListWidget(QWidget):
         # Generate output files
         self._output_files = self._generate_output_files(files)
 
-        # Update panels
-        self.goc_panel.set_title(f"Gốc: {base_dir}")
+        # Update panels - normalize paths for consistent display on Windows
+        self.goc_panel.set_title(f"Gốc: {os.path.normpath(base_dir)}")
         self.goc_panel.set_files(files, base_dir)
 
-        self.dich_panel.set_title(f"Đích: {output_dir}")
+        self.dich_panel.set_title(f"Đích: {os.path.normpath(output_dir)}")
         self.dich_panel.set_files(self._output_files, output_dir)
     
     def _generate_output_files(self, input_files: List[str]) -> List[str]:
@@ -610,6 +610,6 @@ class BatchFileListWidget(QWidget):
         # Regenerate output files
         self._output_files = self._generate_output_files(self._files)
 
-        # Update Đích panel
-        self.dich_panel.set_title(f"Đích: {self._output_dir}")
+        # Update Đích panel - normalize path for consistent display on Windows
+        self.dich_panel.set_title(f"Đích: {os.path.normpath(self._output_dir)}")
         self.dich_panel.set_files(self._output_files, self._output_dir)
