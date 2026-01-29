@@ -167,9 +167,11 @@ class PortableConfigManager:
         return self._data.get('global_settings', {})
 
     def save_global_settings(self, settings: Dict[str, Any]):
-        """Save global zone settings (Zone Chung)"""
-        self._data['global_settings'] = settings
-        self.mark_dirty()  # Uses auto-save interval logic
+        """Save global zone settings (Zone Chung) - only marks dirty if data changed"""
+        old_settings = self._data.get('global_settings', {})
+        if settings != old_settings:
+            self._data['global_settings'] = settings
+            self.mark_dirty()
 
     def get_per_file_zones(self) -> Dict[str, Dict[int, Dict[str, Any]]]:
         """Get per-file zones with relative paths converted to absolute"""
@@ -186,7 +188,7 @@ class PortableConfigManager:
         return result
 
     def save_per_file_zones(self, per_file_zones: Dict[str, Dict[int, Dict[str, Any]]]):
-        """Save per-file zones - full replacement, no merge"""
+        """Save per-file zones - only marks dirty if data changed"""
         zones_serializable = {}
         for file_path, page_zones in per_file_zones.items():
             rel_path = _to_relative_path(file_path, self._folder_path)
@@ -194,8 +196,10 @@ class PortableConfigManager:
                 str(page_idx): zone_data
                 for page_idx, zone_data in page_zones.items()
             }
-        self._data['per_file_zones'] = zones_serializable
-        self.mark_dirty()  # Uses auto-save interval logic
+        old_zones = self._data.get('per_file_zones', {})
+        if zones_serializable != old_zones:
+            self._data['per_file_zones'] = zones_serializable
+            self.mark_dirty()
 
     def get_custom_zones(self) -> Dict[str, Dict[str, Any]]:
         """Get custom zones with relative paths converted to absolute"""
@@ -208,13 +212,15 @@ class PortableConfigManager:
         return result
 
     def save_custom_zones(self, custom_zones: Dict[str, Dict[str, Any]]):
-        """Save custom zones - full replacement, no merge"""
+        """Save custom zones - only marks dirty if data changed"""
         zones_serializable = {}
         for file_path, zones in custom_zones.items():
             rel_path = _to_relative_path(file_path, self._folder_path)
             zones_serializable[rel_path] = zones
-        self._data['custom_zones'] = zones_serializable
-        self.mark_dirty()  # Uses auto-save interval logic
+        old_zones = self._data.get('custom_zones', {})
+        if zones_serializable != old_zones:
+            self._data['custom_zones'] = zones_serializable
+            self.mark_dirty()
 
     def clear(self):
         """Clear all data and delete file"""
