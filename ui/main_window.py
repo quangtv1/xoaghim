@@ -1581,6 +1581,7 @@ class MainWindow(QMainWindow):
         # Show batch sidebar with file list
         self._batch_current_index = 0
         self._is_first_file_in_batch = True  # First file in new batch gets fit width
+        self._saved_zoom_percent = 60  # Reset to 60% for new folder
         self.batch_sidebar.set_files(pdf_files, base_dir)
         self.batch_sidebar.setVisible(True)
         # Apply saved sidebar width
@@ -1680,6 +1681,7 @@ class MainWindow(QMainWindow):
         # Show batch sidebar FIRST, then load files
         self._batch_current_index = 0
         self._is_first_file_in_batch = True  # First file in new batch gets fit width
+        self._saved_zoom_percent = 60  # Reset to 60% for new folder
         self._background_loading = True  # Prevent eventFilter during loading
         self.batch_sidebar.setVisible(True)  # Show sidebar before loading
         QApplication.processEvents()  # Ensure sidebar is rendered
