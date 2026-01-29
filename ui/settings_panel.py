@@ -246,6 +246,23 @@ class SettingsPanel(QWidget):
             self._pending_save = True
             self._auto_save_timer.start(auto_save_interval * 60 * 1000)  # N minutes in ms
 
+    def has_pending_changes(self) -> bool:
+        """Check if there are any pending unsaved changes.
+
+        Returns True if zone config or per-file zones have been modified
+        but not yet saved to .xoaghim.json.
+        """
+        return self._pending_save or self._pending_per_file_save
+
+    def discard_pending_changes(self):
+        """Discard any pending changes without saving.
+
+        Clears the dirty flags and stops the auto-save timer.
+        """
+        self._pending_save = False
+        self._pending_per_file_save = False
+        self._auto_save_timer.stop()
+
     def force_save_pending(self):
         """Force save any pending zone config changes.
 

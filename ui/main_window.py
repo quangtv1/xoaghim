@@ -1860,6 +1860,21 @@ class MainWindow(QMainWindow):
 
     def _on_close_file(self):
         """Close currently opened file or folder"""
+        # Check for unsaved changes before closing
+        if self.settings_panel.has_pending_changes():
+            reply = QMessageBox.question(
+                self,
+                "Lưu thay đổi",
+                "Bạn có muốn lưu các thay đổi vào file .xoaghim.json?",
+                QMessageBox.Save | QMessageBox.No,
+                QMessageBox.Save
+            )
+
+            if reply == QMessageBox.Save:
+                self.settings_panel.force_save_pending()
+            else:
+                self.settings_panel.discard_pending_changes()
+
         if self._batch_mode:
             # Close batch mode
             self._batch_mode = False
