@@ -478,6 +478,10 @@ class ContinuousGraphicsView(QGraphicsView):
             # Pink for protection zones
             pen = QPen(QColor(244, 114, 182), 1)  # Pink #F472B6
             brush = QBrush(QColor(244, 114, 182, 50))
+        elif self._draw_mode == 'remove_override':
+            # Yellow/Amber for "Vô đối" zones (override all protection)
+            pen = QPen(QColor(245, 158, 11), 1)  # Amber #F59E0B
+            brush = QBrush(QColor(245, 158, 11, 50))
         else:
             # Green for Zone Riêng (custom removal zones)
             pen = QPen(QColor(34, 197, 94), 1)  # Green #22C55E
@@ -2411,11 +2415,13 @@ class ContinuousPreviewPanel(QFrame):
                                    rect: QRectF, page_idx: int,
                                    page_pos: QPointF, page_rect: QRectF) -> ZoneItem:
         """Create a ZoneItem and connect its signals."""
-        # Get zone_type from zone_def, or infer from zone_id (protect_* = protect, else = remove)
+        # Get zone_type from zone_def, or infer from zone_id prefix
         if zone_def:
             zone_type = getattr(zone_def, 'zone_type', 'remove')
         elif zone_id.startswith('protect_'):
             zone_type = 'protect'
+        elif zone_id.startswith('override_'):
+            zone_type = 'remove_override'
         else:
             zone_type = 'remove'
         zone_item = ZoneItem(f"{zone_id}_{page_idx}", rect, zone_type=zone_type)
@@ -4188,13 +4194,15 @@ class ContinuousPreviewWidget(QWidget):
                         )
 
             else:
-                # Custom/protect or legacy format: (x_pct, y_pct, w_pct, h_pct)
+                # Custom/protect/override or legacy format: (x_pct, y_pct, w_pct, h_pct)
                 threshold_val = zone_def.threshold if zone_def else 7
                 # Infer zone_type from zone_id if zone_def is None (persisted zones)
                 if zone_def:
                     zone_type_val = getattr(zone_def, 'zone_type', 'remove')
                 elif zone_id_lower.startswith('protect_'):
                     zone_type_val = 'protect'
+                elif zone_id_lower.startswith('override_'):
+                    zone_type_val = 'remove_override'
                 else:
                     zone_type_val = 'remove'
                 page_zone = Zone(

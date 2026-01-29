@@ -299,8 +299,15 @@ class BatchProcessThread(QThread):
                     file_zone_data = self.per_file_zones[input_path]
                     for page_idx, page_zones in file_zone_data.items():
                         for zone_id, zone_tuple in page_zones.items():
-                            # Only add Zone Riêng (custom_*, protect_*)
-                            if zone_id.startswith('custom_') or zone_id.startswith('protect_'):
+                            # Only add Zone Riêng (custom_*, protect_*, override_*)
+                            if zone_id.startswith('custom_') or zone_id.startswith('protect_') or zone_id.startswith('override_'):
+                                # Determine zone_type from prefix
+                                if zone_id.startswith('protect_'):
+                                    zone_type = 'protect'
+                                elif zone_id.startswith('override_'):
+                                    zone_type = 'remove_override'
+                                else:
+                                    zone_type = 'remove'
                                 zone_dict = {
                                     'id': zone_id,
                                     'name': zone_id,
@@ -310,7 +317,7 @@ class BatchProcessThread(QThread):
                                     'height': zone_tuple[3],
                                     'threshold': 7,
                                     'enabled': True,
-                                    'zone_type': 'protect' if zone_id.startswith('protect_') else 'remove',
+                                    'zone_type': zone_type,
                                     'page_filter': 'none',
                                     'target_page': page_idx,
                                     'size_mode': 'percent'

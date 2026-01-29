@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec file for Windows build - Version 1.1.15
+# PyInstaller spec file for Windows build - Version 1.1.24
 # Builds to folder with all DLLs included for proper ONNX Runtime support
 
 import sys
@@ -78,7 +78,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,  # Important: binaries go to COLLECT
-    name='XoaGhim-1.1.15',
+    name='XoaGhim-1.1.24',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -100,5 +100,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='XoaGhim-1.1.15',
+    name='XoaGhim-1.1.24',
 )

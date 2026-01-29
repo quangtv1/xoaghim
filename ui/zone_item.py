@@ -108,6 +108,10 @@ class ZoneItem(QGraphicsRectItem):
             # Pink for protection zones
             color_normal = QColor(244, 114, 182)      # #F472B6
             color_selected = QColor(219, 39, 119)     # #DB2777 (darker pink)
+        elif self.zone_type == 'remove_override' or self.zone_id.startswith('override_'):
+            # Yellow/Amber for "Vô đối" zones (override all protection)
+            color_normal = QColor(245, 158, 11)       # #F59E0B (amber-500)
+            color_selected = QColor(217, 119, 6)      # #D97706 (amber-600)
         elif self.zone_id.startswith('custom_'):
             # Green for Zone Riêng (custom removal zones)
             color_normal = QColor(34, 197, 94)        # #22C55E (green-500)

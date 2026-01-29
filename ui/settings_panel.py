@@ -145,7 +145,7 @@ class SettingsPanel(QWidget):
         custom_zones_config = config.get('custom_zones', {})
         for zone_id, zone_data in custom_zones_config.items():
             # Find the highest custom zone counter
-            if zone_id.startswith('custom_') or zone_id.startswith('protect_'):
+            if zone_id.startswith('custom_') or zone_id.startswith('protect_') or zone_id.startswith('override_'):
                 try:
                     num = int(zone_id.split('_')[1])
                     if num > self._custom_zone_counter:
@@ -557,12 +557,13 @@ class SettingsPanel(QWidget):
         apply_layout.addWidget(self.apply_free_rb)
 
         # "Vô đối" option - only visible when in Tùy biến - (remove) mode
-        self.apply_mirror_rb = QRadioButton("Vô đối")
-        self.apply_mirror_rb.setToolTip("Vùng vẽ mới áp dụng cho trang đối xứng (trang chẵn ↔ lẻ)")
-        self.apply_mirror_rb.setStyleSheet(radio_indicator_style)
-        self.apply_group.addButton(self.apply_mirror_rb, 4)
-        self.apply_mirror_rb.setVisible(False)  # Hidden by default
-        apply_layout.addWidget(self.apply_mirror_rb)
+        # Override zones ignore all protection (AI + user-drawn protect zones)
+        self.apply_override_rb = QRadioButton("Vô đối")
+        self.apply_override_rb.setToolTip("Xóa đè lên tất cả vùng bảo vệ (AI + vùng vẽ tay)")
+        self.apply_override_rb.setStyleSheet(radio_indicator_style)
+        self.apply_group.addButton(self.apply_override_rb, 4)
+        self.apply_override_rb.setVisible(False)  # Hidden by default
+        apply_layout.addWidget(self.apply_override_rb)
 
         # Connect button group signal
         self.apply_group.buttonClicked.connect(self._on_apply_filter_changed)
@@ -1107,8 +1108,8 @@ class SettingsPanel(QWidget):
         self._schedule_save_zone_config()  # Respect auto-save interval
 
     def _get_current_filter(self) -> str:
-        """Lấy filter hiện tại: 'all', 'odd', 'even', 'none'"""
-        filter_map = {0: 'all', 1: 'odd', 2: 'even', 3: 'none'}
+        """Lấy filter hiện tại: 'all', 'odd', 'even', 'none', 'override'"""
+        filter_map = {0: 'all', 1: 'odd', 2: 'even', 3: 'none', 4: 'override'}
         return filter_map.get(self.apply_group.checkedId(), 'all')
 
     def _on_zone_clicked(self, zone_id: str, enabled: bool):
@@ -1121,8 +1122,8 @@ class SettingsPanel(QWidget):
                     self.apply_all_rb.setChecked(True)
                     self._on_apply_filter_changed(self.apply_all_rb)
                 # Hide "Vô đối" when clicking Góc/Cạnh
-                self.apply_mirror_rb.setVisible(False)
-                if self.apply_mirror_rb.isChecked():
+                self.apply_override_rb.setVisible(False)
+                if self.apply_override_rb.isChecked():
                     self.apply_free_rb.setChecked(True)
 
             # Reset zone size to default when re-selecting
@@ -1366,9 +1367,9 @@ class SettingsPanel(QWidget):
             self.apply_free_rb.setChecked(True)
 
         # Show "Vô đối" only when in Tùy biến - (remove) mode
-        self.apply_mirror_rb.setVisible(mode == 'remove')
-        # If mirror was selected but mode changed, switch to Từng trang
-        if mode != 'remove' and self.apply_mirror_rb.isChecked():
+        self.apply_override_rb.setVisible(mode == 'remove')
+        # If override was selected but mode changed, switch to Từng trang
+        if mode != 'remove' and self.apply_override_rb.isChecked():
             self.apply_free_rb.setChecked(True)
 
         self.draw_mode_changed.emit(mode)
@@ -1383,15 +1384,25 @@ class SettingsPanel(QWidget):
             page_idx: Target page index (0-based). -1 means use page_filter
         """
         self._custom_zone_counter += 1
+        current_filter = self._get_current_filter()
 
+        # Determine zone_id, name, and actual zone_type based on filter
         if zone_type == 'protect':
             zone_id = f'protect_{self._custom_zone_counter}'
             zone_name = f'Bảo vệ {self._custom_zone_counter}'
+            actual_zone_type = 'protect'
+        elif current_filter == 'override':
+            # "Vô đối" mode - override zones ignore all protection
+            zone_id = f'override_{self._custom_zone_counter}'
+            zone_name = f'Vô đối {self._custom_zone_counter}'
+            actual_zone_type = 'remove_override'
         else:
             zone_id = f'custom_{self._custom_zone_counter}'
             zone_name = f'Xóa ghim {self._custom_zone_counter}'
+            actual_zone_type = 'remove'
 
-        current_filter = self._get_current_filter()
+        # Override filter saves as per-file zone (like 'none')
+        effective_filter = 'none' if current_filter == 'override' else current_filter
 
         self._custom_zones[zone_id] = Zone(
             id=zone_id,
@@ -1402,9 +1413,9 @@ class SettingsPanel(QWidget):
             height=height,
             threshold=self.threshold_slider.value(),
             enabled=True,
-            zone_type=zone_type,  # 'remove' or 'protect'
-            page_filter=current_filter,
-            target_page=page_idx if current_filter == 'none' else -1  # Use target_page in 'none' mode
+            zone_type=actual_zone_type,  # 'remove', 'protect', or 'remove_override'
+            page_filter=effective_filter,
+            target_page=page_idx if effective_filter == 'none' else -1
         )
 
         # Add to selection history
@@ -1420,8 +1431,8 @@ class SettingsPanel(QWidget):
         # Keep draw mode active - user can continue drawing more zones
 
         # Save immediately for crash recovery
-        if current_filter == 'none':
-            # Tự do mode: save per-file zones
+        if current_filter in ('none', 'override'):
+            # Tự do / Vô đối mode: save per-file zones
             self._schedule_save_per_file_zones()
         else:
             # Global custom zone: save to config
@@ -1430,6 +1441,8 @@ class SettingsPanel(QWidget):
     def set_draw_mode(self, mode):
         """Set draw mode state (mode: 'remove', 'protect', or None)"""
         self.zone_selector.set_draw_mode(mode)
+        # Show "Vô đối" only when in Tùy biến - (remove) mode
+        self.apply_override_rb.setVisible(mode == 'remove')
     
     def delete_zone(self, zone_id: str):
         """Xóa vùng (bất kỳ loại nào: góc, cạnh, tùy biến)"""
@@ -1901,13 +1914,23 @@ class SettingsPanel(QWidget):
             self.apply_all_rb: 'all',
             self.apply_odd_rb: 'odd',
             self.apply_even_rb: 'even',
-            self.apply_free_rb: 'none'
+            self.apply_free_rb: 'none',
+            self.apply_override_rb: 'override'  # Vô đối - ignores all protection
         }
         filter_mode = filter_map.get(button, 'all')
-        # Sync compact toolbar filter state
-        self.compact_toolbar.set_filter_state(filter_mode)
+        # Sync compact toolbar filter state (override maps to 'none' for compact toolbar)
+        compact_filter = 'none' if filter_mode == 'override' else filter_mode
+        self.compact_toolbar.set_filter_state(compact_filter)
         self.page_filter_changed.emit(filter_mode)
         self._schedule_save_zone_config()  # Respect auto-save interval
+
+        # Update draw mode color when switching to/from override
+        if self._current_draw_mode == 'remove' and filter_mode == 'override':
+            # Switch to override draw mode for yellow color
+            self.draw_mode_changed.emit('remove_override')
+        elif self._current_draw_mode == 'remove' and filter_mode != 'override':
+            # Ensure normal remove mode color
+            self.draw_mode_changed.emit('remove')
 
     def _on_reset_zones_clicked(self):
         """Handle reset zones button - show popup with zone type options"""

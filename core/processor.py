@@ -31,8 +31,8 @@ class Zone:
     height: float  # % chiều cao (0.0 - 1.0)
     threshold: int = 5
     enabled: bool = True
-    zone_type: str = 'remove'  # 'remove' (xóa) or 'protect' (bảo vệ)
-    page_filter: str = 'all'  # 'all', 'odd', 'even', 'none' - filter khi tạo zone
+    zone_type: str = 'remove'  # 'remove', 'protect', or 'remove_override' (vô đối - ignores all protection)
+    page_filter: str = 'all'  # 'all', 'odd', 'even', 'none', 'override' - filter khi tạo zone
     target_page: int = -1  # Target page index when page_filter='none' (-1 means all)
     # Hybrid sizing fields
     width_px: int = 0   # Fixed pixel width (for corners, edge depth)
@@ -694,15 +694,17 @@ class StapleRemover:
         result = image.copy()
         h, w = image.shape[:2]
 
-        # Tách zones thành removal zones và protection zones
+        # Tách zones thành removal zones, override zones và protection zones
         removal_zones = []
+        override_zones = []  # "Vô đối" zones - ignore all protection
         custom_protect_regions = []
 
         for zone in zones:
             if not zone.enabled:
                 continue
 
-            if getattr(zone, 'zone_type', 'remove') == 'protect':
+            zone_type = getattr(zone, 'zone_type', 'remove')
+            if zone_type == 'protect':
                 # Custom protect zone -> convert to ProtectedRegion
                 from .layout_detector import ProtectedRegion
                 x, y, zw, zh = zone.to_pixels(w, h, render_dpi)
@@ -711,9 +713,15 @@ class StapleRemover:
                     label='custom_protect',
                     confidence=1.0
                 ))
+            elif zone_type == 'remove_override':
+                # "Vô đối" zone - will ignore ALL protection
+                override_zones.append(zone)
             else:
                 removal_zones.append(zone)
 
+        # Process override zones FIRST - they ignore all protection
+        for zone in override_zones:
+            result = self.process_zone(result, zone, render_dpi)
 
         # Combine AI-detected regions with custom protect regions
         all_protected = list(protected_regions or []) + custom_protect_regions
