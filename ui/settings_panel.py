@@ -497,7 +497,7 @@ class SettingsPanel(QWidget):
         lbl_vung.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
         params_layout.addWidget(lbl_vung, 0, 0)
         self.zone_combo = QComboBox()
-        self.zone_combo.setMinimumWidth(180)
+        self.zone_combo.setMinimumWidth(80)  # Reduced for flexible resize
         self.zone_combo.setEditable(True)
         self.zone_combo.lineEdit().setReadOnly(True)  # Prevent typing
         self.zone_combo.lineEdit().setTextMargins(0, 0, 0, 0)
@@ -708,7 +708,7 @@ class SettingsPanel(QWidget):
         self.quality_combo = QComboBox()
         self.quality_combo.addItems(["300 dpi", "250 dpi", "200 dpi", "100 dpi", "72 dpi"])
         self.quality_combo.setCurrentIndex(0)  # Default 300 dpi
-        self.quality_combo.setMinimumWidth(100)
+        self.quality_combo.setMinimumWidth(60)  # Reduced for flexible resize
         self.quality_combo.setEditable(True)
         self.quality_combo.lineEdit().setReadOnly(True)  # Prevent typing
         self.quality_combo.lineEdit().setTextMargins(0, 0, 0, 0)
@@ -724,7 +724,7 @@ class SettingsPanel(QWidget):
         self.jpeg_quality_combo = QComboBox()
         self.jpeg_quality_combo.addItems(["100%", "90%", "80%", "70%"])
         self.jpeg_quality_combo.setCurrentIndex(1)  # Default: 90%
-        self.jpeg_quality_combo.setMinimumWidth(100)
+        self.jpeg_quality_combo.setMinimumWidth(60)  # Reduced for flexible resize
         self.jpeg_quality_combo.setEditable(True)
         self.jpeg_quality_combo.lineEdit().setReadOnly(True)  # Prevent typing
         self.jpeg_quality_combo.lineEdit().setTextMargins(0, 0, 0, 0)
