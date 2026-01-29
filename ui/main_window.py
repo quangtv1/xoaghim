@@ -1757,7 +1757,7 @@ class MainWindow(QMainWindow):
             if sidebar_width > 0:
                 self.compact_toolbar.set_search_width(sidebar_width)
     def _on_splitter_moved(self, pos: int, index: int):
-        """Handle splitter drag - enforce min sidebar width and min preview width (1/4 screen)"""
+        """Handle splitter drag - enforce minimum widths for sidebar and preview"""
         if not self.batch_sidebar.isVisible():
             return
 
@@ -1766,9 +1766,9 @@ class MainWindow(QMainWindow):
         preview_width = sizes[1]
         total_width = self.preview_splitter.width()
 
-        # Minimum widths
+        # Minimum widths - allow preview to be quite small for flexible sidebar
         min_sidebar = BatchSidebar.COLLAPSED_WIDTH if self.batch_sidebar.is_collapsed() else BatchSidebar.MIN_WIDTH
-        min_preview = max(300, total_width // 4)  # At least 1/4 screen or 300px
+        min_preview = 150  # Small minimum to allow wide sidebar
 
         need_resize = False
 
@@ -1778,7 +1778,7 @@ class MainWindow(QMainWindow):
             preview_width = total_width - sidebar_width
             need_resize = True
 
-        # Enforce minimum preview width (prevent sidebar from being too wide)
+        # Enforce minimum preview width
         elif preview_width < min_preview:
             preview_width = min_preview
             sidebar_width = total_width - preview_width
