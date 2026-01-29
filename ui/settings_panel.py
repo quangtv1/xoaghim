@@ -60,6 +60,7 @@ class SettingsPanel(QWidget):
     """Panel cài đặt ở top"""
 
     zones_changed = pyqtSignal(list)  # List[Zone]
+    zone_updated = pyqtSignal(object)  # Single Zone - for slider changes (force-update in preview)
     settings_changed = pyqtSignal(dict)
     process_clicked = pyqtSignal()
     page_filter_changed = pyqtSignal(str)  # 'all', 'odd', 'even'
@@ -83,6 +84,9 @@ class SettingsPanel(QWidget):
         self._zone_selection_history: List[str] = []  # Track order of zone selections
         self._collapsed = False
         self._current_draw_mode = None  # Track current draw mode
+        # Reference page size for percentage calculations (updated when page loads)
+        self._page_width = 1000  # Default reference (pixels at 120 DPI)
+        self._page_height = 1400  # Default A4-ish ratio
         # Per-file storage for custom zones with 'none' filter (Tự do mode)
         self._per_file_custom_zones: Dict[str, Dict[str, Zone]] = {}  # {file_path: {zone_id: Zone}}
         self._current_file_path: str = ""
@@ -92,6 +96,12 @@ class SettingsPanel(QWidget):
         self._save_config_timer = QTimer()
         self._save_config_timer.setSingleShot(True)
         self._save_config_timer.timeout.connect(self._save_zone_config)
+
+        # Periodic auto-save timer (respects "Tự lưu" interval)
+        self._auto_save_timer = QTimer()
+        self._auto_save_timer.setSingleShot(True)
+        self._auto_save_timer.timeout.connect(self._save_zone_config)
+        self._pending_save = False  # Track if save is pending
 
         self._setup_ui()
         self._setup_compact_toolbar()
@@ -203,8 +213,30 @@ class SettingsPanel(QWidget):
         if enabled_zones:
             self._selected_zone_id = enabled_zones[-1]
 
+    def _schedule_save_zone_config(self):
+        """Schedule saving zone config based on auto-save interval.
+
+        - If interval = 0: save immediately (no delay)
+        - If interval > 0: use timer, only save when timer fires (last change wins)
+
+        This reduces I/O during slider drag operations.
+        """
+        auto_save_interval = self.auto_save_spin.value()  # 0-10 minutes
+
+        if auto_save_interval == 0:
+            # Save immediately
+            self._save_zone_config()
+        else:
+            # Schedule save with timer (restart if already running = debounce)
+            # Use shorter debounce (500ms) for slider changes, full interval for periodic
+            self._pending_save = True
+            # For slider changes, use 500ms debounce to batch rapid changes
+            # The full auto-save interval is for periodic background saves
+            self._auto_save_timer.start(500)  # 500ms debounce for slider changes
+
     def _save_zone_config(self):
         """Save current zone configuration to config file (including hybrid sizing)"""
+        self._pending_save = False
         enabled_zones = [z.id for z in self._zones.values() if z.enabled]
 
         zone_sizes = {}
@@ -1056,14 +1088,29 @@ class SettingsPanel(QWidget):
                 self.zone_preset_toggled.emit(zone_id, enabled, zone_data)
 
     def _select_zone_in_combo(self, zone_id: str):
-        """Chọn zone trong combo box theo zone_id"""
+        """Chọn zone trong combo box theo zone_id và cập nhật sliders"""
         for i in range(self.zone_combo.count()):
             if self.zone_combo.itemData(i) == zone_id:
                 self.zone_combo.setCurrentIndex(i)
-                break
+                # Explicitly call _on_zone_selected to update sliders
+                # (in case setCurrentIndex doesn't trigger signal)
+                self._on_zone_selected(self.zone_combo.currentText())
+                return
+        # Zone not found in combo - might be disabled or wrong id
+        print(f"[Warning] Zone '{zone_id}' not found in combo box")
     
     def _on_zone_selected(self, text):
-        """Khi chọn zone trong combo"""
+        """Khi chọn zone trong combo - cập nhật sliders theo zone type.
+
+        Slider values represent percentage of current page dimensions:
+        - 100% width = full page width (_page_width pixels)
+        - 100% height = full page height (_page_height pixels)
+
+        Zone types:
+        - Corner zones (fixed): width_px/height_px → % of page
+        - Edge zones (hybrid): 100% for edge dimension, depth_px → % of page
+        - Custom zones (percent): width/height already in % (0.0-1.0)
+        """
         zone_id = self.zone_combo.currentData()
         if not zone_id:
             return
@@ -1079,22 +1126,51 @@ class SettingsPanel(QWidget):
         self.width_slider.blockSignals(True)
         self.height_slider.blockSignals(True)
 
+        # Reset slider ranges to default (will be changed for edges)
+        self.width_slider.setRange(1, 50)
+        self.height_slider.setRange(1, 50)
+
         if zone_id.startswith('margin_'):
-            # Edge zones: one dimension is 100%, show depth as the other
+            # Edge zones (hybrid): one dimension is 100%, depth as % of page
             if zone_id in ('margin_top', 'margin_bottom'):
-                # Horizontal edges: width=100%, height=depth
+                # Horizontal edges: width=100% (locked), height=depth as % of page height
+                self.width_slider.setRange(1, 100)
                 self.width_slider.setValue(100)
-                self.width_slider.setEnabled(False)  # Lock 100%
-                self.height_slider.setValue(int(zone.height * 100))
+                self.width_slider.setEnabled(False)
+                # Convert depth_px to % of page height
+                if zone.height_px > 0:
+                    depth_pct = max(1, min(50, int(zone.height_px / self._page_height * 100)))
+                else:
+                    depth_pct = int(zone.height * 100)
+                self.height_slider.setValue(depth_pct)
                 self.height_slider.setEnabled(True)
             else:
-                # Vertical edges: height=100%, width=depth
-                self.width_slider.setValue(int(zone.width * 100))
+                # Vertical edges: height=100% (locked), width=depth as % of page width
+                if zone.width_px > 0:
+                    depth_pct = max(1, min(50, int(zone.width_px / self._page_width * 100)))
+                else:
+                    depth_pct = int(zone.width * 100)
+                self.width_slider.setValue(depth_pct)
                 self.width_slider.setEnabled(True)
+                self.height_slider.setRange(1, 100)
                 self.height_slider.setValue(100)
-                self.height_slider.setEnabled(False)  # Lock 100%
+                self.height_slider.setEnabled(False)
+        elif zone_id.startswith('corner_'):
+            # Corner zones (fixed): width_px/height_px as % of page dimensions
+            self.width_slider.setEnabled(True)
+            self.height_slider.setEnabled(True)
+            if zone.width_px > 0:
+                width_pct = max(1, min(50, int(zone.width_px / self._page_width * 100)))
+            else:
+                width_pct = int(zone.width * 100)
+            if zone.height_px > 0:
+                height_pct = max(1, min(50, int(zone.height_px / self._page_height * 100)))
+            else:
+                height_pct = int(zone.height * 100)
+            self.width_slider.setValue(width_pct)
+            self.height_slider.setValue(height_pct)
         else:
-            # Corners and custom zones: both dimensions adjustable
+            # Custom zones (percent): width/height already in 0.0-1.0, convert to %
             self.width_slider.setEnabled(True)
             self.height_slider.setEnabled(True)
             self.width_slider.setValue(int(zone.width * 100))
@@ -1106,10 +1182,15 @@ class SettingsPanel(QWidget):
         self._update_size_labels()
 
     def _on_zone_size_changed(self):
-        """Khi thay đổi kích thước zone - behavior depends on zone type:
-        - Corner zones: resize from opposite corner (corner is fixed anchor)
-        - Edge zones: keep 100% on edge, only change perpendicular depth
-        - Custom zones: resize from center (expand/shrink equally)
+        """Khi thay đổi kích thước zone qua toolbar sliders.
+
+        Slider values are percentages of current page dimensions:
+        - slider 10% on 1000px page = 100px
+
+        Zone behavior:
+        - Corner zones (fixed): update width_px/height_px, anchor at corner
+        - Edge zones (hybrid): keep 100% edge, only change depth_px
+        - Custom zones (percent): resize from center
         """
         if not self._selected_zone_id:
             return
@@ -1119,63 +1200,44 @@ class SettingsPanel(QWidget):
             return
 
         zone_id = self._selected_zone_id
-        new_width_pct = self.width_slider.value() / 100.0
-        new_height_pct = self.height_slider.value() / 100.0
+        slider_width = self.width_slider.value()  # 1-50 (or 100 for locked edge)
+        slider_height = self.height_slider.value()
 
         if zone_id.startswith('corner_'):
-            # Corner zones: anchor at corner, resize opposite direction
-            old_width = zone.width
-            old_height = zone.height
-            delta_w = new_width_pct - old_width
-            delta_h = new_height_pct - old_height
+            # Corner zones (size_mode='fixed'): update width_px/height_px
+            # Convert slider % to pixels based on actual page dimensions
+            new_width_px = int(slider_width / 100.0 * self._page_width)
+            new_height_px = int(slider_height / 100.0 * self._page_height)
 
-            if zone_id == 'corner_tl':
-                # Top-left: anchor at (0,0), grow right/down
-                zone.width = new_width_pct
-                zone.height = new_height_pct
-                # x, y stay at 0
-            elif zone_id == 'corner_tr':
-                # Top-right: anchor at (1,0), grow left/down
-                zone.x = max(0, zone.x - delta_w)  # Move left as width grows
-                zone.width = new_width_pct
-                zone.height = new_height_pct
-            elif zone_id == 'corner_bl':
-                # Bottom-left: anchor at (0,1), grow right/up
-                zone.y = max(0, zone.y - delta_h)  # Move up as height grows
-                zone.width = new_width_pct
-                zone.height = new_height_pct
-            elif zone_id == 'corner_br':
-                # Bottom-right: anchor at (1,1), grow left/up
-                zone.x = max(0, zone.x - delta_w)
-                zone.y = max(0, zone.y - delta_h)
-                zone.width = new_width_pct
-                zone.height = new_height_pct
+            zone.width_px = new_width_px
+            zone.height_px = new_height_px
+            # Also update fallback % values for compatibility
+            zone.width = slider_width / 100.0
+            zone.height = slider_height / 100.0
+            # Position is calculated by to_pixels() based on corner type
 
         elif zone_id.startswith('margin_'):
-            # Edge zones: keep 100% on edge dimension, only change depth
-            if zone_id == 'margin_top':
+            # Edge zones (size_mode='hybrid'): update depth_px only
+            if zone_id in ('margin_top', 'margin_bottom'):
+                # Horizontal edges: width=100%, depth=height_px
+                new_depth_px = int(slider_height / 100.0 * self._page_height)
+                zone.height_px = new_depth_px
+                zone.height = slider_height / 100.0  # Fallback %
                 zone.width = 1.0  # Always 100%
-                zone.height = new_height_pct
-                zone.x = 0
-                zone.y = 0
-            elif zone_id == 'margin_bottom':
-                zone.width = 1.0
-                zone.height = new_height_pct
-                zone.x = 0
-                zone.y = 1.0 - new_height_pct
-            elif zone_id == 'margin_left':
-                zone.width = new_width_pct
+                zone.width_px = 0  # Not used for horizontal edges
+            else:
+                # Vertical edges: height=100%, depth=width_px
+                new_depth_px = int(slider_width / 100.0 * self._page_width)
+                zone.width_px = new_depth_px
+                zone.width = slider_width / 100.0  # Fallback %
                 zone.height = 1.0  # Always 100%
-                zone.x = 0
-                zone.y = 0
-            elif zone_id == 'margin_right':
-                zone.width = new_width_pct
-                zone.height = 1.0
-                zone.x = 1.0 - new_width_pct
-                zone.y = 0
+                zone.height_px = 0  # Not used for vertical edges
 
         else:
-            # Custom zones: resize from center
+            # Custom zones (size_mode='percent'): resize from center
+            new_width_pct = slider_width / 100.0
+            new_height_pct = slider_height / 100.0
+
             old_width = zone.width
             old_height = zone.height
             old_center_x = zone.x + old_width / 2
@@ -1192,9 +1254,10 @@ class SettingsPanel(QWidget):
             zone.height = new_height_pct
 
         self._update_size_labels()
-        self._emit_zones()
-        self._save_zone_config()
-    
+        # Emit single-zone update signal (force-update in preview)
+        self.zone_updated.emit(zone)
+        self._schedule_save_zone_config()  # Use scheduled save (respects auto-save interval)
+
     def _update_size_labels(self):
         self.width_label.setText(f"{self.width_slider.value()}%")
         self.height_label.setText(f"{self.height_slider.value()}%")
@@ -1489,6 +1552,23 @@ class SettingsPanel(QWidget):
         """Set current file path for per-file zone tracking."""
         self._current_file_path = file_path
 
+    def set_page_size(self, width: int, height: int):
+        """Set reference page size for percentage calculations.
+
+        Called by main_window when page loads or changes.
+        This affects how slider values convert to/from pixel values.
+
+        Args:
+            width: Page width in pixels (at current DPI)
+            height: Page height in pixels (at current DPI)
+        """
+        if width > 0 and height > 0:
+            self._page_width = width
+            self._page_height = height
+            # Update sliders if a zone is selected (refresh display with new page size)
+            if self._selected_zone_id:
+                self._on_zone_selected(self.zone_combo.currentText())
+
     def clear_per_file_custom_zones(self, reset_paths: bool = False):
         """Clear all per-file custom zone storage.
 
@@ -1676,7 +1756,7 @@ class SettingsPanel(QWidget):
         return None
 
     def set_filter(self, filter_mode: str):
-        """Chuyển filter radio button: 'all', 'odd', 'even', 'none'"""
+        """Chuyển filter radio button và sync compact toolbar: 'all', 'odd', 'even', 'none'"""
         filter_buttons = {
             'all': self.apply_all_rb,
             'odd': self.apply_odd_rb,
@@ -1685,6 +1765,8 @@ class SettingsPanel(QWidget):
         }
         if filter_mode in filter_buttons:
             filter_buttons[filter_mode].setChecked(True)
+            # Sync compact toolbar filter state
+            self.compact_toolbar.set_filter_state(filter_mode)
             self._on_apply_filter_changed(filter_buttons[filter_mode])
 
     def get_settings(self) -> dict:
@@ -1717,6 +1799,8 @@ class SettingsPanel(QWidget):
             self.apply_free_rb: 'none'
         }
         filter_mode = filter_map.get(button, 'all')
+        # Sync compact toolbar filter state
+        self.compact_toolbar.set_filter_state(filter_mode)
         self.page_filter_changed.emit(filter_mode)
         self._save_zone_config()  # Save config when filter changes
 

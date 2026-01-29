@@ -500,6 +500,7 @@ class MainWindow(QMainWindow):
         self.settings_panel = SettingsPanel()
         self.settings_panel.setMinimumWidth(0)  # Allow shrinking for wider sidebar
         self.settings_panel.zones_changed.connect(self._on_zones_changed)
+        self.settings_panel.zone_updated.connect(self._on_zone_updated)  # Single zone update from slider
         self.settings_panel.settings_changed.connect(self._on_settings_changed)
         self.settings_panel.page_filter_changed.connect(self._on_page_filter_changed)
         self.settings_panel.output_settings_changed.connect(self._on_output_settings_changed)
@@ -2115,6 +2116,9 @@ class MainWindow(QMainWindow):
         self.preview.scroll_to_top()
         self.preview.before_panel.update_thumbnail_highlight(0, scroll=True)
 
+        # Update settings panel with first page dimensions
+        self._update_page_size_for_settings(0)
+
         # Apply fit width if needed
         if hasattr(self, '_fit_after_initial_load') and self._fit_after_initial_load:
             QTimer.singleShot(50, self._fit_first_page_width)
@@ -2362,6 +2366,9 @@ class MainWindow(QMainWindow):
         # Update preview - works for both continuous and single page mode
         self.preview.set_current_page(page_index)
 
+        # Update settings panel with current page dimensions
+        self._update_page_size_for_settings(page_index)
+
         # Update prev/next button states
         self.prev_page_btn.setEnabled(value > 1)
         self.next_page_btn.setEnabled(value < total_pages)
@@ -2384,9 +2391,24 @@ class MainWindow(QMainWindow):
         self.prev_page_btn.setEnabled(page_num > 1)
         self.next_page_btn.setEnabled(page_num < self._total_pages)
 
+        # Update settings panel with current page dimensions
+        self._update_page_size_for_settings(page_index)
+
         # Update sliding window if enabled
         if self._sliding_window_mode:
             self._update_sliding_window(page_index)
+
+    def _update_page_size_for_settings(self, page_index: int):
+        """Update settings panel with current page dimensions for accurate % calculations."""
+        try:
+            if page_index < len(self.preview.before_panel._page_items):
+                page_rect = self.preview.before_panel._page_items[page_index].boundingRect()
+                page_width = int(page_rect.width())
+                page_height = int(page_rect.height())
+                if page_width > 0 and page_height > 0:
+                    self.settings_panel.set_page_size(page_width, page_height)
+        except (IndexError, AttributeError):
+            pass  # Page not loaded yet
 
     def _update_sliding_window(self, center_page: int):
         """Update sliding window - bidirectional loading with forward bias
@@ -2553,6 +2575,14 @@ class MainWindow(QMainWindow):
             # Use QTimer to defer save until after set_zones completes
             from PyQt5.QtCore import QTimer
             QTimer.singleShot(100, lambda: self.preview.save_per_file_zones())
+
+    def _on_zone_updated(self, zone):
+        """Handle single zone update from slider changes.
+
+        Uses update_zone() which force-updates _per_page_zones
+        (unlike set_zones which preserves existing zone data).
+        """
+        self.preview.update_zone(zone)
 
     def _update_zone_counts(self):
         """Update zone count display in bottom bar
@@ -2814,13 +2844,15 @@ class MainWindow(QMainWindow):
         self.settings_panel.save_per_file_custom_zones()
 
     def _on_zone_selected_from_preview(self, zone_id: str):
-        """Khi click vào zone trong preview → chuyển filter theo zone"""
+        """Khi click vào zone trong preview → chuyển filter theo zone và cập nhật combo/sliders"""
         # Track selected zone for Delete shortcut
         self._selected_zone_id = zone_id
         # Tìm zone và lấy page_filter của nó
         zone = self.settings_panel.get_zone_by_id(zone_id)
         if zone and hasattr(zone, 'page_filter'):
             self.settings_panel.set_filter(zone.page_filter)
+        # Chọn zone trong combo box → trigger _on_zone_selected để cập nhật sliders
+        self.settings_panel._select_zone_in_combo(zone_id)
     
     def _on_zone_delete_from_preview(self, zone_id: str):
         """Handle zone delete request from preview"""

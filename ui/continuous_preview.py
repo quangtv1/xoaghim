@@ -2240,6 +2240,32 @@ class ContinuousPreviewPanel(QFrame):
             else:
                 self._recreate_zone_overlays()
 
+    def update_zone_from_settings(self, zone: Zone):
+        """Force-update zone data from settings panel (slider changes).
+
+        Unlike set_zone_definitions which preserves user drag modifications,
+        this method explicitly updates the zone data for ALL pages where
+        the zone exists. Called when slider changes zone dimensions.
+
+        Args:
+            zone: The updated zone definition
+        """
+        zone_id = zone.id
+
+        # Update zone data in ALL pages where this zone exists
+        for page_idx in self._per_page_zones:
+            if zone_id in self._per_page_zones[page_idx]:
+                # Recalculate zone data from updated zone definition
+                zone_data = self._calculate_initial_zone_data(zone, page_idx)
+                self._per_page_zones[page_idx][zone_id] = zone_data
+
+        # Rebuild zone overlays to reflect changes
+        if self.show_overlay:
+            if self._view_mode == 'single':
+                self._recreate_zone_overlays_single()
+            else:
+                self._recreate_zone_overlays()
+
     def _calculate_initial_zone_data(self, zone: Zone, page_idx: int) -> tuple:
         """Calculate initial zone data based on zone type.
 
@@ -3437,13 +3463,14 @@ class ContinuousPreviewWidget(QWidget):
         self._schedule_process()
     
     def update_zone(self, zone: Zone):
-        """Cập nhật một zone"""
+        """Cập nhật một zone (e.g., from slider changes)"""
         for i, z in enumerate(self._zones):
             if z.id == zone.id:
                 self._zones[i] = zone
                 break
-        
-        self.before_panel.set_zone_definitions(self._zones)
+
+        # Force-update zone data in _per_page_zones (not just definitions)
+        self.before_panel.update_zone_from_settings(zone)
         self._schedule_process()
     
     def _on_zone_changed(self, zone_id: str):
