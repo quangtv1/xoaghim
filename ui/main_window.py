@@ -1864,19 +1864,103 @@ class MainWindow(QMainWindow):
         """Close currently opened file or folder"""
         # Check for unsaved changes before closing
         if self.settings_panel.has_pending_changes():
-            reply = QMessageBox.question(
-                self,
-                "Lưu thay đổi",
-                "Bạn có muốn lưu các thay đổi vào file .xoaghim.json?",
-                QMessageBox.Save | QMessageBox.No,
-                QMessageBox.Save
-            )
-
-            if reply == QMessageBox.Save:
+            should_save = self._show_save_changes_dialog()
+            if should_save:
                 self.settings_panel.force_save_pending()
             else:
                 self.settings_panel.discard_pending_changes()
 
+        # Actually close the file/folder
+        self._close_file_internal()
+
+    def _show_save_changes_dialog(self) -> bool:
+        """Show modern styled dialog asking to save changes.
+
+        Returns True if user wants to save, False otherwise.
+        """
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Lưu thay đổi")
+        dialog.setFixedSize(360, 140)
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(20)
+
+        # Message label
+        msg_label = QLabel("Bạn có muốn lưu các thay đổi vào file .xoaghim.json?")
+        msg_label.setStyleSheet("font-size: 13px; color: #1F2937;")
+        msg_label.setWordWrap(True)
+        layout.addWidget(msg_label)
+
+        # Button container
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(12)
+        btn_layout.addStretch()
+
+        # "Không lưu" button (secondary)
+        no_btn = QPushButton("Không lưu")
+        no_btn.setFixedSize(100, 36)
+        no_btn.setCursor(Qt.PointingHandCursor)
+        no_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #F3F4F6;
+                border: 1px solid #D1D5DB;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 500;
+                color: #374151;
+            }
+            QPushButton:hover {
+                background-color: #E5E7EB;
+                border-color: #9CA3AF;
+            }
+            QPushButton:pressed {
+                background-color: #D1D5DB;
+            }
+        """)
+        no_btn.clicked.connect(lambda: dialog.done(0))
+        btn_layout.addWidget(no_btn)
+
+        # "Lưu" button (primary)
+        save_btn = QPushButton("Lưu")
+        save_btn.setFixedSize(100, 36)
+        save_btn.setCursor(Qt.PointingHandCursor)
+        save_btn.setDefault(True)
+        save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3B82F6;
+                border: none;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 600;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #2563EB;
+            }
+            QPushButton:pressed {
+                background-color: #1D4ED8;
+            }
+        """)
+        save_btn.clicked.connect(lambda: dialog.done(1))
+        btn_layout.addWidget(save_btn)
+
+        layout.addLayout(btn_layout)
+
+        # Dialog background
+        dialog.setStyleSheet("""
+            QDialog {
+                background-color: white;
+                border-radius: 12px;
+            }
+        """)
+
+        result = dialog.exec_()
+        return result == 1
+
+    def _close_file_internal(self):
+        """Internal method to actually close the file/folder"""
         if self._batch_mode:
             # Close batch mode
             self._batch_mode = False
@@ -2615,6 +2699,8 @@ class MainWindow(QMainWindow):
 
         Zone chung: x (preset zones + custom zones with page_filter != 'none')
         Zone riêng: y/z (y = current file, z = total all files)
+
+        Zone riêng = ONLY custom zones with page_filter == 'none' (Từng trang)
         """
         # Count Zone chung (global, counted once)
         zone_chung = 0
@@ -2622,34 +2708,28 @@ class MainWindow(QMainWindow):
         for zone in self.settings_panel._zones.values():
             if zone.enabled:
                 zone_chung += 1
-        # Custom zones with page_filter != 'none'
+        # Custom zones with page_filter != 'none' (Tất cả/Chẵn/Lẻ)
         for zone in self.settings_panel._custom_zones.values():
             if zone.enabled and getattr(zone, 'page_filter', 'all') != 'none':
                 zone_chung += 1
 
-        # Count Zone riêng for current file (unique custom zone IDs, not corner_*/margin_*)
+        # Count Zone riêng for current file (custom zones with page_filter == 'none')
         zone_rieng_file = 0
-        per_page_zones = getattr(self.preview.before_panel, '_per_page_zones', {})
-        unique_zone_ids = set()
-        for page_zones in per_page_zones.values():
-            for zone_id in page_zones.keys():
-                if not zone_id.startswith('corner_') and not zone_id.startswith('margin_'):
-                    unique_zone_ids.add(zone_id)
-        zone_rieng_file = len(unique_zone_ids)
+        for zone in self.settings_panel._custom_zones.values():
+            if zone.enabled and getattr(zone, 'page_filter', 'all') == 'none':
+                zone_rieng_file += 1
 
         # Count total Zone riêng across all files
         zone_rieng_total = zone_rieng_file  # Start with current file
-        per_file_zones = getattr(self.preview.before_panel, '_per_file_zones', {})
+        per_file_custom_zones = getattr(self.settings_panel, '_per_file_custom_zones', {})
         current_file = getattr(self, '_current_file_path', '')
-        for file_path, file_zones in per_file_zones.items():
+        for file_path, file_zones in per_file_custom_zones.items():
             if file_path == current_file:
                 continue  # Already counted above
-            file_unique_ids = set()
-            for page_zones in file_zones.values():
-                for zone_id in page_zones.keys():
-                    if not zone_id.startswith('corner_') and not zone_id.startswith('margin_'):
-                        file_unique_ids.add(zone_id)
-            zone_rieng_total += len(file_unique_ids)
+            # Count zones with page_filter == 'none' for this file
+            for zone in file_zones.values():
+                if getattr(zone, 'page_filter', 'all') == 'none':
+                    zone_rieng_total += 1
 
         # Check which values changed
         new_counts = (zone_chung, zone_rieng_file, zone_rieng_total)

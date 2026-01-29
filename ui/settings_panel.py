@@ -274,6 +274,9 @@ class SettingsPanel(QWidget):
             self._pending_per_file_save = False
             self.save_per_file_custom_zones()
 
+        # Force write to .xoaghim.json immediately (bypass auto-save timer)
+        get_config_manager().force_save()
+
     def _schedule_save_per_file_zones(self):
         """Schedule saving per-file zones based on auto-save interval.
 
