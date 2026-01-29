@@ -1058,28 +1058,50 @@ class SettingsPanel(QWidget):
         zone_id = self.zone_combo.currentData()
         if not zone_id:
             return
-        
+
         self._selected_zone_id = zone_id
-        
+
         # Get zone
         zone = self._zones.get(zone_id) or self._custom_zones.get(zone_id)
         if not zone:
             return
-        
-        # Update sliders
+
+        # Update sliders based on zone type
         self.width_slider.blockSignals(True)
         self.height_slider.blockSignals(True)
-        
-        self.width_slider.setValue(int(zone.width * 100))
-        self.height_slider.setValue(int(zone.height * 100))
-        
+
+        if zone_id.startswith('margin_'):
+            # Edge zones: one dimension is 100%, show depth as the other
+            if zone_id in ('margin_top', 'margin_bottom'):
+                # Horizontal edges: width=100%, height=depth
+                self.width_slider.setValue(100)
+                self.width_slider.setEnabled(False)  # Lock 100%
+                self.height_slider.setValue(int(zone.height * 100))
+                self.height_slider.setEnabled(True)
+            else:
+                # Vertical edges: height=100%, width=depth
+                self.width_slider.setValue(int(zone.width * 100))
+                self.width_slider.setEnabled(True)
+                self.height_slider.setValue(100)
+                self.height_slider.setEnabled(False)  # Lock 100%
+        else:
+            # Corners and custom zones: both dimensions adjustable
+            self.width_slider.setEnabled(True)
+            self.height_slider.setEnabled(True)
+            self.width_slider.setValue(int(zone.width * 100))
+            self.height_slider.setValue(int(zone.height * 100))
+
         self.width_slider.blockSignals(False)
         self.height_slider.blockSignals(False)
-        
+
         self._update_size_labels()
-    
+
     def _on_zone_size_changed(self):
-        """Khi thay đổi kích thước zone"""
+        """Khi thay đổi kích thước zone - behavior depends on zone type:
+        - Corner zones: resize from opposite corner (corner is fixed anchor)
+        - Edge zones: keep 100% on edge, only change perpendicular depth
+        - Custom zones: resize from center (expand/shrink equally)
+        """
         if not self._selected_zone_id:
             return
 
@@ -1087,12 +1109,82 @@ class SettingsPanel(QWidget):
         if not zone:
             return
 
-        zone.width = self.width_slider.value() / 100.0
-        zone.height = self.height_slider.value() / 100.0
+        zone_id = self._selected_zone_id
+        new_width_pct = self.width_slider.value() / 100.0
+        new_height_pct = self.height_slider.value() / 100.0
+
+        if zone_id.startswith('corner_'):
+            # Corner zones: anchor at corner, resize opposite direction
+            old_width = zone.width
+            old_height = zone.height
+            delta_w = new_width_pct - old_width
+            delta_h = new_height_pct - old_height
+
+            if zone_id == 'corner_tl':
+                # Top-left: anchor at (0,0), grow right/down
+                zone.width = new_width_pct
+                zone.height = new_height_pct
+                # x, y stay at 0
+            elif zone_id == 'corner_tr':
+                # Top-right: anchor at (1,0), grow left/down
+                zone.x = max(0, zone.x - delta_w)  # Move left as width grows
+                zone.width = new_width_pct
+                zone.height = new_height_pct
+            elif zone_id == 'corner_bl':
+                # Bottom-left: anchor at (0,1), grow right/up
+                zone.y = max(0, zone.y - delta_h)  # Move up as height grows
+                zone.width = new_width_pct
+                zone.height = new_height_pct
+            elif zone_id == 'corner_br':
+                # Bottom-right: anchor at (1,1), grow left/up
+                zone.x = max(0, zone.x - delta_w)
+                zone.y = max(0, zone.y - delta_h)
+                zone.width = new_width_pct
+                zone.height = new_height_pct
+
+        elif zone_id.startswith('margin_'):
+            # Edge zones: keep 100% on edge dimension, only change depth
+            if zone_id == 'margin_top':
+                zone.width = 1.0  # Always 100%
+                zone.height = new_height_pct
+                zone.x = 0
+                zone.y = 0
+            elif zone_id == 'margin_bottom':
+                zone.width = 1.0
+                zone.height = new_height_pct
+                zone.x = 0
+                zone.y = 1.0 - new_height_pct
+            elif zone_id == 'margin_left':
+                zone.width = new_width_pct
+                zone.height = 1.0  # Always 100%
+                zone.x = 0
+                zone.y = 0
+            elif zone_id == 'margin_right':
+                zone.width = new_width_pct
+                zone.height = 1.0
+                zone.x = 1.0 - new_width_pct
+                zone.y = 0
+
+        else:
+            # Custom zones: resize from center
+            old_width = zone.width
+            old_height = zone.height
+            old_center_x = zone.x + old_width / 2
+            old_center_y = zone.y + old_height / 2
+
+            # Calculate new position to keep center fixed
+            new_x = old_center_x - new_width_pct / 2
+            new_y = old_center_y - new_height_pct / 2
+
+            # Clamp to valid range [0, 1-size]
+            zone.x = max(0, min(1 - new_width_pct, new_x))
+            zone.y = max(0, min(1 - new_height_pct, new_y))
+            zone.width = new_width_pct
+            zone.height = new_height_pct
 
         self._update_size_labels()
         self._emit_zones()
-        self._save_zone_config()  # Save config when size changes
+        self._save_zone_config()
     
     def _update_size_labels(self):
         self.width_label.setText(f"{self.width_slider.value()}%")
