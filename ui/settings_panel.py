@@ -123,6 +123,9 @@ class SettingsPanel(QWidget):
                     self._zones[zone_id].height_px = size['height_px']
                 if 'size_mode' in size:
                     self._zones[zone_id].size_mode = size['size_mode']
+                # Page filter for preset zones (odd/even/all)
+                if 'page_filter' in size:
+                    self._zones[zone_id].page_filter = size['page_filter']
 
         # Restore custom zones (Tùy biến Chung - non-'none' filter)
         custom_zones_config = config.get('custom_zones', {})
@@ -207,6 +210,8 @@ class SettingsPanel(QWidget):
                 'width_px': zone.width_px,
                 'height_px': zone.height_px,
                 'size_mode': zone.size_mode,
+                # Page filter for preset zones (odd/even/all)
+                'page_filter': zone.page_filter,
             }
 
         # Save custom zones with non-'none' filter (Tùy biến Chung)
