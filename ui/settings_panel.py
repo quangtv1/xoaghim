@@ -1337,12 +1337,15 @@ class SettingsPanel(QWidget):
     def _on_draw_mode_changed(self, mode):
         """Forward draw mode signal to MainWindow (mode: 'remove', 'protect', or None)
 
+        When entering draw mode (Tùy biến), auto-switch to "Từng trang" filter.
         Show "Vô đối" option only when in 'remove' mode.
-        NOTE: No longer auto-switch to "Từng trang" - users can create global
-        custom zones (Tùy biến + Tất cả/Trang lẻ/Trang chẵn).
+        User can manually change filter to create global zones if needed.
         """
         self._current_draw_mode = mode
-        # Removed auto-switch to "Từng trang" - allows creating global custom zones
+
+        # Auto-switch to "Từng trang" when entering draw mode (Tùy biến default)
+        if mode is not None:
+            self.apply_free_rb.setChecked(True)
 
         # Show "Vô đối" only when in Tùy biến - (remove) mode
         self.apply_mirror_rb.setVisible(mode == 'remove')
