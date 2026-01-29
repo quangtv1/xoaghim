@@ -469,7 +469,7 @@ class MainWindow(QMainWindow):
         self._window_center = 0  # Current center page in window
 
         self.setWindowTitle("Xóa Ghim PDF (5S)")
-        self.setMinimumSize(900, 600)  # Reduced for small screens
+        self.setMinimumSize(600, 400)  # Small minimum for flexible resize
         self.setAcceptDrops(True)
 
         self._setup_ui()

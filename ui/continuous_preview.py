@@ -2919,10 +2919,12 @@ class ContinuousPreviewWidget(QWidget):
         # Thumbnail panel signals - click thumbnail to scroll both panels
         self.before_panel.thumbnail_page_clicked.connect(self._on_thumbnail_page_clicked)
         self.before_panel.thumbnail_collapsed_changed.connect(self._on_thumbnail_collapsed_changed)
+        self.before_panel.setMinimumWidth(0)  # Allow shrinking for wider sidebar
         self.splitter.addWidget(self.before_panel)
-        
+
         # Panel SAU (chỉ kết quả)
         self.after_panel = ContinuousPreviewPanel("Đích:", show_overlay=False)
+        self.after_panel.setMinimumWidth(0)  # Allow shrinking for wider sidebar
         self.after_panel.placeholder_clicked.connect(self._on_placeholder_clicked)
         self.after_panel.folder_placeholder_clicked.connect(self._on_folder_placeholder_clicked)
         self.after_panel.file_dropped.connect(self._on_file_dropped)
