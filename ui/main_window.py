@@ -4131,11 +4131,16 @@ Thời gian: {time_str}"""
         algo_title.setStyleSheet("font-weight: bold; font-size: 14px; color: #374151; padding: 4px 0;")
         layout.addWidget(algo_title)
 
+        # Radio style: only change checked indicator to blue
+        radio_indicator_style = "QRadioButton::indicator:checked { background: #3B82F6; border-color: #3B82F6; }"
+
         algo_opencv = QRadioButton("OpenCV (CPU) - Nhanh, phù hợp hầu hết trường hợp")
         algo_opencv.setChecked(True)
+        algo_opencv.setStyleSheet(radio_indicator_style)
         layout.addWidget(algo_opencv)
 
         algo_gpu = QRadioButton("Model GPU - Chất lượng cao, yêu cầu GPU")
+        algo_gpu.setStyleSheet(radio_indicator_style)
         layout.addWidget(algo_gpu)
 
         # Spacer between sections
@@ -4162,14 +4167,17 @@ Thời gian: {time_str}"""
 
         gpu_auto = QRadioButton("Tự động phát hiện")
         gpu_auto.setChecked(True)
+        gpu_auto.setStyleSheet(radio_indicator_style)
         gpu_button_group.addButton(gpu_auto, 0)
         radio_column.addWidget(gpu_auto)
 
         gpu_cuda = QRadioButton("CUDA (NVIDIA)")
+        gpu_cuda.setStyleSheet(radio_indicator_style)
         gpu_button_group.addButton(gpu_cuda, 1)
         radio_column.addWidget(gpu_cuda)
 
         gpu_cpu = QRadioButton("CPU fallback")
+        gpu_cpu.setStyleSheet(radio_indicator_style)
         gpu_button_group.addButton(gpu_cpu, 2)
         radio_column.addWidget(gpu_cpu)
 

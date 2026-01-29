@@ -92,16 +92,12 @@ class SettingsPanel(QWidget):
         self._current_file_path: str = ""
         self._batch_base_dir: str = ""  # Batch folder for persistence
 
-        # Debounce timer for saving zone config (reduce I/O during drag operations)
-        self._save_config_timer = QTimer()
-        self._save_config_timer.setSingleShot(True)
-        self._save_config_timer.timeout.connect(self._save_zone_config)
-
-        # Periodic auto-save timer (respects "Tự lưu" interval)
+        # Auto-save timer (respects "Tự lưu" interval)
         self._auto_save_timer = QTimer()
         self._auto_save_timer.setSingleShot(True)
-        self._auto_save_timer.timeout.connect(self._save_zone_config)
-        self._pending_save = False  # Track if save is pending
+        self._auto_save_timer.timeout.connect(self._on_auto_save_timer_fired)
+        self._pending_save = False  # Track if zone config save is pending
+        self._pending_per_file_save = False  # Track if per-file zones save is pending
 
         self._setup_ui()
         self._setup_compact_toolbar()
@@ -213,13 +209,21 @@ class SettingsPanel(QWidget):
         if enabled_zones:
             self._selected_zone_id = enabled_zones[-1]
 
+    def _on_auto_save_timer_fired(self):
+        """Timer callback: save pending changes (zone config and/or per-file zones)."""
+        if self._pending_save:
+            self._save_zone_config()
+        if self._pending_per_file_save:
+            self._pending_per_file_save = False
+            self.save_per_file_custom_zones()
+
     def _schedule_save_zone_config(self):
         """Schedule saving zone config based on auto-save interval.
 
         - If interval = 0: save immediately (no delay)
-        - If interval > 0: use timer, only save when timer fires (last change wins)
+        - If interval > 0: delay save by exactly N minutes (restart timer = debounce)
 
-        This reduces I/O during slider drag operations.
+        Risk with interval > 0: unsaved changes lost on crash.
         """
         auto_save_interval = self.auto_save_spin.value()  # 0-10 minutes
 
@@ -227,12 +231,26 @@ class SettingsPanel(QWidget):
             # Save immediately
             self._save_zone_config()
         else:
-            # Schedule save with timer (restart if already running = debounce)
-            # Use shorter debounce (500ms) for slider changes, full interval for periodic
+            # Schedule save with full interval (restart timer = debounce, last change wins)
             self._pending_save = True
-            # For slider changes, use 500ms debounce to batch rapid changes
-            # The full auto-save interval is for periodic background saves
-            self._auto_save_timer.start(500)  # 500ms debounce for slider changes
+            self._auto_save_timer.start(auto_save_interval * 60 * 1000)  # N minutes in ms
+
+    def _schedule_save_per_file_zones(self):
+        """Schedule saving per-file zones based on auto-save interval.
+
+        - If interval = 0: save immediately (no delay)
+        - If interval > 0: delay save by exactly N minutes
+        """
+        auto_save_interval = self.auto_save_spin.value()  # 0-10 minutes
+
+        if auto_save_interval == 0:
+            # Save immediately
+            self.save_per_file_custom_zones()
+        else:
+            # Schedule save with full interval (reuse same timer, save both types)
+            self._pending_save = True
+            self._pending_per_file_save = True
+            self._auto_save_timer.start(auto_save_interval * 60 * 1000)
 
     def _save_zone_config(self):
         """Save current zone configuration to config file (including hybrid sizing)"""
@@ -454,28 +472,35 @@ class SettingsPanel(QWidget):
         # Radio button group for exclusive selection
         self.apply_group = QButtonGroup(self)
 
+        # Radio style: only change checked indicator to blue
+        radio_style = "font-size: 12px; background-color: #FFFFFF;"
+        radio_indicator_style = """
+            QRadioButton { font-size: 12px; background-color: #FFFFFF; }
+            QRadioButton::indicator:checked { background: #3B82F6; border-color: #3B82F6; }
+        """
+
         self.apply_all_rb = QRadioButton("Tất cả")
         self.apply_all_rb.setChecked(True)
         self.apply_all_rb.setToolTip("Vùng vẽ mới được thêm vào tất cả các trang")
-        self.apply_all_rb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
+        self.apply_all_rb.setStyleSheet(radio_indicator_style)
         self.apply_group.addButton(self.apply_all_rb, 0)
         apply_layout.addWidget(self.apply_all_rb)
 
         self.apply_odd_rb = QRadioButton("Trang lẻ")
         self.apply_odd_rb.setToolTip("Vùng vẽ mới chỉ thêm vào các trang 1, 3, 5...")
-        self.apply_odd_rb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
+        self.apply_odd_rb.setStyleSheet(radio_indicator_style)
         self.apply_group.addButton(self.apply_odd_rb, 1)
         apply_layout.addWidget(self.apply_odd_rb)
 
         self.apply_even_rb = QRadioButton("Trang chẵn")
         self.apply_even_rb.setToolTip("Vùng vẽ mới chỉ thêm vào các trang 2, 4, 6...")
-        self.apply_even_rb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
+        self.apply_even_rb.setStyleSheet(radio_indicator_style)
         self.apply_group.addButton(self.apply_even_rb, 2)
         apply_layout.addWidget(self.apply_even_rb)
 
         self.apply_free_rb = QRadioButton("Từng trang")
         self.apply_free_rb.setToolTip("Vùng vẽ mới chỉ thêm vào trang đang xem")
-        self.apply_free_rb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
+        self.apply_free_rb.setStyleSheet(radio_indicator_style)
         self.apply_group.addButton(self.apply_free_rb, 3)
         apply_layout.addWidget(self.apply_free_rb)
 
@@ -900,7 +925,7 @@ class SettingsPanel(QWidget):
 
             self._update_zone_combo()
             self._emit_zones()
-            self._save_zone_config()
+            self._schedule_save_zone_config()  # Respect auto-save interval
 
             # Emit undo signal for preset zones
             zone = self._zones.get(zone_id)
@@ -1017,8 +1042,8 @@ class SettingsPanel(QWidget):
 
         self._update_zone_combo()
         self._emit_zones()
-        self._save_zone_config()  # Save config when zones change
-    
+        self._schedule_save_zone_config()  # Respect auto-save interval
+
     def _get_current_filter(self) -> str:
         """Lấy filter hiện tại: 'all', 'odd', 'even', 'none'"""
         filter_map = {0: 'all', 1: 'odd', 2: 'even', 3: 'none'}
@@ -1322,10 +1347,10 @@ class SettingsPanel(QWidget):
         # Save immediately for crash recovery
         if current_filter == 'none':
             # Tự do mode: save per-file zones
-            self.save_per_file_custom_zones()
+            self._schedule_save_per_file_zones()
         else:
             # Global custom zone: save to config
-            self._save_zone_config()
+            self._schedule_save_zone_config()
 
     def set_draw_mode(self, mode):
         """Set draw mode state (mode: 'remove', 'protect', or None)"""
@@ -1351,11 +1376,11 @@ class SettingsPanel(QWidget):
             if self._zone_selection_history:
                 self._select_zone_in_combo(self._zone_selection_history[-1])
             self._emit_zones()
-            # Save immediately for crash recovery
+            # Schedule save (respects auto-save interval)
             if zone_filter == 'none':
-                self.save_per_file_custom_zones()
+                self._schedule_save_per_file_zones()
             else:
-                self._save_zone_config()
+                self._schedule_save_zone_config()
         elif base_id.startswith('corner_') or base_id.startswith('margin_'):
             # Corner/Margin zone - uncheck in zone selector
             # This will trigger zones_changed signal which updates everything
@@ -1445,7 +1470,7 @@ class SettingsPanel(QWidget):
 
         self._update_zone_combo()
         self._emit_zones()
-        self._save_zone_config()
+        self._schedule_save_zone_config()  # Respect auto-save interval
 
         # Optionally emit signal for redo scenario
         if emit_signal:
@@ -1672,7 +1697,7 @@ class SettingsPanel(QWidget):
         settings = self.get_settings()
         self.settings_changed.emit(settings)
         self._emit_zones()
-        self._save_zone_config()  # Save config when threshold changes
+        self._schedule_save_zone_config()  # Respect auto-save interval
     
     def _on_browse_output(self):
         """Chọn thư mục đầu ra"""
@@ -1695,13 +1720,13 @@ class SettingsPanel(QWidget):
 
         # Emit signal with current options
         self.text_protection_changed.emit(self._text_protection_options)
-        self._save_zone_config()  # Save config when text protection changes
+        self._schedule_save_zone_config()  # Respect auto-save interval
 
     def _on_batch_render_changed(self):
         """Handle batch render checkbox change"""
         enabled = self.batch_render_cb.isChecked()
         self.batch_render_changed.emit(enabled)
-        self._save_zone_config()  # Save config
+        self._schedule_save_zone_config()  # Respect auto-save interval
 
     def is_batch_render_enabled(self) -> bool:
         """Check if batch render is enabled"""
@@ -1802,7 +1827,7 @@ class SettingsPanel(QWidget):
         # Sync compact toolbar filter state
         self.compact_toolbar.set_filter_state(filter_mode)
         self.page_filter_changed.emit(filter_mode)
-        self._save_zone_config()  # Save config when filter changes
+        self._schedule_save_zone_config()  # Respect auto-save interval
 
     def _on_reset_zones_clicked(self):
         """Handle reset zones button - show popup with zone type options"""
@@ -2062,8 +2087,8 @@ class SettingsPanel(QWidget):
         # Emit signal to clear per_page_zones in preview (folder scope, manual type)
         self.zones_reset.emit('folder', 'manual')
 
-        # Save config to persist zone removal
-        self._save_zone_config()
+        # Schedule save (respects auto-save interval)
+        self._schedule_save_zone_config()
 
     def _reset_auto_detection(self):
         """Reset auto detection (tự động - nhận diện vùng bảo vệ)"""
@@ -2156,8 +2181,8 @@ class SettingsPanel(QWidget):
         # Emit signal to update preview
         self._emit_zones()
 
-        # Save config to persist zone removal
-        self._save_zone_config()
+        # Schedule save (respects auto-save interval)
+        self._schedule_save_zone_config()
 
         # Emit signal to clear Zone chung overlays in preview
         self.zones_reset.emit('folder', 'chung')
@@ -2311,10 +2336,8 @@ class SettingsPanel(QWidget):
 
                 self._update_size_labels()
 
-            # Debounced save for all zones (reduces I/O during drag)
-            self._save_config_timer.start(300)
-
-            # Also save Zone Riêng (per-file zones) if applicable
-            # _save_zone_config skips zones with page_filter == 'none', so we need to save them separately
+            # Schedule save (respects auto-save interval)
             if zone.page_filter == 'none':
-                self.save_per_file_custom_zones()
+                self._schedule_save_per_file_zones()
+            else:
+                self._schedule_save_zone_config()
