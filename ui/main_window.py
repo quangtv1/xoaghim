@@ -2777,8 +2777,7 @@ class MainWindow(QMainWindow):
             zone_data = (last_zone.x, last_zone.y, last_zone.width, last_zone.height)
             zone_type = getattr(last_zone, 'zone_type', 'remove')
             self.preview.record_zone_add(last_zone.id, page_idx, zone_data, zone_type)
-        # Immediate persist
-        self._persist_all_zones()
+        # Save handled by settings_panel._schedule_save_zone_config()
 
     def _on_output_settings_changed(self, output_dir: str, filename_pattern: str):
         """Handle output settings change"""
@@ -2826,12 +2825,12 @@ class MainWindow(QMainWindow):
     def _on_zone_changed_from_preview(self, zone_id: str, x: float, y: float, w: float, h: float,
                                        w_px: int = 0, h_px: int = 0):
         self.settings_panel.update_zone_from_preview(zone_id, x, y, w, h, w_px, h_px)
-        # Immediate persist
-        self._persist_all_zones()
+        # Save handled by settings_panel._schedule_save_zone_config()
 
     def _on_zone_drag_save_requested(self):
-        """Trigger immediate save after zone drag ends (crash recovery)"""
-        self._persist_all_zones()
+        """Trigger save after zone drag ends - respects auto-save interval"""
+        # Save already scheduled by update_zone_from_preview via _schedule_save_zone_config()
+        pass
 
     def _persist_all_zones(self):
         """Persist all zones immediately to memory and disk (crash recovery)"""
@@ -2914,14 +2913,12 @@ class MainWindow(QMainWindow):
     def _on_undo_zone_removed(self, zone_id: str):
         """Handle undo zone removed - sync with settings_panel"""
         self.settings_panel.delete_custom_zone(zone_id)
-        # Immediate persist
-        self._persist_all_zones()
+        # Save handled by settings_panel._schedule_save_zone_config()
 
     def _on_undo_zone_restored(self, zone_id: str, x: float, y: float, w: float, h: float, zone_type: str):
         """Handle undo zone restored - sync with settings_panel"""
         self.settings_panel.restore_custom_zone(zone_id, x, y, w, h, zone_type)
-        # Immediate persist
-        self._persist_all_zones()
+        # Save handled by settings_panel._schedule_save_zone_config()
 
     def _on_preset_zone_toggled(self, zone_id: str, enabled: bool, zone_data: tuple):
         """Handle preset zone (corner/edge) toggle - record undo"""
@@ -2931,14 +2928,12 @@ class MainWindow(QMainWindow):
         else:
             # Zone was removed (disabled) -> record delete action
             self.preview.record_zone_delete(zone_id, -1, zone_data, 'remove')
-        # Immediate persist
-        self._persist_all_zones()
+        # Save handled by settings_panel._schedule_save_zone_config()
 
     def _on_undo_preset_zone_toggled(self, zone_id: str, enabled: bool):
         """Handle undo for preset zone toggle - toggle zone in settings_panel"""
         self.settings_panel.toggle_preset_zone(zone_id, enabled)
-        # Immediate persist
-        self._persist_all_zones()
+        # Save handled by settings_panel._schedule_save_zone_config()
 
     def _on_process(self):
         """Bắt đầu xử lý"""

@@ -1442,6 +1442,7 @@ class SettingsPanel(QWidget):
 
         self._update_zone_combo()
         self._emit_zones()
+        self._schedule_save_zone_config()  # Respect auto-save interval
 
     def toggle_preset_zone(self, zone_id: str, enabled: bool, emit_signal: bool = False):
         """Toggle a preset zone (corner/edge) enabled state.
