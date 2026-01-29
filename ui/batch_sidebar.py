@@ -84,7 +84,7 @@ class SidebarFileList(QListWidget):
         self._files: List[str] = []
         self._base_dir: str = ""
         self._filter_text: str = ""
-        self._filter_pages: int = -1  # -1 = all pages (no filter)
+        self._filter_pages: str = ""  # Empty or "All" = no filter, supports: "5", ">5", "<10", ">=3", "<=20", "5-10"
         self._visible_indices: List[int] = []
         self._page_counts: Dict[str, int] = {}
         self._sort_column: str = 'name'  # 'name' or 'pages'
@@ -141,7 +141,7 @@ class SidebarFileList(QListWidget):
         self._files = files
         self._base_dir = base_dir
         self._filter_text = ""
-        self._filter_pages = -1
+        self._filter_pages = ""
         self._page_counts.clear()
 
         # Don't load page counts here - use lazy loading
@@ -211,7 +211,7 @@ class SidebarFileList(QListWidget):
         else:
             # Lazy loading complete - rebuild list if page filter is active
             # This removes files whose actual page count doesn't match the filter
-            if self._filter_pages > 0:
+            if self._filter_pages and self._filter_pages.lower() != 'all':
                 self._rebuild_list(restart_lazy_load=False)
                 self.filter_changed.emit()
 
@@ -254,11 +254,10 @@ class SidebarFileList(QListWidget):
             if self._filter_text:
                 if self._filter_text.lower() not in file_path.lower():
                     continue
-            # Filter by pages (only apply if page count is loaded)
-            if self._filter_pages > 0:
+            # Filter by pages using expression (supports: 5, >5, <10, >=3, <=20, 5-10)
+            if self._filter_pages and self._filter_pages.lower() != 'all':
                 page_count = self._page_counts.get(file_path, -1)
-                # If page count not loaded yet, include in list (will be filtered later)
-                if page_count >= 0 and page_count != self._filter_pages:
+                if not self._matches_page_filter(page_count):
                     continue
             filtered.append((idx, file_path))
 
@@ -296,12 +295,56 @@ class SidebarFileList(QListWidget):
         self.selection_changed.emit(self.get_checked_files())
         self.filter_changed.emit()
 
-    def set_page_filter(self, pages: int):
-        """Set page count filter. -1 = all."""
-        self._filter_pages = pages
+    def set_page_filter(self, filter_expr: str):
+        """Set page count filter expression.
+
+        Supported formats:
+        - "" or "All": no filter (show all)
+        - "5": exact match (5 pages)
+        - ">5": more than 5 pages
+        - "<10": less than 10 pages
+        - ">=3": 3 or more pages
+        - "<=20": 20 or fewer pages
+        - "5-10": between 5 and 10 pages (inclusive)
+        """
+        self._filter_pages = filter_expr.strip() if filter_expr else ""
         self._rebuild_list(restart_lazy_load=True)
         self.selection_changed.emit(self.get_checked_files())
         self.filter_changed.emit()
+
+    def _matches_page_filter(self, page_count: int) -> bool:
+        """Check if page count matches filter expression."""
+        if page_count < 0:
+            return True  # Page count not loaded yet, include in list
+
+        if not self._filter_pages or self._filter_pages.lower() == 'all':
+            return True
+
+        filter_str = self._filter_pages.strip()
+
+        try:
+            # Range: "5-10"
+            if '-' in filter_str and not filter_str.startswith('-'):
+                parts = filter_str.split('-')
+                if len(parts) == 2:
+                    min_val = int(parts[0])
+                    max_val = int(parts[1])
+                    return min_val <= page_count <= max_val
+
+            # Operators: >=, <=, >, <
+            if filter_str.startswith(">="):
+                return page_count >= int(filter_str[2:])
+            elif filter_str.startswith("<="):
+                return page_count <= int(filter_str[2:])
+            elif filter_str.startswith(">"):
+                return page_count > int(filter_str[1:])
+            elif filter_str.startswith("<"):
+                return page_count < int(filter_str[1:])
+            else:
+                # Exact match
+                return page_count == int(filter_str)
+        except ValueError:
+            return True  # Invalid filter = show all
 
     def get_unique_page_counts(self) -> List[int]:
         """Get sorted unique page counts for combobox."""
@@ -641,9 +684,19 @@ class BatchSidebar(QFrame):
         # Pages filter (like zoom combo - minimal styling to keep default icon)
         self._pages_combo = QComboBox()
         self._pages_combo.addItem("All")
-        self._pages_combo.setFixedWidth(58)
+        self._pages_combo.setEditable(True)
+        self._pages_combo.setInsertPolicy(QComboBox.NoInsert)  # Don't add typed text to dropdown
+        self._pages_combo.setFixedWidth(70)
         self._pages_combo.setFixedHeight(24)
-        self._pages_combo.setToolTip("Lọc theo số trang")
+        self._pages_combo.setToolTip(
+            "Lọc theo số trang:\n"
+            "• Chọn từ dropdown hoặc gõ tay\n"
+            "• 5 = đúng 5 trang\n"
+            "• >5 = hơn 5 trang\n"
+            "• <10 = dưới 10 trang\n"
+            "• >=3, <=20\n"
+            "• 5-10 = từ 5 đến 10 trang"
+        )
         self._pages_combo.view().setStyleSheet("""
             QListView {
                 background-color: white;
@@ -787,19 +840,13 @@ class BatchSidebar(QFrame):
         self._update_sort_labels_with_filter()
 
     def _on_pages_filter_changed(self, text: str):
-        """Handle pages filter change"""
-        if text == "All" or not text:
-            self._file_list.set_page_filter(-1)
+        """Handle pages filter change (supports expressions: 5, >5, <10, >=3, <=20, 5-10)"""
+        if text.lower() == "all" or not text:
+            self._file_list.set_page_filter("")
             self._pages_clear_btn.setVisible(False)
         else:
-            try:
-                pages = int(text)
-                self._file_list.set_page_filter(pages)
-                self._pages_clear_btn.setVisible(True)
-            except ValueError:
-                # Invalid input, reset to all
-                self._file_list.set_page_filter(-1)
-                self._pages_clear_btn.setVisible(False)
+            self._file_list.set_page_filter(text)
+            self._pages_clear_btn.setVisible(True)
         self._update_count()
         self._update_toggle_state()
         self._update_sort_labels_with_filter()

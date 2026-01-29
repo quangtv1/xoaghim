@@ -469,7 +469,7 @@ class MainWindow(QMainWindow):
         self._window_center = 0  # Current center page in window
 
         self.setWindowTitle("Xóa Ghim PDF (5S)")
-        self.setMinimumSize(1200, 800)
+        self.setMinimumSize(900, 600)  # Reduced for small screens
         self.setAcceptDrops(True)
 
         self._setup_ui()
@@ -1757,16 +1757,36 @@ class MainWindow(QMainWindow):
             if sidebar_width > 0:
                 self.compact_toolbar.set_search_width(sidebar_width)
     def _on_splitter_moved(self, pos: int, index: int):
-        """Handle splitter drag - enforce minimum sidebar width and sync search width"""
+        """Handle splitter drag - enforce min sidebar width and min preview width (1/4 screen)"""
         if not self.batch_sidebar.isVisible():
             return
+
         sizes = self.preview_splitter.sizes()
         sidebar_width = sizes[0]
-        min_width = BatchSidebar.COLLAPSED_WIDTH if self.batch_sidebar.is_collapsed() else BatchSidebar.MIN_WIDTH
-        if sidebar_width < min_width:
-            # Force minimum width
-            self.preview_splitter.setSizes([min_width, self.preview_splitter.width() - min_width])
-            sidebar_width = min_width
+        preview_width = sizes[1]
+        total_width = self.preview_splitter.width()
+
+        # Minimum widths
+        min_sidebar = BatchSidebar.COLLAPSED_WIDTH if self.batch_sidebar.is_collapsed() else BatchSidebar.MIN_WIDTH
+        min_preview = max(300, total_width // 4)  # At least 1/4 screen or 300px
+
+        need_resize = False
+
+        # Enforce minimum sidebar width
+        if sidebar_width < min_sidebar:
+            sidebar_width = min_sidebar
+            preview_width = total_width - sidebar_width
+            need_resize = True
+
+        # Enforce minimum preview width (prevent sidebar from being too wide)
+        elif preview_width < min_preview:
+            preview_width = min_preview
+            sidebar_width = total_width - preview_width
+            need_resize = True
+
+        if need_resize:
+            self.preview_splitter.setSizes([sidebar_width, preview_width])
+
         # Sync search box width with sidebar
         if not self.batch_sidebar.is_collapsed():
             self.compact_toolbar.set_search_width(sidebar_width)
