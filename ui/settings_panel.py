@@ -580,7 +580,7 @@ class SettingsPanel(QWidget):
         lbl_rong.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
         params_layout.addWidget(lbl_rong, 1, 0)
         self.width_slider = QSlider(Qt.Horizontal)
-        self.width_slider.setRange(1, 50)
+        self.width_slider.setRange(1, 100)
         self.width_slider.setValue(12)
         self.width_slider.setStyleSheet(slider_style)
         self.width_slider.valueChanged.connect(self._on_zone_size_changed)
@@ -594,7 +594,7 @@ class SettingsPanel(QWidget):
         lbl_cao.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
         params_layout.addWidget(lbl_cao, 2, 0)
         self.height_slider = QSlider(Qt.Horizontal)
-        self.height_slider.setRange(1, 50)
+        self.height_slider.setRange(1, 100)
         self.height_slider.setValue(12)
         self.height_slider.setStyleSheet(slider_style)
         self.height_slider.valueChanged.connect(self._on_zone_size_changed)
@@ -1126,9 +1126,9 @@ class SettingsPanel(QWidget):
         self.width_slider.blockSignals(True)
         self.height_slider.blockSignals(True)
 
-        # Reset slider ranges to default (will be changed for edges)
-        self.width_slider.setRange(1, 50)
-        self.height_slider.setRange(1, 50)
+        # Reset slider ranges to default (1-100%)
+        self.width_slider.setRange(1, 100)
+        self.height_slider.setRange(1, 100)
 
         if zone_id.startswith('margin_'):
             # Edge zones (hybrid): one dimension is 100%, depth as % of page
@@ -1139,7 +1139,7 @@ class SettingsPanel(QWidget):
                 self.width_slider.setEnabled(False)
                 # Convert depth_px to % of page height
                 if zone.height_px > 0:
-                    depth_pct = max(1, min(50, int(zone.height_px / self._page_height * 100)))
+                    depth_pct = max(1, min(100, int(zone.height_px / self._page_height * 100)))
                 else:
                     depth_pct = int(zone.height * 100)
                 self.height_slider.setValue(depth_pct)
@@ -1147,7 +1147,7 @@ class SettingsPanel(QWidget):
             else:
                 # Vertical edges: height=100% (locked), width=depth as % of page width
                 if zone.width_px > 0:
-                    depth_pct = max(1, min(50, int(zone.width_px / self._page_width * 100)))
+                    depth_pct = max(1, min(100, int(zone.width_px / self._page_width * 100)))
                 else:
                     depth_pct = int(zone.width * 100)
                 self.width_slider.setValue(depth_pct)
@@ -1160,11 +1160,11 @@ class SettingsPanel(QWidget):
             self.width_slider.setEnabled(True)
             self.height_slider.setEnabled(True)
             if zone.width_px > 0:
-                width_pct = max(1, min(50, int(zone.width_px / self._page_width * 100)))
+                width_pct = max(1, min(100, int(zone.width_px / self._page_width * 100)))
             else:
                 width_pct = int(zone.width * 100)
             if zone.height_px > 0:
-                height_pct = max(1, min(50, int(zone.height_px / self._page_height * 100)))
+                height_pct = max(1, min(100, int(zone.height_px / self._page_height * 100)))
             else:
                 height_pct = int(zone.height * 100)
             self.width_slider.setValue(width_pct)
@@ -1200,7 +1200,7 @@ class SettingsPanel(QWidget):
             return
 
         zone_id = self._selected_zone_id
-        slider_width = self.width_slider.value()  # 1-50 (or 100 for locked edge)
+        slider_width = self.width_slider.value()  # 1-100%
         slider_height = self.height_slider.value()
 
         if zone_id.startswith('corner_'):
