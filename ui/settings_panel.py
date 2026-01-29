@@ -111,6 +111,14 @@ class SettingsPanel(QWidget):
         if not config:
             return  # No saved config, use defaults
 
+        # Clear existing global custom zones (page_filter != 'none') before loading
+        # Keep per-file zones (page_filter == 'none') as they are managed separately
+        self._custom_zones = {
+            zone_id: zone
+            for zone_id, zone in self._custom_zones.items()
+            if getattr(zone, 'page_filter', 'all') == 'none'
+        }
+
         # Restore enabled zones
         enabled_zones = config.get('enabled_zones', [])
         for zone_id in self._zones:
@@ -517,38 +525,27 @@ class SettingsPanel(QWidget):
         self.apply_group.addButton(self.apply_free_rb, 3)
         apply_layout.addWidget(self.apply_free_rb)
 
+        # "Vô đối" option - only visible when in Tùy biến - (remove) mode
+        self.apply_mirror_rb = QRadioButton("Vô đối")
+        self.apply_mirror_rb.setToolTip("Vùng vẽ mới áp dụng cho trang đối xứng (trang chẵn ↔ lẻ)")
+        self.apply_mirror_rb.setStyleSheet(radio_indicator_style)
+        self.apply_group.addButton(self.apply_mirror_rb, 4)
+        self.apply_mirror_rb.setVisible(False)  # Hidden by default
+        apply_layout.addWidget(self.apply_mirror_rb)
+
         # Connect button group signal
         self.apply_group.buttonClicked.connect(self._on_apply_filter_changed)
 
         apply_layout.addStretch()
 
-        # Reset button at bottom (aligned with protection_row in params_widget)
-        self.reset_zones_btn = QPushButton("Xóa vùng chọn")
-        self.reset_zones_btn.setToolTip("Xóa tất cả vùng đã chọn")
-        self.reset_zones_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #FFFFFF;
-                color: #0047AB;
-                border: 1px solid #D1D5DB;
-                border-radius: 4px;
-                padding: 2px 8px;
-                font-size: 12px;
-                font-weight: normal;
-            }
-            QPushButton:hover {
-                background-color: #FEE2E2;
-                color: #DC2626;
-                border-color: #FECACA;
-            }
-            QPushButton:pressed {
-                background-color: #FECACA;
-                color: #B91C1C;
-            }
-        """)
-        self.reset_zones_btn.clicked.connect(self._on_reset_zones_clicked)
-        apply_layout.addWidget(self.reset_zones_btn)
-
         zone_row.addWidget(apply_widget)
+
+        # Separator line between radio buttons and params
+        sep_line = QFrame()
+        sep_line.setFrameShape(QFrame.VLine)
+        sep_line.setStyleSheet("background-color: #E5E7EB;")
+        sep_line.setFixedWidth(1)
+        zone_row.addWidget(sep_line)
 
         # ========== Thông số (side by side in zone_row) ==========
         params_widget = QWidget()
@@ -663,36 +660,56 @@ class SettingsPanel(QWidget):
         protection_row = QHBoxLayout()
         protection_row.setSpacing(8)
 
-        self.text_protection_cb = QCheckBox("Nhận diện vùng bảo vệ (tự động)")
+        # Reset zones button (before layout detection checkbox)
+        self.reset_zones_btn = QPushButton("Xóa vùng chọn")
+        self.reset_zones_btn.setToolTip("Xóa tất cả vùng đã chọn")
+        self.reset_zones_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #FFFFFF;
+                color: #0047AB;
+                border: 1px solid #D1D5DB;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-size: 12px;
+                font-weight: normal;
+            }
+            QPushButton:hover {
+                background-color: #FEE2E2;
+                color: #DC2626;
+                border-color: #FECACA;
+            }
+            QPushButton:pressed {
+                background-color: #FECACA;
+                color: #B91C1C;
+            }
+        """)
+        self.reset_zones_btn.clicked.connect(self._on_reset_zones_clicked)
+        protection_row.addWidget(self.reset_zones_btn)
+
+        protection_row.addStretch()  # Even spacing
+
+        # Checkbox without text + clickable link label
+        self.text_protection_cb = QCheckBox()
         self.text_protection_cb.setChecked(True)
         self.text_protection_cb.setToolTip(
             "Sử dụng AI để phát hiện và bảo vệ vùng văn bản,\n"
             "bảng biểu khỏi bị xóa nhầm."
         )
-        self.text_protection_cb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
+        self.text_protection_cb.setStyleSheet("background-color: #FFFFFF;")
         self.text_protection_cb.stateChanged.connect(self._on_text_protection_checkbox_changed)
         protection_row.addWidget(self.text_protection_cb)
 
-        self.text_protection_settings_btn = QPushButton("⚙")
-        self.text_protection_settings_btn.setFixedSize(28, 28)
-        self.text_protection_settings_btn.setToolTip("Cài đặt bảo vệ văn bản")
-        self.text_protection_settings_btn.setStyleSheet("""
-            QPushButton {
-                font-size: 16px;
-                background-color: #F3F4F6;
-                border: 1px solid #D1D5DB;
-                border-radius: 4px;
-                padding: 0px;
-            }
-            QPushButton:hover {
-                background-color: #E5E7EB;
-            }
-        """)
-        self.text_protection_settings_btn.clicked.connect(self._open_text_protection_dialog)
-        protection_row.addWidget(self.text_protection_settings_btn)
+        # Clickable link label - opens settings dialog
+        self.text_protection_link = QLabel('<a href="#" style="color: #0047AB; text-decoration: none;">Nhận diện layout</a>')
+        self.text_protection_link.setToolTip("Click để mở cài đặt nhận diện layout")
+        self.text_protection_link.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
+        self.text_protection_link.setCursor(Qt.PointingHandCursor)
+        self.text_protection_link.linkActivated.connect(lambda: self._open_text_protection_dialog())
+        protection_row.addWidget(self.text_protection_link)
 
-        # Batch render checkbox (same row)
-        protection_row.addSpacing(16)
+        protection_row.addStretch()  # Even spacing
+
+        # Batch render checkbox
         self.batch_render_cb = QCheckBox("Render 10 trang một")
         self.batch_render_cb.setChecked(True)  # Default: enabled
         self.batch_render_cb.setToolTip(
@@ -704,8 +721,9 @@ class SettingsPanel(QWidget):
         self.batch_render_cb.stateChanged.connect(self._on_batch_render_changed)
         protection_row.addWidget(self.batch_render_cb)
 
+        protection_row.addStretch()  # Even spacing
+
         # Auto-save interval
-        protection_row.addSpacing(16)
         auto_save_label = QLabel("Tự lưu:")
         auto_save_label.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
         protection_row.addWidget(auto_save_label)
@@ -724,7 +742,7 @@ class SettingsPanel(QWidget):
         self.auto_save_spin.valueChanged.connect(self._on_auto_save_changed)
         protection_row.addWidget(self.auto_save_spin)
 
-        protection_row.addStretch()
+        protection_row.addStretch()  # Even spacing at end
         params_container.addLayout(protection_row)
 
         # Store current text protection options
@@ -1072,6 +1090,10 @@ class SettingsPanel(QWidget):
                 if self.apply_group.checkedId() == 3:  # "Không" filter
                     self.apply_all_rb.setChecked(True)
                     self._on_apply_filter_changed(self.apply_all_rb)
+                # Hide "Vô đối" when clicking Góc/Cạnh
+                self.apply_mirror_rb.setVisible(False)
+                if self.apply_mirror_rb.isChecked():
+                    self.apply_free_rb.setChecked(True)
 
             # Reset zone size to default when re-selecting
             if zone_id in self._zones and zone_id in EXTENDED_PRESET_ZONES:
@@ -1304,12 +1326,19 @@ class SettingsPanel(QWidget):
     def _on_draw_mode_changed(self, mode):
         """Forward draw mode signal to MainWindow (mode: 'remove', 'protect', or None)
 
-        When entering draw mode (Tùy biến), auto-switch to "Tự do" filter.
+        Show "Vô đối" option only when in 'remove' mode.
+        NOTE: No longer auto-switch to "Từng trang" - users can create global
+        custom zones (Tùy biến + Tất cả/Trang lẻ/Trang chẵn).
         """
         self._current_draw_mode = mode
-        if mode is not None:
-            # Entering draw mode → auto-switch to "Tự do" filter
+        # Removed auto-switch to "Từng trang" - allows creating global custom zones
+
+        # Show "Vô đối" only when in Tùy biến - (remove) mode
+        self.apply_mirror_rb.setVisible(mode == 'remove')
+        # If mirror was selected but mode changed, switch back to Từng trang
+        if mode != 'remove' and self.apply_mirror_rb.isChecked():
             self.apply_free_rb.setChecked(True)
+
         self.draw_mode_changed.emit(mode)
 
     def add_custom_zone_from_rect(self, x: float, y: float, width: float, height: float,
