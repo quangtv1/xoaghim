@@ -1010,13 +1010,12 @@ class SettingsPanel(QWidget):
     def _on_compact_draw_mode_changed(self, mode):
         """Handle draw mode change from compact toolbar
 
-        When entering draw mode (Tùy biến), auto-switch to "Tự do" filter.
+        Default to "Từng trang" when entering draw mode.
         """
         self._current_draw_mode = mode
         # Sync with zone selector draw buttons
         self.zone_selector.set_draw_mode(mode)
         if mode is not None:
-            # Entering draw mode → auto-switch to "Tự do" filter
             self.apply_free_rb.setChecked(True)
         self.draw_mode_changed.emit(mode)
 
@@ -1357,19 +1356,18 @@ class SettingsPanel(QWidget):
     def _on_draw_mode_changed(self, mode):
         """Forward draw mode signal to MainWindow (mode: 'remove', 'protect', or None)
 
-        When entering draw mode (Tùy biến), auto-switch to "Từng trang" filter.
-        Show "Vô đối" option only when in 'remove' mode.
-        User can manually change filter to create global zones if needed.
+        When entering draw mode, default to "Từng trang" filter.
+        User can change filter after entering draw mode to create Zone Chung.
         """
         self._current_draw_mode = mode
 
-        # Auto-switch to "Từng trang" when entering draw mode (Tùy biến default)
+        # Auto-switch to "Từng trang" when entering draw mode (default)
         if mode is not None:
             self.apply_free_rb.setChecked(True)
 
         # Show "Vô đối" only when in Tùy biến - (remove) mode
         self.apply_mirror_rb.setVisible(mode == 'remove')
-        # If mirror was selected but mode changed, switch back to Từng trang
+        # If mirror was selected but mode changed, switch to Từng trang
         if mode != 'remove' and self.apply_mirror_rb.isChecked():
             self.apply_free_rb.setChecked(True)
 
