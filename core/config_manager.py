@@ -339,15 +339,26 @@ class ConfigManager:
         """Get zone configuration
 
         In portable mode: loads from .xoaghim.json (global_settings)
-        Otherwise: loads from app data config.json
+        If no .xoaghim.json exists: return empty config (all zones disabled)
         """
-        # Portable mode: prioritize .xoaghim.json
-        if self._portable_config and self._portable_config.exists():
-            portable_settings = self._portable_config.get_global_settings()
-            if portable_settings:
-                return portable_settings
+        # Portable mode: load from .xoaghim.json ONLY
+        if self._portable_config:
+            if self._portable_config.exists():
+                portable_settings = self._portable_config.get_global_settings()
+                if portable_settings:
+                    return portable_settings
+            # No .xoaghim.json or empty → return default (all zones disabled)
+            return {
+                'enabled_zones': [],
+                'zone_sizes': {},
+                'custom_zones': {},
+                'threshold': 5,
+                'filter_mode': 'all',
+                'text_protection': True,
+                'batch_render': True,
+            }
 
-        # Fallback to app data
+        # Non-portable mode: load from app data
         return self._config.get('zones', {})
 
     def save_zone_config(self, zone_config: Dict[str, Any]):
@@ -370,12 +381,13 @@ class ConfigManager:
         }
         """
         print(f"[Config] save_zone_config called, portable_config={self._portable_config is not None}")
-        # Portable mode: save to .xoaghim.json
+        # Portable mode: save to .xoaghim.json ONLY (no sync to app data)
         if self._portable_config:
             print(f"[Config] Saving to portable config: {self._portable_config._config_path}")
             self._portable_config.save_global_settings(zone_config)
+            return  # Don't sync to app data - each folder has its own config
 
-        # Always save to app data as well (for default settings)
+        # Non-portable mode: save to app data
         self._config['zones'] = zone_config
         self._save()
 

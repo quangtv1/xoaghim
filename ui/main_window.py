@@ -3869,7 +3869,8 @@ Thời gian: {time_str}"""
         self._saved_sidebar_width = ui_config.get('sidebar_width', BatchSidebar.EXPANDED_WIDTH)
 
         # Restore zoom level (will be applied when file is loaded)
-        self._saved_zoom_percent = ui_config.get('last_zoom_percent', 100)
+        # Default 62% for better overview of first page
+        self._saved_zoom_percent = ui_config.get('last_zoom_percent', 62)
 
         # Restore after panel (Đích) collapsed state
         if ui_config.get('after_panel_collapsed', False):

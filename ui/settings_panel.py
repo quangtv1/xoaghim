@@ -1685,9 +1685,13 @@ class SettingsPanel(QWidget):
             batch_base_dir: Batch folder to load zones for.
         """
         self._batch_base_dir = batch_base_dir
-        # Clear old zones before loading new source
+        # Clear per-file zones, but PRESERVE global custom zones (page_filter != 'none')
         self._per_file_custom_zones.clear()
-        self._custom_zones.clear()
+        self._custom_zones = {
+            zone_id: zone
+            for zone_id, zone in self._custom_zones.items()
+            if getattr(zone, 'page_filter', 'all') != 'none'
+        }
         from core.config_manager import get_config_manager
         persisted = get_config_manager().get_per_file_custom_zones(batch_base_dir)
         if persisted:
