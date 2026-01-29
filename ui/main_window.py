@@ -498,6 +498,7 @@ class MainWindow(QMainWindow):
 
         # === SETTINGS PANEL (creates compact_toolbar, will be moved to right container) ===
         self.settings_panel = SettingsPanel()
+        self.settings_panel.setMinimumWidth(0)  # Allow shrinking for wider sidebar
         self.settings_panel.zones_changed.connect(self._on_zones_changed)
         self.settings_panel.settings_changed.connect(self._on_settings_changed)
         self.settings_panel.page_filter_changed.connect(self._on_page_filter_changed)
@@ -562,6 +563,7 @@ class MainWindow(QMainWindow):
         # Right container (Settings expanded + Preview + Bottom bar)
         right_container = QWidget()
         right_container.setStyleSheet("background-color: #E5E7EB;")
+        right_container.setMinimumWidth(0)  # Allow shrinking for wider sidebar
         right_layout = QVBoxLayout(right_container)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(0)
@@ -578,6 +580,7 @@ class MainWindow(QMainWindow):
 
         # === PREVIEW WIDGET ===
         self.preview = ContinuousPreviewWidget()
+        self.preview.setMinimumWidth(0)  # Allow shrinking for wider sidebar
         self.preview.zone_changed.connect(self._on_zone_changed_from_preview)
         self.preview.zone_selected.connect(self._on_zone_selected_from_preview)
         self.preview.zone_delete.connect(self._on_zone_delete_from_preview)
