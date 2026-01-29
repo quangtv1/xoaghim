@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QSlider, QComboBox, QPushButton,
     QFrame, QGridLayout, QLineEdit,
     QFileDialog, QCheckBox, QRadioButton, QButtonGroup, QMessageBox,
-    QStyledItemDelegate, QSizePolicy
+    QStyledItemDelegate, QSizePolicy, QSpinBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QSize, QPoint, QPropertyAnimation, QEasingCurve, QTimer
 from PyQt5.QtGui import QColor, QPixmap, QPainter, QPolygon
@@ -178,6 +178,12 @@ class SettingsPanel(QWidget):
         # Restore preload cache setting
         batch_render = config.get('batch_render', True)  # Default: enabled
         self.batch_render_cb.setChecked(batch_render)
+
+        # Restore auto-save interval from app config (not portable config)
+        auto_save_interval = get_config_manager().get_auto_save_interval()
+        self.auto_save_spin.blockSignals(True)
+        self.auto_save_spin.setValue(auto_save_interval)
+        self.auto_save_spin.blockSignals(False)
 
         # Update zone selector UI to match
         self.zone_selector.blockSignals(True)
@@ -627,6 +633,26 @@ class SettingsPanel(QWidget):
         self.batch_render_cb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
         self.batch_render_cb.stateChanged.connect(self._on_batch_render_changed)
         protection_row.addWidget(self.batch_render_cb)
+
+        # Auto-save interval
+        protection_row.addSpacing(16)
+        auto_save_label = QLabel("Tự lưu:")
+        auto_save_label.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
+        protection_row.addWidget(auto_save_label)
+
+        self.auto_save_spin = QSpinBox()
+        self.auto_save_spin.setRange(0, 10)
+        self.auto_save_spin.setValue(0)
+        self.auto_save_spin.setSuffix(" phút")
+        self.auto_save_spin.setFixedWidth(80)
+        self.auto_save_spin.setToolTip(
+            "Tự động lưu cấu hình zones mỗi X phút.\n"
+            "0 = lưu ngay lập tức khi có thay đổi.\n"
+            ">0 = lưu định kỳ (giảm ghi đĩa)."
+        )
+        self.auto_save_spin.setStyleSheet("font-size: 12px;")
+        self.auto_save_spin.valueChanged.connect(self._on_auto_save_changed)
+        protection_row.addWidget(self.auto_save_spin)
 
         protection_row.addStretch()
         params_container.addLayout(protection_row)
@@ -1499,6 +1525,10 @@ class SettingsPanel(QWidget):
     def is_batch_render_enabled(self) -> bool:
         """Check if batch render is enabled"""
         return self.batch_render_cb.isChecked()
+
+    def _on_auto_save_changed(self, value: int):
+        """Handle auto-save interval change"""
+        get_config_manager().set_auto_save_interval(value)
 
     def _open_text_protection_dialog(self):
         """Open text protection settings dialog"""

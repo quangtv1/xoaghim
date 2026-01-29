@@ -1702,6 +1702,10 @@ class MainWindow(QMainWindow):
         self.preview.save_per_file_zones()
         self.settings_panel.save_per_file_custom_zones()
 
+        # Force save any pending changes (critical event)
+        from core.config_manager import get_config_manager
+        get_config_manager().force_save()
+
         self._batch_current_index = original_idx
         # Clear custom zones with 'none' filter (Tự do) - will be restored from per-file storage
         self.settings_panel.clear_custom_zones_with_free_filter()
@@ -2997,6 +3001,10 @@ class MainWindow(QMainWindow):
         if current_file:
             self.preview.before_panel.save_per_file_zones(current_file, persist=False)
 
+        # Force save any pending changes before processing (critical event)
+        from core.config_manager import get_config_manager
+        get_config_manager().force_save()
+
         # Get zones from preview - collect ALL zones from ALL pages with target_page set
         # This ensures Zone Riêng (per-page zones) work correctly in batch mode
         zones = self.preview.get_all_zones_for_batch_processing()
@@ -3737,6 +3745,12 @@ Thời gian: {time_str}"""
             # Then force persist ALL per-file zones to disk
             self.preview._persist_zones_to_disk()
             self.settings_panel._persist_custom_zones_to_disk()
+
+        # Force save any pending changes (critical event - app closing)
+        from core.config_manager import get_config_manager
+        config_manager = get_config_manager()
+        config_manager.force_save()
+        config_manager.cleanup()  # Stop auto-save timer
 
         # Save window size and sidebar width
         self._save_window_state()

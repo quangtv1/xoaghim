@@ -64,13 +64,20 @@ def _to_absolute_path(relative_path: str, base_folder: str) -> str:
 
 
 class PortableConfigManager:
-    """Manages .xoaghim.json in PDF folder (portable mode)"""
+    """Manages .xoaghim.json in PDF folder (portable mode)
+
+    Supports deferred saving with configurable auto-save interval:
+    - interval = 0: save immediately on every change (legacy behavior)
+    - interval > 0: save periodically, plus force save on critical events
+    """
 
     def __init__(self, folder_path: str):
         self._folder_path = folder_path
         self._config_path = get_portable_config_path(folder_path)
         self._data: Dict[str, Any] = {}
         self._dirty = False
+        self._auto_save_interval = 0  # Minutes, 0 = immediate save
+        self._auto_save_timer = None  # QTimer instance (lazy init)
         self._load()
 
     def _load(self):
@@ -85,7 +92,7 @@ class PortableConfigManager:
             self._data = {}
 
     def _save(self):
-        """Save config to .xoaghim.json"""
+        """Save config to .xoaghim.json (internal - use force_save for external calls)"""
         if not self._dirty:
             return
         try:
@@ -93,11 +100,63 @@ class PortableConfigManager:
             with open(self._config_path, 'w', encoding='utf-8') as f:
                 json.dump(self._data, f, indent=2, ensure_ascii=False)
                 f.flush()
-                os.fsync(f.fileno())
+                # Removed os.fsync() - let OS handle disk buffering for better performance
             self._dirty = False
             print(f"[PortableConfig] Saved to {self._config_path}")
         except Exception as e:
             print(f"[PortableConfig] Failed to save: {e}")
+
+    def set_auto_save_interval(self, minutes: int):
+        """Set auto-save interval in minutes.
+
+        Args:
+            minutes: 0 = immediate save, >0 = periodic save every N minutes
+        """
+        self._auto_save_interval = max(0, minutes)
+
+        # Stop existing timer
+        if self._auto_save_timer:
+            self._auto_save_timer.stop()
+
+        # Start new timer if interval > 0
+        if self._auto_save_interval > 0:
+            try:
+                from PyQt5.QtCore import QTimer
+            except ImportError:
+                from PySide6.QtCore import QTimer
+            if not self._auto_save_timer:
+                self._auto_save_timer = QTimer()
+                self._auto_save_timer.timeout.connect(self._periodic_save)
+            self._auto_save_timer.start(self._auto_save_interval * 60 * 1000)
+            print(f"[PortableConfig] Auto-save timer set to {minutes} minute(s)")
+
+    def _periodic_save(self):
+        """Called by timer - save if dirty"""
+        if self._dirty:
+            print("[PortableConfig] Periodic auto-save triggered")
+            self._save()
+
+    def mark_dirty(self):
+        """Mark data as changed. Saves immediately if interval=0, else waits for timer."""
+        self._dirty = True
+        if self._auto_save_interval == 0:
+            self._save()  # Immediate save (legacy behavior)
+
+    def force_save(self):
+        """Force save immediately - use for critical events (file switch, app close)"""
+        if self._dirty:
+            print("[PortableConfig] Force save triggered")
+            self._save()
+
+    def get_auto_save_interval(self) -> int:
+        """Get current auto-save interval in minutes"""
+        return self._auto_save_interval
+
+    def cleanup(self):
+        """Stop timer and cleanup resources"""
+        if self._auto_save_timer:
+            self._auto_save_timer.stop()
+            self._auto_save_timer = None
 
     def exists(self) -> bool:
         """Check if .xoaghim.json exists"""
@@ -110,8 +169,7 @@ class PortableConfigManager:
     def save_global_settings(self, settings: Dict[str, Any]):
         """Save global zone settings (Zone Chung)"""
         self._data['global_settings'] = settings
-        self._dirty = True
-        self._save()
+        self.mark_dirty()  # Uses auto-save interval logic
 
     def get_per_file_zones(self) -> Dict[str, Dict[int, Dict[str, Any]]]:
         """Get per-file zones with relative paths converted to absolute"""
@@ -137,8 +195,7 @@ class PortableConfigManager:
                 for page_idx, zone_data in page_zones.items()
             }
         self._data['per_file_zones'] = zones_serializable
-        self._dirty = True
-        self._save()
+        self.mark_dirty()  # Uses auto-save interval logic
 
     def get_custom_zones(self) -> Dict[str, Dict[str, Any]]:
         """Get custom zones with relative paths converted to absolute"""
@@ -157,8 +214,7 @@ class PortableConfigManager:
             rel_path = _to_relative_path(file_path, self._folder_path)
             zones_serializable[rel_path] = zones
         self._data['custom_zones'] = zones_serializable
-        self._dirty = True
-        self._save()
+        self.mark_dirty()  # Uses auto-save interval logic
 
     def clear(self):
         """Clear all data and delete file"""
@@ -207,6 +263,11 @@ class ConfigManager:
         - Folder itself (if source is folder)
         - Parent folder (if source is file)
         """
+        # Cleanup previous portable config
+        if self._portable_config:
+            self._portable_config.force_save()  # Save pending changes
+            self._portable_config.cleanup()
+
         self._current_source = source_path
 
         # Always enable portable mode
@@ -224,8 +285,17 @@ class ConfigManager:
             self._portable_config = None
             print(f"[Config] No portable mode: {source_path}")
 
+        # Apply auto-save interval to new portable config
+        if self._portable_config:
+            interval = self.get_auto_save_interval()
+            if interval > 0:
+                self._portable_config.set_auto_save_interval(interval)
+
     def clear_current_source(self):
         """Clear current source (when closing file/folder)"""
+        if self._portable_config:
+            self._portable_config.force_save()  # Save pending changes
+            self._portable_config.cleanup()
         self._current_source = None
         self._portable_config = None
 
@@ -384,6 +454,39 @@ class ConfigManager:
     def clear_batch_zones(self):
         """Legacy: No longer used. Each source has its own zones file."""
         pass  # No-op, kept for compatibility
+
+    # === Auto-save interval management ===
+
+    def set_auto_save_interval(self, minutes: int):
+        """Set auto-save interval for portable config.
+
+        Args:
+            minutes: 0 = immediate save, >0 = periodic save every N minutes
+        """
+        # Save to app config for persistence across sessions
+        self._config['auto_save_interval'] = minutes
+        self._save()
+
+        # Apply to current portable config if active
+        if self._portable_config:
+            self._portable_config.set_auto_save_interval(minutes)
+
+    def get_auto_save_interval(self) -> int:
+        """Get auto-save interval setting (in minutes)"""
+        return self._config.get('auto_save_interval', 0)
+
+    def force_save(self):
+        """Force save all pending changes immediately.
+
+        Call this on critical events: file switch, app close, etc.
+        """
+        if self._portable_config:
+            self._portable_config.force_save()
+
+    def cleanup(self):
+        """Cleanup resources (stop timers, etc.)"""
+        if self._portable_config:
+            self._portable_config.cleanup()
 
 
 # Global instance
