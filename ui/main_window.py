@@ -4131,8 +4131,21 @@ Thời gian: {time_str}"""
         algo_title.setStyleSheet("font-weight: bold; font-size: 14px; color: #374151; padding: 4px 0;")
         layout.addWidget(algo_title)
 
-        # Radio style: only change checked indicator to blue
-        radio_indicator_style = "QRadioButton::indicator:checked { background: #3B82F6; border-color: #3B82F6; }"
+        # Radio style: light gray thin circle border, blue dot when checked
+        radio_indicator_style = """
+            QRadioButton::indicator {
+                width: 14px;
+                height: 14px;
+                border: 1px solid #D1D5DB;
+                border-radius: 7px;
+                background-color: white;
+            }
+            QRadioButton::indicator:checked {
+                background-color: qradialgradient(spread:pad, cx:0.5, cy:0.5, radius:0.5,
+                    fx:0.5, fy:0.5,
+                    stop:0 #3B82F6, stop:0.5 #3B82F6, stop:0.55 white, stop:1 white);
+            }
+        """
 
         algo_opencv = QRadioButton("OpenCV (CPU) - Nhanh, phù hợp hầu hết trường hợp")
         algo_opencv.setChecked(True)

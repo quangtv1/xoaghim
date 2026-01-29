@@ -466,17 +466,27 @@ class SettingsPanel(QWidget):
         apply_widget.setStyleSheet("background-color: #FFFFFF;")
         apply_layout = QVBoxLayout(apply_widget)
         apply_layout.setContentsMargins(0, 0, 0, 0)
-        apply_layout.setSpacing(4)
+        apply_layout.setSpacing(8)
         apply_layout.setAlignment(Qt.AlignTop)
 
         # Radio button group for exclusive selection
         self.apply_group = QButtonGroup(self)
 
-        # Radio style: only change checked indicator to blue
-        radio_style = "font-size: 12px; background-color: #FFFFFF;"
+        # Radio style: light gray thin circle border, blue dot when checked
         radio_indicator_style = """
             QRadioButton { font-size: 12px; background-color: #FFFFFF; }
-            QRadioButton::indicator:checked { background: #3B82F6; border-color: #3B82F6; }
+            QRadioButton::indicator {
+                width: 14px;
+                height: 14px;
+                border: 1px solid #D1D5DB;
+                border-radius: 7px;
+                background-color: white;
+            }
+            QRadioButton::indicator:checked {
+                background-color: qradialgradient(spread:pad, cx:0.5, cy:0.5, radius:0.5,
+                    fx:0.5, fy:0.5,
+                    stop:0 #3B82F6, stop:0.5 #3B82F6, stop:0.55 white, stop:1 white);
+            }
         """
 
         self.apply_all_rb = QRadioButton("Tất cả")
@@ -509,7 +519,7 @@ class SettingsPanel(QWidget):
 
         apply_layout.addStretch()
 
-        # Reset button (aligned with Góc, Cạnh, Tùy biến labels)
+        # Reset button at bottom (aligned with protection_row in params_widget)
         self.reset_zones_btn = QPushButton("Xóa vùng chọn")
         self.reset_zones_btn.setToolTip("Xóa tất cả vùng đã chọn")
         self.reset_zones_btn.setStyleSheet("""
@@ -765,10 +775,11 @@ class SettingsPanel(QWidget):
         self.quality_combo = QComboBox()
         self.quality_combo.addItems(["300 dpi", "250 dpi", "200 dpi", "100 dpi", "72 dpi"])
         self.quality_combo.setCurrentIndex(0)  # Default 300 dpi
-        self.quality_combo.setMinimumWidth(60)  # Reduced for flexible resize
-        self.quality_combo.setEditable(True)
-        self.quality_combo.lineEdit().setReadOnly(True)  # Prevent typing
-        self.quality_combo.lineEdit().setTextMargins(0, 0, 0, 0)
+        self.quality_combo.setMinimumWidth(90)  # Width to show "300 dpi" fully
+        self.quality_combo.setStyleSheet("""
+            QComboBox { padding-left: 6px; }
+            QComboBox QAbstractItemView { padding-left: 6px; }
+        """)
         self.quality_combo.setItemDelegate(ComboItemDelegate(self.quality_combo))
         self.quality_combo.view().setStyleSheet(dropdown_item_style)
         quality_row.addWidget(self.quality_combo)
