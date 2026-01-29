@@ -2299,10 +2299,8 @@ class SettingsPanel(QWidget):
         elif scope == 'folder':
             self._per_file_custom_zones.clear()
 
-        # Persist to disk (works for both batch and single file mode)
-        # _batch_base_dir is set to folder path (batch) or file path (single)
-        if self._batch_base_dir:
-            self._persist_custom_zones_to_disk()
+        # Schedule save (respects auto-save interval, sets dirty flag)
+        self._schedule_save_per_file_zones()
 
         # Emit signal for main_window to clear per-page zones in preview
         self.zones_reset.emit(scope, 'rieng')
