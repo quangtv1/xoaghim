@@ -165,10 +165,11 @@ class CompactSettingsToolbar(QWidget):
 
     def _add_search_box(self, layout: QHBoxLayout):
         """Add search box for sidebar file filtering (left side, width matches sidebar)"""
-        # Container to match sidebar width
+        # Container to match sidebar width - use min/max instead of fixed to allow resize
         from ui.batch_sidebar import BatchSidebar
         self._search_container = QWidget()
-        self._search_container.setFixedWidth(BatchSidebar.EXPANDED_WIDTH)
+        self._search_container.setMinimumWidth(100)  # Allow shrinking for wider sidebar
+        self._search_container.setMaximumWidth(600)  # Reasonable max
         self._search_container.setStyleSheet("background-color: #FFFFFF;")
 
         search_layout = QHBoxLayout(self._search_container)
@@ -288,7 +289,9 @@ class CompactSettingsToolbar(QWidget):
 
     def set_search_width(self, width: int):
         """Set search container width to match sidebar width"""
-        self._search_container.setFixedWidth(width)
+        # Clamp width within min/max bounds
+        clamped = max(100, min(600, width))
+        self._search_container.setFixedWidth(clamped)
 
     def clear_search(self):
         """Clear search box text"""
