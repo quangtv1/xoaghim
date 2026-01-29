@@ -246,6 +246,17 @@ class SettingsPanel(QWidget):
             self._pending_save = True
             self._auto_save_timer.start(auto_save_interval * 60 * 1000)  # N minutes in ms
 
+    def force_save_pending(self):
+        """Force save any pending zone config changes.
+
+        Call this before app close or folder change to ensure changes are persisted.
+        """
+        if self._pending_save:
+            self._save_zone_config()
+        if self._pending_per_file_save:
+            self._pending_per_file_save = False
+            self.save_per_file_custom_zones()
+
     def _schedule_save_per_file_zones(self):
         """Schedule saving per-file zones based on auto-save interval.
 

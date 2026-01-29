@@ -1544,6 +1544,9 @@ class MainWindow(QMainWindow):
         self._batch_base_dir = base_dir
         self._batch_files = pdf_files
 
+        # Force save pending zone config before switching folders
+        self.settings_panel.force_save_pending()
+
         # Set current source for portable config detection (.xoaghim.json)
         from core.config_manager import get_config_manager
         config_manager = get_config_manager()
@@ -1639,6 +1642,9 @@ class MainWindow(QMainWindow):
         self._batch_mode = True
         self._batch_base_dir = folder_path
         self._batch_files = pdf_files
+
+        # Force save pending zone config before switching folders
+        self.settings_panel.force_save_pending()
 
         # Set current source for portable config detection (.xoaghim.json)
         from core.config_manager import get_config_manager
@@ -1968,6 +1974,9 @@ class MainWindow(QMainWindow):
                 output_dir = file_folder
                 self.settings_panel.set_output_path(output_dir)
                 dest_path = source_path.parent / f"{source_path.stem}_clean{source_path.suffix}"
+
+                # Force save pending zone config before switching files
+                self.settings_panel.force_save_pending()
 
                 # Set current source for portable config detection (.xoaghim.json)
                 from core.config_manager import get_config_manager
@@ -3795,6 +3804,9 @@ Thời gian: {time_str}"""
             # Then force persist ALL per-file zones to disk
             self.preview._persist_zones_to_disk()
             self.settings_panel._persist_custom_zones_to_disk()
+
+        # Force save any pending zone config changes (global custom zones)
+        self.settings_panel.force_save_pending()
 
         # Force save any pending changes (critical event - app closing)
         from core.config_manager import get_config_manager
