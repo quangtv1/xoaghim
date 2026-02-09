@@ -67,10 +67,12 @@ class PaperIcon(QWidget):
     def _get_paper_rect(self) -> QRectF:
         """Lấy rect của trang giấy chính"""
         w, h = self.width(), self.height()
-        margin = 10
-        paper_w = w - margin * 2 - 6  # 6 for stacked effect
-        paper_h = h - margin * 2 - 6
-        return QRectF(margin + 6, margin, paper_w, paper_h)
+        margin_x = 10
+        margin_top = 2  # Reduced top margin to align with dropdown
+        margin_bottom = 10
+        paper_w = w - margin_x * 2 - 6  # 6 for stacked effect
+        paper_h = h - margin_top - margin_bottom - 6
+        return QRectF(margin_x + 6, margin_top, paper_w, paper_h)
 
     def _get_zone_rect(self, zone_id: str) -> QRectF:
         """Lấy rect của một zone"""

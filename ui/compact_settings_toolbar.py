@@ -158,7 +158,7 @@ class CompactSettingsToolbar(QWidget):
 
     def _add_ai_detect_button(self, layout: QHBoxLayout):
         """Add AI detect protect zones button"""
-        self.ai_detect_btn = CompactIconButton('ai_detect', 'Nhận diện vùng bảo vệ')
+        self.ai_detect_btn = CompactIconButton('ai_detect', 'Nhận diện layout')
         self.ai_detect_btn.setCheckable(True)
         self.ai_detect_btn.clicked.connect(self._on_ai_detect_clicked)
         layout.addWidget(self.ai_detect_btn)

@@ -43,12 +43,24 @@ class TextProtectionDialog(QDialog):
         self._load_options()
 
     def _setup_ui(self):
-        self.setWindowTitle("Cài đặt Nhận diện vùng bảo vệ")
+        self.setWindowTitle("Cài đặt Nhận diện layout")
         self.setMinimumWidth(400)
         self.setModal(True)
 
-        # Global stylesheet for combobox hover effect (match bottom_bar style)
+        # Global stylesheet - white background + combobox hover effect
         self.setStyleSheet("""
+            QDialog {
+                background-color: #FFFFFF;
+            }
+            QGroupBox {
+                background-color: #FFFFFF;
+            }
+            QLabel {
+                background-color: #FFFFFF;
+            }
+            QCheckBox {
+                background-color: #FFFFFF;
+            }
             QComboBox {
                 background-color: white;
                 border: 1px solid #D1D5DB;
@@ -80,7 +92,7 @@ class TextProtectionDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
 
         # === Header ===
-        header = QLabel("Nhận diện vùng bảo vệ (tự động)")
+        header = QLabel("Nhận diện layout")
         header.setStyleSheet("""
             font-size: 16px;
             font-weight: bold;
