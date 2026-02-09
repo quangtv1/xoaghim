@@ -1453,7 +1453,7 @@ class SettingsPanel(QWidget):
         if base_id in self._zone_selection_history:
             self._zone_selection_history.remove(base_id)
 
-        if base_id.startswith('custom') or base_id.startswith('protect'):
+        if base_id.startswith('custom') or base_id.startswith('protect') or base_id.startswith('override'):
             # Custom/Protect zone - remove from custom_zones dict
             zone = self._custom_zones.get(base_id)
             zone_filter = zone.page_filter if zone else 'all'
