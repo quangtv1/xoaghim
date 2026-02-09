@@ -593,9 +593,19 @@ class BatchFileListWidget(QWidget):
     def get_output_dir(self) -> str:
         return self._output_dir
 
-    def update_output_settings(self, output_dir: str, filename_pattern: str):
+    def update_output_settings(self, output_dir: str, filename_pattern: str,
+                               overwrite: bool = False):
         """Cập nhật output settings và regenerate danh sách file đích"""
         if not self._files:
+            return
+
+        self._overwrite = overwrite
+
+        if overwrite:
+            # Overwrite mode: output = input files
+            self._output_files = list(self._files)
+            self.dich_panel.set_title(f"Đích: (ghi đè file gốc)")
+            self.dich_panel.set_files(self._output_files, self._base_dir)
             return
 
         # Cập nhật settings với validation

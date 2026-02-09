@@ -65,6 +65,7 @@ class SettingsPanel(QWidget):
     process_clicked = pyqtSignal()
     page_filter_changed = pyqtSignal(str)  # 'all', 'odd', 'even'
     output_settings_changed = pyqtSignal(str, str)  # output_dir, filename_pattern
+    overwrite_changed = pyqtSignal(bool)  # overwrite mode on/off
     text_protection_changed = pyqtSignal(object)  # TextProtectionOptions
     # Draw mode signal: None = off, 'remove' = draw removal zone, 'protect' = draw protection zone
     draw_mode_changed = pyqtSignal(object)  # str or None
@@ -192,6 +193,10 @@ class SettingsPanel(QWidget):
         # Restore preload cache setting
         batch_render = config.get('batch_render', True)  # Default: enabled
         self.batch_render_cb.setChecked(batch_render)
+
+        # Restore overwrite setting
+        overwrite = config.get('overwrite', False)
+        self.overwrite_cb.setChecked(overwrite)
 
         # Restore auto-save interval from app config (not portable config)
         auto_save_interval = get_config_manager().get_auto_save_interval()
@@ -338,6 +343,7 @@ class SettingsPanel(QWidget):
             'filter_mode': self._get_current_filter(),
             'text_protection': self.text_protection_cb.isChecked(),
             'batch_render': self.batch_render_cb.isChecked(),
+            'overwrite': self.overwrite_cb.isChecked(),
         }
 
         get_config_manager().save_zone_config(config)
@@ -913,9 +919,28 @@ class SettingsPanel(QWidget):
 
         output_layout.addLayout(file_row)
 
+        # Row 4: Ghi đè checkbox
+        overwrite_row = QHBoxLayout()
+        overwrite_row.setSpacing(6)
+        lbl_gd = QLabel("Ghi đè:")
+        lbl_gd.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
+        lbl_gd.setFixedWidth(55)
+        overwrite_row.addWidget(lbl_gd)
+        self.overwrite_cb = QCheckBox("(thay thế file gốc)")
+        self.overwrite_cb.setChecked(False)
+        self.overwrite_cb.setToolTip("Ghi đè trực tiếp lên file gốc thay vì tạo file mới")
+        self.overwrite_cb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
+        overwrite_row.addWidget(self.overwrite_cb)
+        overwrite_row.addStretch()
+        output_layout.addLayout(overwrite_row)
+
+        # Store references for disable/enable when overwrite toggled
+        self._output_widgets = [lbl_tm, self.output_path, self.browse_btn, lbl_tf, self.filename_pattern]
+
         # Connect output settings changes
         self.output_path.textChanged.connect(self._on_output_settings_changed)
         self.filename_pattern.textChanged.connect(self._on_output_settings_changed)
+        self.overwrite_cb.stateChanged.connect(self._on_overwrite_changed)
 
         output_container.addLayout(output_layout)
         output_container.addStretch()
@@ -1806,6 +1831,24 @@ class SettingsPanel(QWidget):
         filename_pattern = self.filename_pattern.text()
         self.output_settings_changed.emit(output_dir, filename_pattern)
 
+    def _on_overwrite_changed(self):
+        """Handle overwrite checkbox change - disable/enable output path widgets with visual dimming"""
+        overwrite = self.overwrite_cb.isChecked()
+        for w in self._output_widgets:
+            w.setEnabled(not overwrite)
+            w.setGraphicsEffect(
+                self._create_opacity_effect(0.35) if overwrite else None
+            )
+        self.overwrite_changed.emit(overwrite)
+        self._schedule_save_zone_config()
+
+    def _create_opacity_effect(self, opacity: float):
+        """Create a QGraphicsOpacityEffect for visual dimming"""
+        from PyQt5.QtWidgets import QGraphicsOpacityEffect
+        effect = QGraphicsOpacityEffect()
+        effect.setOpacity(opacity)
+        return effect
+
     def _on_text_protection_checkbox_changed(self):
         """Handle text protection checkbox change"""
         enabled = self.text_protection_cb.isChecked()
@@ -1906,6 +1949,7 @@ class SettingsPanel(QWidget):
             'filename_pattern': self.filename_pattern.text(),
             'apply_pages': apply_pages,
             'text_protection': self.get_text_protection_options(),
+            'overwrite': self.overwrite_cb.isChecked(),
         }
     
     def _on_apply_filter_changed(self, button):

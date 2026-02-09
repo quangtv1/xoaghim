@@ -116,7 +116,7 @@ class ProcessThread(QThread):
     finished = pyqtSignal(bool, str)
 
     def __init__(self, input_path: str, output_path: str, zones: List[Zone], settings: dict,
-                 zone_getter=None):
+                 zone_getter=None, overwrite_mode: bool = False):
         """Initialize ProcessThread.
 
         Args:
@@ -125,6 +125,7 @@ class ProcessThread(QThread):
             zones: Default zones (used when zone_getter is None)
             settings: Processing settings
             zone_getter: Optional callable(page_idx) -> List[Zone] for per-page zones
+            overwrite_mode: If True, write to temp file then replace original
         """
         super().__init__()
         self.input_path = input_path
@@ -132,6 +133,7 @@ class ProcessThread(QThread):
         self.zones = zones
         self.settings = settings
         self.zone_getter = zone_getter  # For per-page zone support
+        self.overwrite_mode = overwrite_mode
         self._cancelled = False
         self._total_pages = 0
 
@@ -189,9 +191,19 @@ class ProcessThread(QThread):
                 if not self._cancelled:
                     self.progress.emit(current, total)
 
+            # Use temp file for overwrite mode (atomic write)
+            if self.overwrite_mode:
+                import tempfile as _tempfile
+                temp_dir = os.path.dirname(self.input_path)
+                temp_fd, temp_path = _tempfile.mkstemp(suffix='.pdf', dir=temp_dir)
+                os.close(temp_fd)
+                actual_output = temp_path
+            else:
+                actual_output = self.output_path
+
             success = PDFExporter.export(
                 self.input_path,
-                self.output_path,
+                actual_output,
                 process_func,
                 dpi=export_dpi,
                 jpeg_quality=self.settings.get('jpeg_quality', 90),
@@ -205,10 +217,19 @@ class ProcessThread(QThread):
             print(f">> Thời gian: {h:02d}:{m:02d}:{s:02d}")
 
             if self._cancelled:
+                # Clean up temp file if cancelled
+                if self.overwrite_mode and os.path.exists(temp_path):
+                    os.unlink(temp_path)
                 self.finished.emit(False, "Đã hủy")
             elif success:
+                if self.overwrite_mode:
+                    # Replace original with temp file (atomic on same filesystem)
+                    import shutil
+                    shutil.move(temp_path, self.input_path)
                 self.finished.emit(True, self.output_path)
             else:
+                if self.overwrite_mode and os.path.exists(temp_path):
+                    os.unlink(temp_path)
                 self.finished.emit(False, "Lỗi khi xử lý")
 
         except Exception as e:
@@ -238,6 +259,7 @@ class BatchProcessThread(QThread):
         self.settings = settings
         self.page_counts = page_counts or {}  # {file_path: page_count}
         self.per_file_zones = per_file_zones or {}  # {file_path: {page_idx: {zone_id: tuple}}}
+        self.overwrite_mode = settings.get('overwrite', False)
         self._cancelled = False
         self._pages_processed = 0
         self._total_pages = sum(self.page_counts.get(f, 0) for f in files)
@@ -429,6 +451,8 @@ class BatchProcessThread(QThread):
 
     def _get_output_path(self, input_path: str) -> str:
         """Generate output path for input file - matches batch_preview logic"""
+        if self.overwrite_mode:
+            return input_path  # Overwrite: output = input
         rel_path = os.path.relpath(input_path, self.base_dir)
         name, _ = os.path.splitext(rel_path)
         pattern = self.settings.get('filename_pattern', '{gốc}_clean.pdf')
@@ -511,6 +535,7 @@ class MainWindow(QMainWindow):
         self.settings_panel.settings_changed.connect(self._on_settings_changed)
         self.settings_panel.page_filter_changed.connect(self._on_page_filter_changed)
         self.settings_panel.output_settings_changed.connect(self._on_output_settings_changed)
+        self.settings_panel.overwrite_changed.connect(self._on_overwrite_changed)
         self.settings_panel.text_protection_changed.connect(self._on_text_protection_changed)
         self.settings_panel.draw_mode_changed.connect(self._on_draw_mode_changed)
         self.settings_panel.zones_reset.connect(self._on_zones_reset)
@@ -2898,6 +2923,10 @@ class MainWindow(QMainWindow):
             self._batch_output_dir = output_dir if output_dir else self._batch_base_dir
             # Output settings stored for use during processing (sidebar shows source files only)
 
+    def _on_overwrite_changed(self, overwrite: bool):
+        """Handle overwrite checkbox change"""
+        pass  # State tracked via settings_panel.get_settings()['overwrite']
+
     def _on_page_filter_changed(self, filter_mode: str):
         """Handle page filter change from settings"""
         self.preview.set_page_filter(filter_mode)
@@ -3061,31 +3090,38 @@ class MainWindow(QMainWindow):
             return
 
         settings = self.settings_panel.get_settings()
+        overwrite_mode = settings.get('overwrite', False)
 
-        output_dir = settings.get('output_path', '')
-        if not output_dir:
-            QMessageBox.warning(self, "Thiếu thông tin", "Vui lòng chọn thư mục đầu ra!")
-            return
-
-        input_name = Path(self._pdf_handler.pdf_path).stem
-        pattern = settings.get('filename_pattern', '{gốc}_clean.pdf')
-        output_name = pattern.replace('{gốc}', input_name)
-        output_path = os.path.join(output_dir, output_name)
-
-        # Check if destination is same as source (prevent overwriting original)
-        source_path = os.path.normpath(os.path.abspath(self._pdf_handler.pdf_path))
-        dest_path = os.path.normpath(os.path.abspath(output_path))
-        if source_path == dest_path:
-            QMessageBox.warning(
-                self, "Không thể ghi đè file gốc",
-                "File đích trùng với file gốc.\n\n"
-                "Vui lòng chọn thư mục đầu ra khác hoặc đổi tên file đầu ra."
-            )
-            return
-
-        if os.path.exists(output_path):
-            if not self._show_overwrite_dialog(output_path):
+        if overwrite_mode:
+            # Overwrite mode: output = input (via temp file for safety)
+            output_path = self._pdf_handler.pdf_path
+            if not self._show_overwrite_confirm_dialog(1):
                 return
+        else:
+            output_dir = settings.get('output_path', '')
+            if not output_dir:
+                QMessageBox.warning(self, "Thiếu thông tin", "Vui lòng chọn thư mục đầu ra!")
+                return
+
+            input_name = Path(self._pdf_handler.pdf_path).stem
+            pattern = settings.get('filename_pattern', '{gốc}_clean.pdf')
+            output_name = pattern.replace('{gốc}', input_name)
+            output_path = os.path.join(output_dir, output_name)
+
+            # Check if destination is same as source (prevent overwriting original)
+            source_path = os.path.normpath(os.path.abspath(self._pdf_handler.pdf_path))
+            dest_path = os.path.normpath(os.path.abspath(output_path))
+            if source_path == dest_path:
+                QMessageBox.warning(
+                    self, "Không thể ghi đè file gốc",
+                    "File đích trùng với file gốc.\n\n"
+                    "Vui lòng chọn thư mục đầu ra khác hoặc đổi tên file đầu ra."
+                )
+                return
+
+            if os.path.exists(output_path):
+                if not self._show_overwrite_dialog(output_path):
+                    return
 
         # Get zones from preview (with user-modified coordinates)
         zones = self.preview.get_zones_for_processing()
@@ -3112,51 +3148,58 @@ class MainWindow(QMainWindow):
         if not checked_files:
             QMessageBox.warning(self, "Thiếu thông tin", "Vui lòng chọn ít nhất một file để xử lý!")
             return
-        
+
         settings = self.settings_panel.get_settings()
-        
-        output_dir = settings.get('output_path', '')
-        if not output_dir:
+        overwrite_mode = settings.get('overwrite', False)
+
+        if overwrite_mode:
+            # Overwrite mode: output = input for each file
             output_dir = self._batch_base_dir
-        
-        # Check for existing files and same-as-source files
-        existing_files = []
-        same_as_source = []
-        pattern = settings.get('filename_pattern', '{gốc}_clean.pdf')
-        for f in checked_files:
-            rel_path = os.path.relpath(f, self._batch_base_dir)
-            name, _ = os.path.splitext(rel_path)
-            output_name = pattern.replace('{gốc}', name)
-            output_path = os.path.join(output_dir, output_name)
-            # Check if destination == source
-            source_abs = os.path.normpath(os.path.abspath(f))
-            dest_abs = os.path.normpath(os.path.abspath(output_path))
-            if source_abs == dest_abs:
-                same_as_source.append(os.path.basename(f))
-            elif os.path.exists(output_path):
-                existing_files.append(output_path)
+            if not self._show_overwrite_confirm_dialog(len(checked_files)):
+                return
+        else:
+            output_dir = settings.get('output_path', '')
+            if not output_dir:
+                output_dir = self._batch_base_dir
 
-        # Prevent overwriting source files
-        if same_as_source:
-            file_list = "\n".join(same_as_source[:5])
-            if len(same_as_source) > 5:
-                file_list += f"\n... và {len(same_as_source) - 5} file khác"
-            QMessageBox.warning(
-                self, "Không thể ghi đè file gốc",
-                f"Có {len(same_as_source)} file đích trùng với file gốc:\n\n"
-                f"{file_list}\n\n"
-                "Vui lòng chọn thư mục đầu ra khác hoặc đổi tên file đầu ra."
-            )
-            return
+            # Check for existing files and same-as-source files
+            existing_files = []
+            same_as_source = []
+            pattern = settings.get('filename_pattern', '{gốc}_clean.pdf')
+            for f in checked_files:
+                rel_path = os.path.relpath(f, self._batch_base_dir)
+                name, _ = os.path.splitext(rel_path)
+                output_name = pattern.replace('{gốc}', name)
+                output_path = os.path.join(output_dir, output_name)
+                # Check if destination == source
+                source_abs = os.path.normpath(os.path.abspath(f))
+                dest_abs = os.path.normpath(os.path.abspath(output_path))
+                if source_abs == dest_abs:
+                    same_as_source.append(os.path.basename(f))
+                elif os.path.exists(output_path):
+                    existing_files.append(output_path)
 
-        if existing_files:
-            if not self._show_batch_overwrite_dialog(len(existing_files)):
+            # Prevent overwriting source files
+            if same_as_source:
+                file_list = "\n".join(same_as_source[:5])
+                if len(same_as_source) > 5:
+                    file_list += f"\n... và {len(same_as_source) - 5} file khác"
+                QMessageBox.warning(
+                    self, "Không thể ghi đè file gốc",
+                    f"Có {len(same_as_source)} file đích trùng với file gốc:\n\n"
+                    f"{file_list}\n\n"
+                    "Vui lòng chọn thư mục đầu ra khác hoặc đổi tên file đầu ra."
+                )
                 return
 
-        # Show confirmation dialog with file counts
-        checked_count, total_count = self.batch_sidebar.get_file_count()
-        if not self._show_batch_confirm_dialog(checked_count, total_count):
-            return
+            if existing_files:
+                if not self._show_batch_overwrite_dialog(len(existing_files)):
+                    return
+
+            # Show confirmation dialog with file counts
+            checked_count, total_count = self.batch_sidebar.get_file_count()
+            if not self._show_batch_confirm_dialog(checked_count, total_count):
+                return
 
         # Save current file's zones to per_file_zones before batch processing
         # This ensures the current file's Zone Riêng is included in per_file_zones
@@ -3345,10 +3388,15 @@ class MainWindow(QMainWindow):
         self._single_timer.start(1000)
 
         # Start processing (with per-page zone support)
-        self._process_thread = ProcessThread(input_path, output_path, zones, settings, zone_getter)
+        overwrite_mode = settings.get('overwrite', False)
+        self._process_thread = ProcessThread(
+            input_path, output_path, zones, settings, zone_getter,
+            overwrite_mode=overwrite_mode
+        )
         self._process_thread.progress.connect(self._on_single_progress)
         self._process_thread.finished.connect(self._on_single_finished)
 
+        self._single_overwrite_mode = overwrite_mode
         self._single_output_path = output_path
         self._process_thread.start()
         self._single_dialog.exec_()
@@ -3384,14 +3432,24 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_single_dialog'):
             self._single_dialog.close()
 
+        overwrite_mode = getattr(self, '_single_overwrite_mode', False)
+
         if success:
             self._result_path = message
-            input_size = os.path.getsize(self._pdf_handler.pdf_path) / (1024 * 1024)
             output_size = os.path.getsize(message) / (1024 * 1024)
-            self.statusBar().showMessage(
-                f"✅ Hoàn thành! {input_size:.1f}MB → {output_size:.1f}MB"
-            )
-            self._show_completion_dialog(message, input_size, output_size, elapsed)
+
+            if overwrite_mode:
+                # Overwrite mode: reload the file in preview (zones preserved)
+                self.statusBar().showMessage(
+                    f"✅ Ghi đè hoàn thành! {output_size:.1f}MB ({elapsed}s)"
+                )
+                self._reload_current_file()
+            else:
+                input_size = os.path.getsize(self._pdf_handler.pdf_path) / (1024 * 1024)
+                self.statusBar().showMessage(
+                    f"✅ Hoàn thành! {input_size:.1f}MB → {output_size:.1f}MB"
+                )
+                self._show_completion_dialog(message, input_size, output_size, elapsed)
         else:
             self.statusBar().showMessage(f"❌ {message}")
             if message != "Đã hủy":
@@ -3518,7 +3576,71 @@ class MainWindow(QMainWindow):
         layout.addLayout(btn_layout)
         
         return dialog.exec_() == QDialog.Accepted
-    
+
+    def _show_overwrite_confirm_dialog(self, file_count: int) -> bool:
+        """Show confirmation dialog for overwrite mode with red warning"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("⚠ Xác nhận ghi đè")
+        dialog.setMinimumSize(450, 180)
+        dialog.setStyleSheet("""
+            QDialog { background-color: white; }
+            QLabel { font-size: 13px; font-weight: normal; }
+            QPushButton {
+                padding: 8px 16px; border-radius: 4px; font-size: 13px;
+                min-width: 80px; background-color: #E5E7EB;
+                color: #374151; border: 1px solid #D1D5DB;
+            }
+            QPushButton:hover { background-color: #D1D5DB; }
+        """)
+
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
+
+        if file_count == 1:
+            msg = "File gốc sẽ bị ghi đè và không thể khôi phục!\n\nBạn có chắc chắn?"
+        else:
+            msg = f"{file_count} file gốc sẽ bị ghi đè và không thể khôi phục!\n\nBạn có chắc chắn?"
+
+        msg_label = QLabel(msg)
+        msg_label.setWordWrap(True)
+        layout.addWidget(msg_label)
+
+        layout.addStretch()
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(12)
+        btn_layout.addStretch()
+
+        no_btn = QPushButton("Không")
+        no_btn.clicked.connect(dialog.reject)
+        btn_layout.addWidget(no_btn)
+
+        yes_btn = QPushButton("Ghi đè")
+        yes_btn.setStyleSheet("""
+            QPushButton {
+                padding: 8px 16px; border-radius: 4px; font-size: 13px;
+                min-width: 80px; background-color: #EF4444; color: white; border: none;
+            }
+            QPushButton:hover { background-color: #DC2626; }
+        """)
+        yes_btn.clicked.connect(dialog.accept)
+        btn_layout.addWidget(yes_btn)
+
+        layout.addLayout(btn_layout)
+
+        return dialog.exec_() == QDialog.Accepted
+
+    def _reload_current_file(self):
+        """Reload current file in preview after overwrite (preserves zones)"""
+        if not self._pdf_handler:
+            return
+        file_path = self._pdf_handler.pdf_path
+        if not file_path or not os.path.exists(file_path):
+            return
+        # Re-load the PDF to refresh preview with updated content
+        self._load_pdf(file_path)
+
     def _show_batch_overwrite_dialog(self, count: int) -> bool:
         """Show batch overwrite confirmation dialog"""
         dialog = QDialog(self)
@@ -3751,8 +3873,17 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_batch_dialog'):
             self._batch_dialog.close()
 
-        # Show completion dialog
-        self._show_batch_completion_dialog(stats, elapsed)
+        overwrite_mode = self.settings_panel.get_settings().get('overwrite', False)
+
+        if overwrite_mode and success:
+            # Overwrite mode: reload current file to show updated content
+            self.statusBar().showMessage(
+                f"✅ Ghi đè {stats['success']}/{stats['total']} files ({elapsed}s)"
+            )
+            self._reload_current_file()
+        else:
+            # Show completion dialog
+            self._show_batch_completion_dialog(stats, elapsed)
 
         self._batch_process_thread = None
 

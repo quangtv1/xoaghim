@@ -289,10 +289,25 @@ def process_single_pdf(task: ProcessTask, progress_queue=None) -> ProcessResult:
         if output_dir and not os.path.exists(output_dir):
             os.makedirs(output_dir, exist_ok=True)
 
+        # Overwrite mode: write to temp file first, then replace original
+        overwrite_mode = (os.path.normpath(task.input_path) == os.path.normpath(task.output_path))
+        if overwrite_mode:
+            import tempfile as _tempfile
+            temp_fd, temp_path = _tempfile.mkstemp(suffix='.pdf', dir=output_dir)
+            os.close(temp_fd)
+            save_path = temp_path
+        else:
+            save_path = task.output_path
+
         # Save
-        out_doc.save(task.output_path, garbage=4, deflate=True)
+        out_doc.save(save_path, garbage=4, deflate=True)
         out_doc.close()
         doc.close()
+
+        # Replace original if overwrite mode
+        if overwrite_mode:
+            import shutil
+            shutil.move(temp_path, task.output_path)
 
         if os.path.exists(task.output_path):
             output_size = os.path.getsize(task.output_path)
