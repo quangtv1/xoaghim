@@ -66,6 +66,7 @@ class SettingsPanel(QWidget):
     page_filter_changed = pyqtSignal(str)  # 'all', 'odd', 'even'
     output_settings_changed = pyqtSignal(str, str)  # output_dir, filename_pattern
     overwrite_changed = pyqtSignal(bool)  # overwrite mode on/off
+    white_background_changed = pyqtSignal(bool)  # white background fill on/off
     text_protection_changed = pyqtSignal(object)  # TextProtectionOptions
     # Draw mode signal: None = off, 'remove' = draw removal zone, 'protect' = draw protection zone
     draw_mode_changed = pyqtSignal(object)  # str or None
@@ -197,6 +198,10 @@ class SettingsPanel(QWidget):
         # Restore overwrite setting
         overwrite = config.get('overwrite', False)
         self.overwrite_cb.setChecked(overwrite)
+
+        # Restore white background setting
+        white_bg = config.get('white_background', False)
+        self.white_bg_cb.setChecked(white_bg)
 
         # Restore auto-save interval from app config (not portable config)
         auto_save_interval = get_config_manager().get_auto_save_interval()
@@ -344,6 +349,7 @@ class SettingsPanel(QWidget):
             'text_protection': self.text_protection_cb.isChecked(),
             'batch_render': self.batch_render_cb.isChecked(),
             'overwrite': self.overwrite_cb.isChecked(),
+            'white_background': self.white_bg_cb.isChecked(),
         }
 
         get_config_manager().save_zone_config(config)
@@ -931,6 +937,11 @@ class SettingsPanel(QWidget):
         self.overwrite_cb.setToolTip("Ghi đè trực tiếp lên file gốc thay vì tạo file mới")
         self.overwrite_cb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
         overwrite_row.addWidget(self.overwrite_cb)
+        self.white_bg_cb = QCheckBox("Nền trắng")
+        self.white_bg_cb.setChecked(False)
+        self.white_bg_cb.setToolTip("Thay thế vùng xóa bằng màu trắng thay vì màu nền trung bình")
+        self.white_bg_cb.setStyleSheet("font-size: 12px; background-color: #FFFFFF;")
+        overwrite_row.addWidget(self.white_bg_cb)
         overwrite_row.addStretch()
         output_layout.addLayout(overwrite_row)
 
@@ -941,6 +952,7 @@ class SettingsPanel(QWidget):
         self.output_path.textChanged.connect(self._on_output_settings_changed)
         self.filename_pattern.textChanged.connect(self._on_output_settings_changed)
         self.overwrite_cb.stateChanged.connect(self._on_overwrite_changed)
+        self.white_bg_cb.stateChanged.connect(self._on_white_background_changed)
 
         output_container.addLayout(output_layout)
         output_container.addStretch()
@@ -1842,6 +1854,11 @@ class SettingsPanel(QWidget):
         self.overwrite_changed.emit(overwrite)
         self._schedule_save_zone_config()
 
+    def _on_white_background_changed(self):
+        """Handle white background checkbox change"""
+        self.white_background_changed.emit(self.white_bg_cb.isChecked())
+        self._schedule_save_zone_config()
+
     def _create_opacity_effect(self, opacity: float):
         """Create a QGraphicsOpacityEffect for visual dimming"""
         from PyQt5.QtWidgets import QGraphicsOpacityEffect
@@ -1950,8 +1967,9 @@ class SettingsPanel(QWidget):
             'apply_pages': apply_pages,
             'text_protection': self.get_text_protection_options(),
             'overwrite': self.overwrite_cb.isChecked(),
+            'white_background': self.white_bg_cb.isChecked(),
         }
-    
+
     def _on_apply_filter_changed(self, button):
         """Handle radio button selection for page filter"""
         filter_map = {

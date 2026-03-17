@@ -50,7 +50,7 @@ def main():
     # Set application info
     app.setApplicationName("Xóa Vết Ghim PDF")
     app.setOrganizationName("HUCE")
-    app.setApplicationVersion("1.0.0")
+    app.setApplicationVersion("1.2.0")
     
     # Set default font
     font = QFont("Segoe UI", 9)

@@ -255,6 +255,7 @@ class ContinuousGraphicsView(QGraphicsView):
         self._draw_rect_item = None
         self._page_bounds = None  # (x, y, w, h) of current page (fallback)
         self._all_page_bounds = []  # List of (x, y, w, h) for all pages
+        self._page_index_map = []  # Maps _all_page_bounds list position → real page_idx
     
     def wheelEvent(self, event):
         """Zoom với Ctrl+Scroll"""
@@ -355,6 +356,14 @@ class ContinuousGraphicsView(QGraphicsView):
         self._draw_mode = mode
         self._page_bounds = page_bounds
         self._all_page_bounds = all_page_bounds or []
+        # page_index_map: if all_page_bounds entries carry a 5th element (real_page_idx), store it.
+        # Otherwise, map is identity (index == page_idx).
+        if self._all_page_bounds and len(self._all_page_bounds[0]) >= 5:
+            self._page_index_map = [b[4] for b in self._all_page_bounds]
+            # Strip the 5th element so existing unpack code (px,py,pw,ph) still works
+            self._all_page_bounds = [b[:4] for b in self._all_page_bounds]
+        else:
+            self._page_index_map = list(range(len(self._all_page_bounds)))
         if mode:
             self.setDragMode(QGraphicsView.NoDrag)
             # Enable mouse tracking
@@ -617,30 +626,35 @@ class ContinuousGraphicsView(QGraphicsView):
             for i, bounds in enumerate(self._all_page_bounds):
                 px, py, pw, ph = bounds
                 if py <= y <= py + ph:
-                    return i
+                    # Use page_index_map to get real page_idx (handles filtered/compacted layouts)
+                    return self._page_index_map[i] if i < len(self._page_index_map) else i
             # No exact match - find the page index for fallback _page_bounds
             # This ensures consistency with _find_page_at_y
             if self._page_bounds:
                 for i, bounds in enumerate(self._all_page_bounds):
                     if bounds == self._page_bounds:
-                        return i
+                        return self._page_index_map[i] if i < len(self._page_index_map) else i
         return 0  # Default to first page
 
     def _find_page_with_index_at_y(self, y: float) -> tuple:
         """Find both page bounds and index containing the given y coordinate.
 
         Returns (page_idx, page_bounds) tuple ensuring consistency.
+        page_idx is the real 0-based page index in the PDF (not a list position).
         """
         if self._all_page_bounds:
             for i, bounds in enumerate(self._all_page_bounds):
                 px, py, pw, ph = bounds
                 if py <= y <= py + ph:
-                    return (i, bounds)
+                    # Use page_index_map to get real page_idx (handles filtered/compacted layouts)
+                    real_idx = self._page_index_map[i] if i < len(self._page_index_map) else i
+                    return (real_idx, bounds)
             # No exact match - use fallback _page_bounds and find its index
             if self._page_bounds:
                 for i, bounds in enumerate(self._all_page_bounds):
                     if bounds == self._page_bounds:
-                        return (i, self._page_bounds)
+                        real_idx = self._page_index_map[i] if i < len(self._page_index_map) else i
+                        return (real_idx, self._page_bounds)
         # Ultimate fallback
         return (0, self._page_bounds)
 
@@ -1466,6 +1480,7 @@ class ContinuousPreviewPanel(QFrame):
             page_updates: {page_idx: image} dict, image can be None to unload
         """
         need_recenter = False
+        need_reflow = False  # True when any page changes height (mixed page sizes e.g. A4 vs A0)
         for page_idx, image in page_updates.items():
             if 0 <= page_idx < len(self._pages):
                 self._pages[page_idx] = image
@@ -1473,6 +1488,7 @@ class ContinuousPreviewPanel(QFrame):
                 if page_idx < len(self._page_items):
                     old_pixmap = self._page_items[page_idx].pixmap()
                     old_w = old_pixmap.width() if old_pixmap else 0
+                    old_h = old_pixmap.height() if old_pixmap else 0
 
                     if image is not None:
                         pixmap = self._numpy_to_pixmap(image)
@@ -1484,12 +1500,16 @@ class ContinuousPreviewPanel(QFrame):
 
                     self._page_items[page_idx].setPixmap(pixmap)
 
-                    # Check if size changed - need to recenter
-                    if pixmap.width() != old_w:
+                    # Height change requires full vertical reflow to prevent page overlap
+                    if pixmap.height() != old_h:
+                        need_reflow = True
+                    elif pixmap.width() != old_w:
                         need_recenter = True
 
-        # Recenter all pages if any page changed size
-        if need_recenter:
+        # Height changed → recalculate all Y positions to prevent page overlap
+        if need_reflow:
+            self._reflow_vertical_layout()
+        elif need_recenter:
             self._recenter_all_pages()
 
         # Recreate zone overlays when new pages load in sliding window mode
@@ -1537,6 +1557,49 @@ class ContinuousPreviewPanel(QFrame):
             self._recreate_zone_overlays()
 
         # Refresh draw mode bounds
+        self._refresh_draw_mode_bounds()
+
+    def _reflow_vertical_layout(self):
+        """Recalculate Y positions for all visible pages after height changes (mixed page sizes).
+
+        Called when a placeholder is replaced by an actual page of different height,
+        e.g. A4 placeholder → A0 actual page. Without reflow, subsequent pages keep
+        their old Y positions and overlap with the now-taller page.
+        """
+        if not self._page_items:
+            return
+
+        y_offset = self.PAGE_SPACING
+        max_width = 0
+
+        for page_idx, item in enumerate(self._page_items):
+            if not item.isVisible():
+                continue
+            pixmap = item.pixmap()
+            if not pixmap:
+                continue
+            page_w = pixmap.width()
+            page_h = pixmap.height()
+            # Update Y position
+            item.setPos(item.pos().x(), y_offset)
+            if page_idx < len(self._page_positions):
+                self._page_positions[page_idx] = y_offset
+            max_width = max(max_width, page_w)
+            y_offset += page_h + self.PAGE_SPACING
+
+        # Recenter all visible pages horizontally
+        if max_width > 0:
+            for item in self._page_items:
+                if item.isVisible():
+                    pixmap = item.pixmap()
+                    if pixmap:
+                        x = (max_width - pixmap.width()) / 2
+                        item.setPos(x, item.pos().y())
+
+        self.scene.setSceneRect(0, 0, max_width if max_width > 0 else 800, y_offset)
+
+        if self.show_overlay:
+            self._recreate_zone_overlays()
         self._refresh_draw_mode_bounds()
 
     def set_thumbnail_pages(self, pages: List[np.ndarray]):
@@ -1660,6 +1723,24 @@ class ContinuousPreviewPanel(QFrame):
             return
         # Make a copy to ensure numpy array memory is properly managed
         self._pages.append(page.copy())
+
+    def set_page_at_index(self, idx: int, page: np.ndarray):
+        """Set page at a specific index in a sparse pages list.
+
+        Extends self._pages with None entries if needed so that
+        self._pages[idx] can be assigned. Does NOT rebuild the scene —
+        caller must call refresh_scene() after batching updates.
+
+        Args:
+            idx: Absolute page index (0-based).
+            page: Rendered page image (numpy array).
+        """
+        if page is None:
+            return
+        # Extend list with None placeholders if necessary
+        if len(self._pages) <= idx:
+            self._pages.extend([None] * (idx - len(self._pages) + 1))
+        self._pages[idx] = page.copy()
 
     def refresh_scene(self):
         """Rebuild scene with all pages. Call at end of background loading."""
@@ -2523,15 +2604,17 @@ class ContinuousPreviewPanel(QFrame):
     def _recreate_zone_overlays(self):
         """Tạo lại overlay zones cho tất cả trang (continuous mode)
 
-        Optimization: Only create overlays for loaded pages (non-None in _pages)
-        to improve performance with large files in sliding window mode.
+        Creates overlays for all visible pages (including placeholder pages that are
+        not yet loaded from PDF). Placeholder pages have valid pixmap dimensions so
+        zone overlays can be positioned correctly. This ensures zones drawn on
+        placeholder pages (during background loading with advanced filter active)
+        are not lost.
         """
-        # Only process pages that are actually loaded (not None placeholders)
-        # and currently visible (not hidden by advanced page filter)
-        loaded_pages = [(i, item) for i, item in enumerate(self._page_items)
-                        if i < len(self._pages) and self._pages[i] is not None
-                        and item.isVisible()]
-        self._recreate_zone_overlays_for_pages(self._page_items, loaded_pages)
+        # Process all visible pages (including placeholder pages with _pages[i] is None)
+        # so that zones drawn during background loading persist on the view.
+        visible_pages = [(i, item) for i, item in enumerate(self._page_items)
+                         if i < len(self._pages) and item.isVisible()]
+        self._recreate_zone_overlays_for_pages(self._page_items, visible_pages)
 
     def _recreate_zone_overlays_single(self):
         """Tạo lại overlay zones cho trang hiện tại (single page mode)"""
@@ -2617,6 +2700,11 @@ class ContinuousPreviewPanel(QFrame):
         if 0 <= page_idx < len(self._page_items) and page_idx < len(self._pages):
             pixmap = self._numpy_to_pixmap(image)
             self._page_items[page_idx].setPixmap(pixmap)
+            self._pages[page_idx] = image
+        elif 0 <= page_idx < len(self._pages):
+            # Scene not built yet (no _page_items), but _pages exists.
+            # Update _pages so _rebuild_scene_continuous picks up the processed
+            # image when it runs later (e.g. after background loading finishes).
             self._pages[page_idx] = image
     
     def _on_zone_changed(self, zone_id: str):
@@ -2869,28 +2957,54 @@ class ContinuousPreviewPanel(QFrame):
             self.view.set_draw_mode(None, None, None)
             return
 
-        # Need pages loaded to enable draw mode
+        # Need pages loaded to enable draw mode.
+        # Even if pages/items not ready yet, still arm view._draw_mode so that
+        # _refresh_draw_mode_bounds can re-enable drawing once pages are visible.
         if not self._pages or not self._page_items:
+            self.view.set_draw_mode(mode, None, [])
             return
 
-        # Get all page bounds for accurate page detection
+        # Get page bounds for accurate page detection.
+        # Only include VISIBLE pages so that after advanced filter compaction the
+        # hit-test coordinates match the actual on-screen positions.
+        # Each entry is a 5-tuple: (x, y, w, h, real_page_idx) so the view can
+        # map list positions back to real PDF page indices.
         all_page_bounds = []
-        for page_item in self._page_items:
+        for real_idx, page_item in enumerate(self._page_items):
+            if not page_item.isVisible():
+                continue  # Skip hidden pages (filtered out) — stale positions break hit-testing
             page_rect = page_item.boundingRect()
             page_pos = page_item.pos()
-            all_page_bounds.append((page_pos.x(), page_pos.y(), page_rect.width(), page_rect.height()))
+            all_page_bounds.append((page_pos.x(), page_pos.y(), page_rect.width(), page_rect.height(), real_idx))
 
-        # Get current page bounds as fallback
+        # Get current page bounds as fallback — prefer a visible page
         page_bounds = None
 
-        if self._view_mode == 'single' and self._page_items:
-            page_bounds = all_page_bounds[0] if all_page_bounds else None
-        elif self._view_mode == 'continuous' and self._current_page < len(all_page_bounds):
-            page_bounds = all_page_bounds[self._current_page]
+        if self._view_mode == 'single' and all_page_bounds:
+            page_bounds = all_page_bounds[0][:4]
+        elif self._view_mode == 'continuous' and all_page_bounds:
+            # Try the current page first; fall back to first visible page
+            for entry in all_page_bounds:
+                if entry[4] == self._current_page:
+                    page_bounds = entry[:4]
+                    break
+            if page_bounds is None:
+                page_bounds = all_page_bounds[0][:4]
 
-        # Only enable if we have valid page bounds
+        # Update view bounds — always call view.set_draw_mode so _draw_mode is set.
+        # This is critical: _refresh_draw_mode_bounds checks view._draw_mode to decide
+        # whether to re-enable draw mode when pages become visible (e.g. after metadata
+        # loads). If _draw_mode is never set, the refresh is a no-op and draw mode
+        # stays broken even after the filter resolves to real pages.
+        # When no visible pages (e.g. empty filter during metadata load), pass None/[]
+        # so the view sets _draw_mode=mode but has no bounds — user can't draw yet, but
+        # _refresh_draw_mode_bounds will fix it once pages are visible.
         if page_bounds and page_bounds[2] > 0 and page_bounds[3] > 0:
             self.view.set_draw_mode(mode, page_bounds, all_page_bounds)
+        else:
+            # No visible pages yet — enable draw mode on view with empty bounds.
+            # _draw_mode is set so _refresh_draw_mode_bounds can re-arm later.
+            self.view.set_draw_mode(mode, None, [])
 
     def _refresh_draw_mode_bounds(self):
         """Refresh draw mode bounds after scene rebuild.
@@ -3274,11 +3388,11 @@ class ContinuousPreviewWidget(QWidget):
             # Optimized: keep reference for _pages (read-only)
             # Only copy _processed_pages since it gets modified
             self._pages = list(pages)
-            self._processed_pages = [p.copy() for p in pages]
+            self._processed_pages = [p.copy() if p is not None else None for p in pages]
         else:
-            # Normal mode: deep copy both for safety
-            self._pages = [p.copy() for p in pages]
-            self._processed_pages = [p.copy() for p in pages]
+            # Normal mode: deep copy both for safety (handle sparse lists with None entries)
+            self._pages = [p.copy() if p is not None else None for p in pages]
+            self._processed_pages = [p.copy() if p is not None else None for p in pages]
 
         # Clear cached regions khi load pages mới
         self._cached_regions.clear()
@@ -3387,6 +3501,9 @@ class ContinuousPreviewWidget(QWidget):
         """
         # Update internal lists - only _pages (raw), NOT _processed_pages
         # _processed_pages will be updated by _schedule_process
+        # Ensure _processed_pages matches _pages length (may diverge after filter-only loading)
+        if len(self._processed_pages) != len(self._pages):
+            self._processed_pages = [None] * len(self._pages)
         for page_idx, image in page_updates.items():
             if 0 <= page_idx < len(self._pages):
                 if image is not None:
@@ -3416,18 +3533,40 @@ class ContinuousPreviewWidget(QWidget):
         """Set detection progress bar percentage (0-100)"""
         self.before_panel.set_detection_progress(percent)
 
-    def add_preview_page(self, page: np.ndarray):
-        """Add single page to both before and after panels"""
+    def add_preview_page(self, page: np.ndarray, idx: int = None):
+        """Add single page to both before and after panels.
+
+        Args:
+            page: Rendered page image (numpy array).
+            idx: Optional absolute page index for filter-aware loading.
+                 When provided, the page is stored at that specific index in the
+                 sparse _pages list (existing None slots are filled in-place).
+                 When None, falls back to legacy append behaviour.
+        """
         if page is None:
             return
         page_copy = page.copy()
-        page_idx = len(self._pages)  # Index of new page
-        # Add to our own lists for tracking loaded count and processing
-        self._pages.append(page_copy)
-        self._processed_pages.append(page_copy.copy())  # Keep in sync for processing
-        # Also add to panels - they will append to their _pages lists
-        self.before_panel.add_page(page_copy)
-        self.after_panel.add_page(page_copy.copy())
+
+        if idx is not None:
+            # Filter-aware mode: place page at its absolute index
+            page_idx = idx
+            # Extend internal lists with None if the index is beyond current length
+            if len(self._pages) <= idx:
+                self._pages.extend([None] * (idx - len(self._pages) + 1))
+            if len(self._processed_pages) <= idx:
+                self._processed_pages.extend([None] * (idx - len(self._processed_pages) + 1))
+            self._pages[idx] = page_copy
+            self._processed_pages[idx] = page_copy.copy()
+            # Store in panels at the specific index (no scene rebuild yet)
+            self.before_panel.set_page_at_index(idx, page_copy)
+            self.after_panel.set_page_at_index(idx, page_copy.copy())
+        else:
+            # Legacy append mode (no filter or initial load)
+            page_idx = len(self._pages)
+            self._pages.append(page_copy)
+            self._processed_pages.append(page_copy.copy())  # Keep in sync for processing
+            self.before_panel.add_page(page_copy)
+            self.after_panel.add_page(page_copy.copy())
 
         # If text protection enabled, detect this page immediately
         if self._text_protection_enabled and page_idx not in self._cached_regions:
@@ -4027,20 +4166,27 @@ class ContinuousPreviewWidget(QWidget):
 
         # Update after_panel incrementally instead of full rebuild
         need_recenter = False
+        need_reflow = False  # Height change → full vertical reflow needed
         for page_idx, processed_img in processed_updates.items():
             # Check if size changed
             if page_idx < len(self.after_panel._page_items):
                 old_pixmap = self.after_panel._page_items[page_idx].pixmap()
                 old_w = old_pixmap.width() if old_pixmap else 0
+                old_h = old_pixmap.height() if old_pixmap else 0
                 self.after_panel.update_page(page_idx, processed_img)
                 new_pixmap = self.after_panel._page_items[page_idx].pixmap()
-                if new_pixmap and new_pixmap.width() != old_w:
-                    need_recenter = True
+                if new_pixmap:
+                    if new_pixmap.height() != old_h:
+                        need_reflow = True
+                    elif new_pixmap.width() != old_w:
+                        need_recenter = True
             else:
                 self.after_panel.update_page(page_idx, processed_img)
 
-        # Recenter after_panel if any page changed size
-        if need_recenter:
+        # Height changed → recalculate all Y positions to prevent page overlap
+        if need_reflow:
+            self.after_panel._reflow_vertical_layout()
+        elif need_recenter:
             self.after_panel._recenter_all_pages()
 
         # Force UI refresh
@@ -4103,20 +4249,27 @@ class ContinuousPreviewWidget(QWidget):
 
         # Update after_panel incrementally instead of full rebuild
         need_recenter = False
+        need_reflow = False  # Height change → full vertical reflow needed
         for page_idx, processed_img in processed_updates.items():
             # Check if size changed
             if page_idx < len(self.after_panel._page_items):
                 old_pixmap = self.after_panel._page_items[page_idx].pixmap()
                 old_w = old_pixmap.width() if old_pixmap else 0
+                old_h = old_pixmap.height() if old_pixmap else 0
                 self.after_panel.update_page(page_idx, processed_img)
                 new_pixmap = self.after_panel._page_items[page_idx].pixmap()
-                if new_pixmap and new_pixmap.width() != old_w:
-                    need_recenter = True
+                if new_pixmap:
+                    if new_pixmap.height() != old_h:
+                        need_reflow = True
+                    elif new_pixmap.width() != old_w:
+                        need_recenter = True
             else:
                 self.after_panel.update_page(page_idx, processed_img)
 
-        # Recenter after_panel if any page changed size
-        if need_recenter:
+        # Height changed → recalculate all Y positions to prevent page overlap
+        if need_reflow:
+            self.after_panel._reflow_vertical_layout()
+        elif need_recenter:
             self.after_panel._recenter_all_pages()
 
         # Force UI refresh on Windows (Mac does this automatically)
@@ -4762,6 +4915,11 @@ class ContinuousPreviewWidget(QWidget):
 
         # Loading overlay will be shown automatically in _start_background_detection
         self._processor.set_text_protection(options)
+        self._schedule_process()
+
+    def set_white_background(self, white_bg: bool):
+        """Set white background fill mode and refresh preview"""
+        self._processor.white_background = white_bg
         self._schedule_process()
 
     def set_draw_mode(self, mode):

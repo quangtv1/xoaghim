@@ -226,6 +226,7 @@ class StapleRemover:
         self._remote_detector = None
         self._zone_optimizer = None
         self._text_protection = TextProtectionOptions()
+        self.white_background = False  # Use white fill instead of average background color
 
     @property
     def layout_detector(self):
@@ -348,15 +349,17 @@ class StapleRemover:
         return regions
     
     def get_background_color(self, image: np.ndarray) -> Tuple[int, int, int]:
-        """Lấy màu nền từ vùng giữa-phải của trang"""
+        """Lấy màu nền từ vùng giữa-phải của trang. Trả về trắng nếu white_background=True."""
+        if self.white_background:
+            return (255, 255, 255)
         h, w = image.shape[:2]
-        
+
         # Sample từ vùng giữa-phải (không có vết ghim)
         y1, y2 = h // 3, 2 * h // 3
         x1, x2 = w // 2, 3 * w // 4
-        
+
         bg_region = image[y1:y2, x1:x2]
-        
+
         if len(image.shape) == 3:
             b = int(np.median(bg_region[:, :, 0]))
             g = int(np.median(bg_region[:, :, 1]))

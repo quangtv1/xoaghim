@@ -898,6 +898,7 @@ class BatchSidebar(QFrame):
         from ui.page_metadata_loader import PageMetadataLoader
         self._metadata_loader = PageMetadataLoader(self)
         self._metadata_loader.metadata_loaded.connect(self._file_list.on_metadata_loaded)
+        self._metadata_loader.metadata_loaded.connect(self._on_metadata_loaded_update_filter)
         self._metadata_loader.batch_complete.connect(self._on_metadata_batch_complete)
 
         self._main_layout.addWidget(self._content)
@@ -1119,6 +1120,9 @@ class BatchSidebar(QFrame):
         self._base_dir = base_dir
         self._file_list.set_files(files, base_dir)
 
+        # Reset filter availability to all-enabled defaults before loading new metadata
+        self._advanced_filter.reset_availability()
+
         # Cancel any in-progress metadata load then restart for new files
         self._metadata_loader.cancel()
         self._metadata_loader.load(files)
@@ -1189,8 +1193,28 @@ class BatchSidebar(QFrame):
         self._file_list.reset_advanced_filter()
         self.advanced_filter_changed.emit()
 
+    def _on_metadata_loaded_update_filter(self, file_path: str, metadata: list):
+        """Update filter availability after each file's metadata is loaded"""
+        self._update_filter_availability()
+
+    def _update_filter_availability(self):
+        """Collect existing sizes/orientations from loaded metadata and update filter UI."""
+        existing_sizes = set()
+        has_landscape = False
+        has_portrait = False
+        for meta in self._file_list._page_metadata.values():
+            for size_cat, is_landscape in meta:
+                if size_cat != 'other':
+                    existing_sizes.add(size_cat)
+                if is_landscape:
+                    has_landscape = True
+                else:
+                    has_portrait = True
+        self._advanced_filter.update_available_options(existing_sizes, has_landscape, has_portrait)
+
     def _on_metadata_batch_complete(self):
         """Trigger final rebuild after all metadata loaded"""
+        self._update_filter_availability()
         if self._file_list._is_advanced_filter_active():
             self._file_list._rebuild_list(restart_lazy_load=False)
             self.filter_changed.emit()

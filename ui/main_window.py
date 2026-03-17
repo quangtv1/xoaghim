@@ -155,6 +155,9 @@ class ProcessThread(QThread):
             if text_protection:
                 processor.set_text_protection(text_protection)
 
+            # Apply white background setting
+            processor.white_background = self.settings.get('white_background', False)
+
             # Get DPI for zone coordinate scaling
             export_dpi = self.settings.get('dpi', 300)
             preview_dpi = self.settings.get('preview_dpi', 120)
@@ -550,6 +553,7 @@ class MainWindow(QMainWindow):
         self.settings_panel.page_filter_changed.connect(self._on_page_filter_changed)
         self.settings_panel.output_settings_changed.connect(self._on_output_settings_changed)
         self.settings_panel.overwrite_changed.connect(self._on_overwrite_changed)
+        self.settings_panel.white_background_changed.connect(self._on_white_background_changed)
         self.settings_panel.text_protection_changed.connect(self._on_text_protection_changed)
         self.settings_panel.draw_mode_changed.connect(self._on_draw_mode_changed)
         self.settings_panel.zones_reset.connect(self._on_zones_reset)
@@ -1788,6 +1792,8 @@ class MainWindow(QMainWindow):
         if self._current_file_path:
             active = self.batch_sidebar.get_active_pages(self._current_file_path)
             self.preview.set_thumbnail_page_filter(active)
+        # Restart background loading so pages revealed by the new filter get rendered
+        self._restart_bg_load_with_filter()
 
     def _on_sidebar_filter_changed(self):
         """Handle filter/sort change in sidebar - update file counter"""
@@ -2100,7 +2106,8 @@ class MainWindow(QMainWindow):
             # Get page count
             self._total_pages = min(self._pdf_handler.page_count, self.MAX_PREVIEW_PAGES)
             num_pages = self._total_pages
-            self._all_pages = []
+            # Pre-allocate sparse list so index-based assignment works later
+            self._all_pages = [None] * num_pages
             initial_pages = min(self.INITIAL_LOAD_PAGES, num_pages)
 
             # Check sliding window mode
@@ -2178,6 +2185,8 @@ class MainWindow(QMainWindow):
             self._initial_preview_count = initial_pages
             self._thumb_load_index = initial_pages
             self._bg_load_index = initial_pages
+            self._bg_load_order = []   # Will be built after initial load (filter-aware)
+            self._bg_order_index = 0
             self._thumb_updates_paused = False  # Reset flag for new load
 
             # Start loading initial preview pages (deferred to allow thumbnails to show)
@@ -2207,10 +2216,10 @@ class MainWindow(QMainWindow):
             self._setup_preview_after_initial_load()
             return
 
-        # Load one preview page
+        # Load one preview page and store at its absolute index
         preview_img = self._pdf_handler.render_page(i, dpi=self.PREVIEW_DPI)
         if preview_img is not None:
-            self._all_pages.append(preview_img)
+            self._all_pages[i] = preview_img
 
         self._initial_preview_index += 1
 
@@ -2298,8 +2307,17 @@ class MainWindow(QMainWindow):
         self._pending_file_path = None
         self._pending_dest_path = None
 
+        # Build filter-aware load order for background loading
+        if not self._sliding_window_mode:
+            active = (self.batch_sidebar.get_active_pages(self._current_file_path)
+                      if self._current_file_path else None)
+            self._bg_load_order = self._build_load_order(active)
+            self._bg_order_index = 0
+
         # Start background loading of remaining preview pages
-        if self._bg_load_index < self._total_pages:
+        if not self._sliding_window_mode and self._bg_load_order:
+            QTimer.singleShot(20, self._load_remaining_pages_parallel)
+        elif self._sliding_window_mode and self._bg_load_index < self._total_pages:
             QTimer.singleShot(20, self._load_remaining_pages_parallel)
 
         # Update UI state to enable Clean button now that PDF is loaded
@@ -2355,7 +2373,11 @@ class MainWindow(QMainWindow):
 
         # Show progress bar immediately
         self.preview.show_progress_bar()
-        initial_progress = int(self._bg_load_index * 100 / self._total_pages)
+        if self._sliding_window_mode:
+            initial_progress = int(self._bg_load_index * 100 / self._total_pages)
+        else:
+            total = len(self._bg_load_order)
+            initial_progress = int(self._bg_order_index * 100 / max(1, total))
         self.preview.set_progress(initial_progress)
 
         # Start loading chain
@@ -2375,13 +2397,16 @@ class MainWindow(QMainWindow):
                 self._finish_background_loading()
                 return
         else:
-            # Full mode: check if done
-            if self._bg_load_index >= self._total_pages:
+            # Full mode: check if done using the filter-aware load order
+            if self._bg_order_index >= len(self._bg_load_order):
                 self._finish_background_loading()
                 return
 
-        # Load one page at a time
-        i = self._bg_load_index
+        if self._sliding_window_mode:
+            i = self._bg_load_index
+        else:
+            i = self._bg_load_order[self._bg_order_index]
+
         preview_img = self._pdf_handler.render_page(i, dpi=self.PREVIEW_DPI)
 
         if preview_img is not None:
@@ -2390,43 +2415,42 @@ class MainWindow(QMainWindow):
                 if i < len(self._all_pages):
                     self._all_pages[i] = preview_img
                 else:
-                    self._all_pages.append(preview_img)
+                    self._all_pages.extend([None] * (i - len(self._all_pages) + 1))
+                    self._all_pages[i] = preview_img
                 # Update preview page
                 self.preview.update_window_pages({i: preview_img})
             else:
-                # Full mode: append and add to preview
-                self._all_pages.append(preview_img)
-                self.preview.add_preview_page(preview_img)
+                # Full mode: store at absolute index (sparse list) and add to preview
+                self._all_pages[i] = preview_img
+                self.preview.add_preview_page(preview_img, idx=i)
 
         # Update progress
-        total_to_load = min(self.WINDOW_SIZE, self._total_pages) if self._sliding_window_mode else self._total_pages
-        progress = int((i + 1) * 100 / total_to_load)
+        if self._sliding_window_mode:
+            total_to_load = min(self.WINDOW_SIZE, self._total_pages)
+            progress = int((i + 1) * 100 / total_to_load)
+        else:
+            total_to_load = len(self._bg_load_order)
+            progress = int((self._bg_order_index + 1) * 100 / max(1, total_to_load))
         self.preview.set_progress(progress)
 
         # Update status periodically
         if (i + 1) % 5 == 0:
             mode_text = "cửa sổ " if self._sliding_window_mode else ""
-            self.statusBar().showMessage(f"Đang tải {mode_text}trang {i+1}/{total_to_load}...")
+            display_total = total_to_load
+            self.statusBar().showMessage(f"Đang tải {mode_text}trang {i+1}/{display_total}...")
 
         # Partial scene refresh strategy (full mode only):
-        # - Filter active: refresh immediately when a FILTERED page loads so it
-        #   appears in the compacted view right away. Skip refresh for hidden pages
-        #   (no point rebuilding scene for a page the user won't see).
-        # - No filter: refresh every 5 pages (original behaviour).
+        # With filter-aware loading, every page in _bg_load_order is a filtered (visible) page,
+        # so we always refresh periodically. When no filter, same every-5 cadence.
         # Scroll position is preserved across rebuilds (see _rebuild_scene).
         if not self._sliding_window_mode:
-            _active = (self.batch_sidebar.get_active_pages(self._current_file_path)
-                       if self._current_file_path else None)
-            if _active is not None and len(_active) > 0:
-                # Filter active with known pages — refresh only when a visible page loads
-                if i in _active:
-                    self.preview.refresh_scene()
-            else:
-                # No filter (or filter not computed yet) — batch refresh every 5
-                if (i + 1) % 5 == 0:
-                    self.preview.refresh_scene()
+            if (self._bg_order_index + 1) % 5 == 0:
+                self.preview.refresh_scene()
 
-        self._bg_load_index += 1
+        if self._sliding_window_mode:
+            self._bg_load_index += 1
+        else:
+            self._bg_order_index += 1
 
         # Schedule next page with small delay (15ms) to yield to UI
         QTimer.singleShot(15, self._load_next_background_page)
@@ -2440,6 +2464,46 @@ class MainWindow(QMainWindow):
         if not self._stop_loading_flag and self._total_pages > 0:
             self.preview.refresh_scene()
             self.statusBar().showMessage(f"Đã tải xong {self._total_pages} trang")
+
+    def _build_load_order(self, active_filter=None) -> list:
+        """Build the ordered list of page indices that still need to be loaded.
+
+        Args:
+            active_filter: set/list of page indices that match the current filter,
+                           or None meaning load all pages.
+        Returns:
+            List of page indices (ints) that are in _all_pages as None and should
+            be rendered next, in ascending order.
+        """
+        if active_filter is not None and len(active_filter) > 0:
+            # Filter active: only schedule filtered pages that are not yet loaded
+            return [i for i in sorted(active_filter)
+                    if i < self._total_pages and self._all_pages[i] is None]
+        else:
+            # No filter: load all remaining unloaded pages
+            return [i for i in range(self._total_pages)
+                    if self._all_pages[i] is None]
+
+    def _restart_bg_load_with_filter(self):
+        """Restart background loading using the current active page filter.
+
+        Called when the advanced filter changes so that newly-revealed pages
+        (previously None) are enqueued for rendering.  Already-loaded pages are
+        skipped.  Has no effect if there is nothing left to load.
+        """
+        if not self._pdf_handler or self._sliding_window_mode:
+            return
+        active = (self.batch_sidebar.get_active_pages(self._current_file_path)
+                  if self._current_file_path else None)
+        new_order = self._build_load_order(active)
+        if not new_order:
+            return  # Nothing to load
+        self._bg_load_order = new_order
+        self._bg_order_index = 0
+        if not self._background_loading:
+            self._background_loading = True
+            self.preview.show_progress_bar()
+            QTimer.singleShot(15, self._load_next_background_page)
 
     def _on_page_load_requested(self, page_index: int):
         """Handle request to load a specific page (clicked on thumbnail)"""
@@ -2973,6 +3037,10 @@ class MainWindow(QMainWindow):
     def _on_overwrite_changed(self, overwrite: bool):
         """Handle overwrite checkbox change"""
         pass  # State tracked via settings_panel.get_settings()['overwrite']
+
+    def _on_white_background_changed(self, white_bg: bool):
+        """Apply white background setting to preview processor for real-time update"""
+        self.preview.set_white_background(white_bg)
 
     def _on_page_filter_changed(self, filter_mode: str):
         """Handle page filter change from settings"""
