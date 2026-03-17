@@ -34,6 +34,14 @@ class ComboItemDelegate(QStyledItemDelegate):
         return size
 
 
+class FlexContainer(QWidget):
+    """QWidget that reports minimumSizeHint=0 so QSplitter can freely resize it.
+    Without this, QSplitter reads children's minimumSizeHint (~525px from settings_panel icons)
+    and blocks the sidebar from expanding past window_width - 525px."""
+    def minimumSizeHint(self):
+        return QSize(0, 0)
+
+
 class MenuHoverManager(QObject):
     """Manages hover behavior for menu buttons at application level"""
     
@@ -250,7 +258,7 @@ class BatchProcessThread(QThread):
 
     def __init__(self, files: List[str], base_dir: str, output_dir: str,
                  zones: List[Zone], settings: dict, page_counts: dict = None,
-                 per_file_zones: dict = None):
+                 per_file_zones: dict = None, active_pages_map: dict = None):
         super().__init__()
         self.files = files
         self.base_dir = base_dir
@@ -259,6 +267,7 @@ class BatchProcessThread(QThread):
         self.settings = settings
         self.page_counts = page_counts or {}  # {file_path: page_count}
         self.per_file_zones = per_file_zones or {}  # {file_path: {page_idx: {zone_id: tuple}}}
+        self.active_pages_map = active_pages_map or {}  # {file_path: List[int]} or empty = all pages
         self.overwrite_mode = settings.get('overwrite', False)
         self._cancelled = False
         self._pages_processed = 0
@@ -347,13 +356,18 @@ class BatchProcessThread(QThread):
                                 file_zones.append(zone_dict)
                 # else: No Zone Riêng for this file - only Zone Chung applies
 
+                # Get active pages for this file (None = process all pages)
+                active_pages_set = self.active_pages_map.get(input_path)
+                active_pages = sorted(active_pages_set) if active_pages_set is not None else None
+
                 task = ProcessTask(
                     input_path=input_path,
                     output_path=output_path,
                     zones=file_zones,
                     settings=self.settings,
                     file_index=i,
-                    total_files=len(self.files)
+                    total_files=len(self.files),
+                    active_pages=active_pages,
                 )
                 tasks.append(task)
 
@@ -565,14 +579,11 @@ class MainWindow(QMainWindow):
         # === MAIN CONTENT AREA (Sidebar + Right Panel) ===
         # Horizontal splitter: Sidebar | Right content
         self.preview_splitter = QSplitter(Qt.Horizontal)
-        self.preview_splitter.setHandleWidth(2)  # Thin but grabbable handle
+        self.preview_splitter.setHandleWidth(1)  # 1px thin divider
         self.preview_splitter.setChildrenCollapsible(False)  # Allow resize without collapse
         self.preview_splitter.setStyleSheet("""
-            QSplitter::handle {
+            QSplitter::handle:horizontal {
                 background-color: #D1D5DB;
-            }
-            QSplitter::handle:hover {
-                background-color: #9CA3AF;
             }
         """)
 
@@ -583,6 +594,7 @@ class MainWindow(QMainWindow):
         self.batch_sidebar.close_requested.connect(self._on_close_file)
         self.batch_sidebar.collapsed_changed.connect(self._on_sidebar_collapsed_changed)
         self.batch_sidebar.filter_changed.connect(self._on_sidebar_filter_changed)
+        self.batch_sidebar.advanced_filter_changed.connect(self._on_advanced_filter_changed)
         self.batch_sidebar.setVisible(False)
         self.preview_splitter.addWidget(self.batch_sidebar)
         self.preview_splitter.setCollapsible(0, False)
@@ -594,7 +606,8 @@ class MainWindow(QMainWindow):
         self._is_first_file_in_batch: bool = True  # Track first file to fit width
 
         # Right container (Settings expanded + Preview + Bottom bar)
-        right_container = QWidget()
+        # FlexContainer overrides minimumSizeHint=0 so QSplitter can freely expand sidebar
+        right_container = FlexContainer()
         right_container.setStyleSheet("background-color: #E5E7EB;")
         right_container.setMinimumWidth(0)  # Allow shrinking for wider sidebar
         right_layout = QVBoxLayout(right_container)
@@ -642,7 +655,12 @@ class MainWindow(QMainWindow):
         self.preview_splitter.setCollapsible(1, False)  # Prevent right panel from collapsing
         self.preview_splitter.setStretchFactor(0, 0)    # Sidebar: fixed size when window resizes
         self.preview_splitter.setStretchFactor(1, 1)    # Right panel: stretch to fill
-        self.preview_splitter.setSizes([200, 800])
+        self.preview_splitter.setSizes([280, 720])
+        # Set resize cursor on handle for clear drag affordance
+        from PyQt5.QtCore import Qt as _Qt
+        handle = self.preview_splitter.handle(1)
+        if handle:
+            handle.setCursor(_Qt.SplitHCursor)
 
         layout.addWidget(self.preview_splitter, stretch=1)
         
@@ -1765,6 +1783,12 @@ class MainWindow(QMainWindow):
         """Handle checkbox selection change in sidebar"""
         self._update_ui_state()
 
+    def _on_advanced_filter_changed(self):
+        """Update thumbnail panel visibility when advanced filter applied/reset."""
+        if self._current_file_path:
+            active = self.batch_sidebar.get_active_pages(self._current_file_path)
+            self.preview.set_thumbnail_page_filter(active)
+
     def _on_sidebar_filter_changed(self):
         """Handle filter/sort change in sidebar - update file counter"""
         if not self._batch_mode:
@@ -1788,8 +1812,9 @@ class MainWindow(QMainWindow):
             # Hide search box in compact toolbar
             self.compact_toolbar.set_search_visible(False)
         else:
-            # Restore to default expanded width
-            self.preview_splitter.setSizes([200, self.preview_splitter.width() - 200])
+            # Restore to saved or default expanded width
+            restore_w = getattr(self, '_saved_sidebar_width', BatchSidebar.EXPANDED_WIDTH) or BatchSidebar.EXPANDED_WIDTH
+            self.preview_splitter.setSizes([restore_w, self.preview_splitter.width() - restore_w])
             # Show search box in compact toolbar and sync width
             self.compact_toolbar.set_search_visible(True)
             QTimer.singleShot(0, self._sync_search_width)
@@ -1831,10 +1856,8 @@ class MainWindow(QMainWindow):
         if need_resize:
             self.preview_splitter.setSizes([sidebar_width, preview_width])
 
-        # Sync search box width with sidebar
+        # Update saved sidebar width for persistence (toolbar search box is NOT resized during drag)
         if not self.batch_sidebar.is_collapsed():
-            self.compact_toolbar.set_search_width(sidebar_width)
-            # Update saved sidebar width for persistence
             self._saved_sidebar_width = sidebar_width
             # Save to config immediately
             from core.config_manager import get_config_manager
@@ -2212,6 +2235,12 @@ class MainWindow(QMainWindow):
         else:
             self.preview.set_pages(self._all_pages)
 
+        # Apply advanced page filter to thumbnails for this file
+        if self._current_file_path:
+            _active = self.batch_sidebar.get_active_pages(self._current_file_path)
+            if _active is not None:
+                self.preview.set_thumbnail_page_filter(_active)
+
         # Re-apply Zone Chung after set_pages clears _per_page_zones
         self.settings_panel._emit_zones()
 
@@ -2378,6 +2407,24 @@ class MainWindow(QMainWindow):
         if (i + 1) % 5 == 0:
             mode_text = "cửa sổ " if self._sliding_window_mode else ""
             self.statusBar().showMessage(f"Đang tải {mode_text}trang {i+1}/{total_to_load}...")
+
+        # Partial scene refresh strategy (full mode only):
+        # - Filter active: refresh immediately when a FILTERED page loads so it
+        #   appears in the compacted view right away. Skip refresh for hidden pages
+        #   (no point rebuilding scene for a page the user won't see).
+        # - No filter: refresh every 5 pages (original behaviour).
+        # Scroll position is preserved across rebuilds (see _rebuild_scene).
+        if not self._sliding_window_mode:
+            _active = (self.batch_sidebar.get_active_pages(self._current_file_path)
+                       if self._current_file_path else None)
+            if _active is not None and len(_active) > 0:
+                # Filter active with known pages — refresh only when a visible page loads
+                if i in _active:
+                    self.preview.refresh_scene()
+            else:
+                # No filter (or filter not computed yet) — batch refresh every 5
+                if (i + 1) % 5 == 0:
+                    self.preview.refresh_scene()
 
         self._bg_load_index += 1
 
@@ -3227,8 +3274,16 @@ class MainWindow(QMainWindow):
             settings['preview_dpi'] = 120  # Preview DPI
             settings['preview_file_path'] = current_file  # File these regions belong to
 
+        # Collect active pages per file from sidebar filter (None = all pages)
+        active_pages_map = {}
+        for f in checked_files:
+            pages_set = self.batch_sidebar.get_active_pages(f)
+            if pages_set is not None:
+                active_pages_map[f] = pages_set
+
         # Show batch progress dialog
-        self._show_batch_progress_dialog(checked_files, output_dir, zones, settings, per_file_zones)
+        self._show_batch_progress_dialog(checked_files, output_dir, zones, settings, per_file_zones,
+                                         active_pages_map if active_pages_map else None)
     
     def _on_cancel(self):
         if self._process_thread:
@@ -3730,7 +3785,8 @@ class MainWindow(QMainWindow):
 
     def _show_batch_progress_dialog(self, files: List[str], output_dir: str,
                                     zones: List[Zone], settings: dict,
-                                    per_file_zones: dict = None):
+                                    per_file_zones: dict = None,
+                                    active_pages_map: dict = None):
         """Show batch processing progress dialog"""
         self._batch_dialog = QDialog(self)
         self._batch_dialog.setWindowTitle("Đang xử lý...")
@@ -3815,7 +3871,7 @@ class MainWindow(QMainWindow):
         # Start batch processing
         self._batch_process_thread = BatchProcessThread(
             files, self._batch_base_dir, output_dir, zones, settings, self._batch_page_counts,
-            per_file_zones
+            per_file_zones, active_pages_map
         )
         self._batch_process_thread.progress.connect(self._on_batch_progress)
         self._batch_process_thread.file_progress.connect(self._on_batch_page_progress)
@@ -4166,11 +4222,17 @@ Thời gian: {time_str}"""
         get_config_manager().save_ui_config(ui_config)
 
     def _apply_saved_sidebar_width(self):
-        """Apply saved sidebar width to splitter"""
-        if hasattr(self, '_saved_sidebar_width') and self._saved_sidebar_width > 0:
+        """Apply saved sidebar width to splitter (deferred to ensure widget is rendered)"""
+        def _apply():
             total_width = self.preview_splitter.width()
-            remaining = total_width - self._saved_sidebar_width
-            self.preview_splitter.setSizes([self._saved_sidebar_width, remaining])
+            if total_width <= 0:
+                return  # Widget not yet rendered, skip
+            sidebar_w = max(BatchSidebar.EXPANDED_WIDTH, getattr(self, '_saved_sidebar_width', 0))
+            remaining = max(150, total_width - sidebar_w)
+            sidebar_w = total_width - remaining
+            self.preview_splitter.setSizes([sidebar_w, remaining])
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(0, _apply)  # Defer to after layout is finalized
 
     def eventFilter(self, obj, event):
         """Cancel draw mode when clicking on corner/edge icons only"""

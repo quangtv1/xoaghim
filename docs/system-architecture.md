@@ -1,7 +1,7 @@
 # XoaGhim PDF - System Architecture
 
-**Last Updated:** 2026-01-27
-**Version:** 1.1.23
+**Last Updated:** 2026-03-16
+**Version:** 1.1.24
 
 ---
 
@@ -44,7 +44,52 @@ XoaGhim follows a **layered architecture pattern** with clear separation of conc
 
 ### 1. Presentation Layer (UI)
 
-**Main Components:**
+#### Filter Layer Architecture (v1.1.24)
+
+**Sidebar Filter Integration:**
+```
+BatchSidebar (file list)
+    ↓
+    ├── File list viewport
+    │   └── File items with selection
+    └── SidebarAdvancedFilter (collapsible)
+        ├── Page size checkboxes (A0-A7)
+        ├── Orientation toggles
+        ├── Page range input (1-5, 7, 10-15)
+        └── Apply/Reset buttons
+            ↓
+            Emits: apply_requested(sizes, orientations, range_text)
+```
+
+**Filter Application Flow:**
+```
+apply_requested signal
+    ↓
+MainWindow receives filter state
+    ↓
+For each operation (draw/clean):
+    ├── Consult filter state
+    ├── PageMetadataLoader.load(files)
+    │   └── ThreadPoolExecutor loads metadata
+    ├── Filter pages matching criteria:
+    │   ├── Size in allowed set
+    │   ├── Orientation in allowed set
+    │   └── Page number in range
+    └── Apply operation only to filtered pages
+```
+
+**Metadata Loading Flow:**
+```
+PageMetadataLoader.load(file_list)
+    ├── Batch 1: 10 files (parallel ThreadPoolExecutor)
+    │   ├── detect_page_size(w, h) → "A4" | "A3" | "other"
+    │   └── is_landscape = w > h
+    ├── Emit: metadata_loaded(file_path, [(size, is_landscape), ...])
+    ├── Batch 2: next 10 files (after 5ms delay)
+    └── Emit: batch_complete() when all done
+```
+
+#### Main Components
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -56,25 +101,36 @@ XoaGhim follows a **layered architecture pattern** with clear separation of conc
 │  - Signal coordination center                │
 └────────┬──────────┬─────────────┬────────────┘
          │          │             │
-    ┌────▼─┐  ┌─────▼──┐  ┌──────▼─────┐
-    │Preview│  │Settings│  │  Batch     │
-    │(1200L)│  │Panel   │  │  Sidebar   │
-    │       │  │(500L)  │  │  (300L)    │
-    └────┬─┘  └────┬────┘  └──────┬─────┘
-         │         │              │
-         └──────┬──┘              │
-         ┌──────▼──────────────────┘
-         │
-    ┌────▼──────────────────────────┐
-    │  Settings Panel Detail/Compact │
-    │  - Detail: 3 columns          │
-    │    - Zone selector (502L)     │
-    │    - Parameters               │
-    │    - Output settings          │
-    │  - Compact: Icon toolbar      │
-    │    - CompactIconButton        │
-    │    - CompactSettingsToolbar   │
-    └───────────────────────────────┘
+    ┌────▼─┐  ┌─────▼──┐  ┌──────▼─────────┐
+    │Preview│  │Settings│  │  Batch        │
+    │(1200L)│  │Panel   │  │  Sidebar      │
+    │       │  │(500L)  │  │  (800L)       │
+    └────┬─┘  └────┬────┘  └────┬────┬─────┘
+         │         │            │    │
+         └──────┬──┘            │    │
+         ┌──────▼────────────────┘    │
+         │                           │
+    ┌────▼──────────────────────────┐│
+    │  Settings Panel Detail/Compact ││
+    │  - Detail: 3 columns          ││
+    │    - Zone selector (502L)     ││
+    │    - Parameters               ││
+    │    - Output settings          ││
+    │  - Compact: Icon toolbar      ││
+    │    - CompactIconButton        ││
+    │    - CompactSettingsToolbar   ││
+    └───────────────────────────────┘│
+                                     │
+                   ┌─────────────────┘
+                   │
+          ┌────────▼──────────────────┐
+          │  Advanced Filter Panel     │
+          │  (New - v1.1.24)          │
+          │  - Page size selector     │
+          │  - Orientation filter     │
+          │  - Page range input       │
+          │  - Apply/Reset buttons    │
+          └────────────────────────────┘
 ```
 
 **Preview System:**
@@ -88,6 +144,17 @@ XoaGhim follows a **layered architecture pattern** with clear separation of conc
 - **PaperIcon:** Visual page representation
 - **CompactIconButton:** 20+ icon types (QPainter-based)
 - **CompactSettingsToolbar:** Collapsed toolbar
+
+**Advanced Filter Panel (v1.1.24):**
+- **SidebarAdvancedFilter:** Collapsible filter at sidebar bottom
+  - Checkboxes for page sizes (A0-A7)
+  - Orientation toggles (landscape/portrait)
+  - Page range input with syntax validation
+  - Apply/Reset buttons with real-time validation feedback
+- **PageMetadataLoader:** Async metadata loader
+  - ThreadPoolExecutor for batch loading (10 files parallel)
+  - Size detection from page dimensions (A-series, ±15pt tolerance)
+  - Orientation detection from aspect ratio
 
 ### 2. Application/Orchestration Layer
 

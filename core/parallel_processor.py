@@ -70,6 +70,7 @@ class ProcessTask:
     settings: Dict
     file_index: int
     total_files: int
+    active_pages: Optional[List[int]] = None  # None = all pages; list = 0-indexed page numbers
 
 
 @dataclass
@@ -203,8 +204,25 @@ def process_single_pdf(task: ProcessTask, progress_queue=None) -> ProcessResult:
         out_doc = fitz.open()
         page_count = len(doc)
 
+        # Convert active_pages list to set once for O(1) membership checks
+        active_pages_set = set(task.active_pages) if task.active_pages is not None else None
+
         for page_num in range(page_count):
             page = doc[page_num]
+
+            # Skip non-active pages: copy verbatim, don't apply zones
+            if active_pages_set is not None and page_num not in active_pages_set:
+                out_doc.insert_pdf(doc, from_page=page_num, to_page=page_num)
+                if progress_queue:
+                    progress_queue.put({
+                        'type': 'page',
+                        'file_index': task.file_index,
+                        'page_num': page_num + 1,
+                        'total_pages': page_count,
+                        'input_path': task.input_path,
+                        'skipped': True
+                    })
+                continue
 
             # Check if any zones apply to this page
             applicable_zones = _get_applicable_zones(zones, page_num, page_count)

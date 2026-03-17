@@ -187,6 +187,7 @@ class ThumbnailPanel(QWidget):
         self._expanded_width = self.DEFAULT_WIDTH
         self._loading = False  # True during progressive loading
         self._total_pages = 0
+        self._active_filter = None  # set of visible page indices, None = show all
 
         self._setup_ui()
         self._load_state()
@@ -483,6 +484,10 @@ class ThumbnailPanel(QWidget):
         pixmap = self._numpy_to_pixmap(image)
         item.set_pixmap(pixmap)
 
+        # Apply current filter to newly added item
+        if self._active_filter is not None and index not in self._active_filter:
+            item.setVisible(False)
+
         self._thumbnail_layout.addWidget(item)
         self._items.append(item)
         self._pages.append(image)
@@ -495,6 +500,12 @@ class ThumbnailPanel(QWidget):
         # Highlight first page
         if index == 0:
             self.set_current_page(0)
+
+    def set_page_visibility(self, active_indices):
+        """Show only pages whose index is in active_indices; None = show all."""
+        self._active_filter = set(active_indices) if active_indices is not None else None
+        for item in self._items:
+            item.setVisible(self._active_filter is None or item._page_index in self._active_filter)
 
     def finish_loading(self):
         """Mark loading complete, enable full interaction"""
@@ -550,6 +561,9 @@ class ThumbnailPanel(QWidget):
             item.clicked.connect(self._on_item_clicked)
             pixmap = self._numpy_to_pixmap(img)
             item.set_pixmap(pixmap)
+            # Apply current filter to this item
+            if self._active_filter is not None and idx not in self._active_filter:
+                item.setVisible(False)
             self._thumbnail_layout.addWidget(item)
             self._items.append(item)
             self._pages.append(img)

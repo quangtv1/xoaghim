@@ -696,6 +696,7 @@ class ContinuousPreviewPanel(QFrame):
         self._view_mode = 'continuous'  # 'continuous' or 'single'
         self._current_page = 0  # Current page index (0-based) for single page mode
         self._page_filter = 'all'  # 'all', 'odd', 'even', 'none'
+        self._active_page_filter: set = None  # active page indices from advanced filter (None = show all)
         # Per-page zone storage for 'none' mode (independent zones per page)
         self._per_page_zones: Dict[int, Dict[str, tuple]] = {}  # {page_idx: {zone_id: (x,y,w,h)}}
         # Per-file zone storage for batch mode (stores _per_page_zones for each file)
@@ -1553,6 +1554,77 @@ class ContinuousPreviewPanel(QFrame):
         if self._thumbnail_panel is not None:
             self._thumbnail_panel.add_thumbnail(index, image)
 
+    def set_thumbnail_page_filter(self, active_indices):
+        """Show only thumbnails whose page index is in active_indices (None = show all).
+        Also hides/shows page items in the main QGraphicsView and reflowslayout.
+        """
+        if self._thumbnail_panel is not None:
+            self._thumbnail_panel.set_page_visibility(active_indices)
+        self.set_page_visibility_in_view(active_indices)
+
+    def set_page_visibility_in_view(self, active_indices):
+        """Hide page items not in active_indices and reflow vertical layout.
+
+        Args:
+            active_indices: set/list of page indices to show, or None to show all pages.
+        """
+        # Always store filter first so _rebuild_scene can re-apply it even if no items yet
+        self._active_page_filter = set(active_indices) if active_indices is not None else None
+
+        # Only applies to continuous mode - single mode shows one page at a time
+        if self._view_mode != 'continuous':
+            return
+
+        if not self._page_items:
+            return
+
+        y_offset = self.PAGE_SPACING
+        max_width = 0
+
+        for page_idx, item in enumerate(self._page_items):
+            is_visible = self._active_page_filter is None or page_idx in self._active_page_filter
+            item.setVisible(is_visible)
+
+            if is_visible:
+                pixmap = item.pixmap()
+                page_w = pixmap.width() if pixmap else 0
+                page_h = pixmap.height() if pixmap else 0
+
+                # Reposition page at new y offset (x stays centered, recalculated below)
+                item.setPos(item.pos().x(), y_offset)
+
+                # Update stored position so scroll-to-page works correctly
+                if page_idx < len(self._page_positions):
+                    self._page_positions[page_idx] = y_offset
+
+                max_width = max(max_width, page_w)
+                y_offset += page_h + self.PAGE_SPACING
+            else:
+                # Hidden pages: keep _page_positions entry unchanged to preserve
+                # original page numbering (page 3 stays "3"), but position is
+                # irrelevant for scrolling since the page is not visible
+                pass
+
+        # Recenter all visible pages horizontally using the new max_width
+        if max_width > 0:
+            for page_idx, item in enumerate(self._page_items):
+                if item.isVisible():
+                    pixmap = item.pixmap()
+                    page_w = pixmap.width() if pixmap else 0
+                    x = (max_width - page_w) / 2
+                    item.setPos(x, item.pos().y())
+
+        # Update scene rect to cover only visible content height
+        total_scene_height = y_offset  # y_offset already includes trailing spacing
+        self.scene.setSceneRect(0, 0, max_width if max_width > 0 else 800, total_scene_height)
+
+        # Recreate zone overlays so they follow updated page positions
+        if self.show_overlay:
+            self._recreate_zone_overlays()
+
+        # Keep draw mode bounds in sync with new page positions
+        self._refresh_draw_mode_bounds()
+
     def finish_thumbnail_loading(self):
         """Finish thumbnail loading"""
         if self._thumbnail_panel is not None:
@@ -1639,6 +1711,12 @@ class ContinuousPreviewPanel(QFrame):
 
     def _rebuild_scene(self):
         """Xây dựng lại scene với tất cả các trang hoặc 1 trang"""
+        # Save proportional scroll position so rebuilt scene lands at same visual location.
+        # Must be read BEFORE scene.clear() resets the scrollbars.
+        v_bar = self.view.verticalScrollBar()
+        v_max_before = v_bar.maximum()
+        _v_ratio = (v_bar.value() / v_max_before) if v_max_before > 0 else 0.0
+
         self.scene.clear()
         self._page_items.clear()
         self._zones.clear()
@@ -1669,6 +1747,14 @@ class ContinuousPreviewPanel(QFrame):
             self._rebuild_scene_single()
         else:
             self._rebuild_scene_continuous()
+            # Re-apply advanced filter after scene rebuild so page visibility is preserved
+            if getattr(self, '_active_page_filter', None) is not None:
+                self.set_page_visibility_in_view(self._active_page_filter)
+            # Restore proportional scroll so periodic rebuilds don't jump to top
+            v_bar_after = self.view.verticalScrollBar()
+            v_max_after = v_bar_after.maximum()
+            if v_max_after > 0 and _v_ratio > 0:
+                v_bar_after.setValue(int(_v_ratio * v_max_after))
 
     def _rebuild_scene_continuous(self):
         """Build scene with all pages (continuous scroll mode)"""
@@ -2441,8 +2527,10 @@ class ContinuousPreviewPanel(QFrame):
         to improve performance with large files in sliding window mode.
         """
         # Only process pages that are actually loaded (not None placeholders)
+        # and currently visible (not hidden by advanced page filter)
         loaded_pages = [(i, item) for i, item in enumerate(self._page_items)
-                        if i < len(self._pages) and self._pages[i] is not None]
+                        if i < len(self._pages) and self._pages[i] is not None
+                        and item.isVisible()]
         self._recreate_zone_overlays_for_pages(self._page_items, loaded_pages)
 
     def _recreate_zone_overlays_single(self):
@@ -2864,6 +2952,7 @@ class ContinuousPreviewWidget(QWidget):
         self._zones: List[Zone] = []
         self._processor = StapleRemover(protect_red=False)
         self._text_protection_enabled = False
+        self._active_pages: Optional[List[int]] = None  # None = show all pages; list = 0-indexed active pages
         self._text_protection_margin = 10  # Default margin for protected regions overlay
         self._cached_regions: Dict[int, list] = {}  # Cache protected regions per page
 
@@ -3232,6 +3321,11 @@ class ContinuousPreviewWidget(QWidget):
     def set_thumbnails(self, thumbnails: list):
         """Set all thumbnails at once from cache (optimized bulk loading)"""
         self.before_panel.set_thumbnails(thumbnails)
+
+    def set_thumbnail_page_filter(self, active_indices):
+        """Show only thumbnails/pages in active_indices (None = show all). Applies to both panels."""
+        self.before_panel.set_thumbnail_page_filter(active_indices)
+        self.after_panel.set_page_visibility_in_view(active_indices)
 
     def pause_thumbnail_updates(self):
         """Pause thumbnail updates for bulk loading"""
@@ -3909,6 +4003,12 @@ class ContinuousPreviewWidget(QWidget):
             if page is None:
                 continue
 
+            # Skip non-active pages: show original without zones applied
+            if self._active_pages is not None and i not in self._active_pages:
+                self._processed_pages[i] = page.copy()
+                processed_updates[i] = self._processed_pages[i]
+                continue
+
             page_zones = self._get_zones_for_page(i)
 
             if page_zones:
@@ -3967,19 +4067,19 @@ class ContinuousPreviewWidget(QWidget):
         # Track which pages were processed for incremental update
         processed_updates = {}
 
-        # Debug: print sliding window state
-        loaded_pages = [i for i, p in enumerate(self._pages) if p is not None]
-        print(f"[DEBUG] _process_pages_with_cached_regions: loaded_pages={loaded_pages}")
-        print(f"[DEBUG] before_panel._per_page_zones keys: {list(self.before_panel._per_page_zones.keys())}")
-
         for i, page in enumerate(self._pages):
             # Skip None pages (unloaded in sliding window mode)
             if page is None:
                 continue
 
+            # Skip non-active pages: show original without zones applied
+            if self._active_pages is not None and i not in self._active_pages:
+                self._processed_pages[i] = page.copy()
+                processed_updates[i] = self._processed_pages[i]
+                continue
+
             # Get zones for this specific page from per_page_zones
             page_zones = self._get_zones_for_page(i)
-            print(f"[DEBUG] Page {i}: zones count = {len(page_zones)}")
 
             # Always display protected regions overlay if text protection is enabled
             if self._text_protection_enabled:
@@ -4385,9 +4485,14 @@ class ContinuousPreviewWidget(QWidget):
 
         # Find which page is at this position
         page_positions = self.before_panel._page_positions
+        # When filter is active, hidden pages keep stale (pre-filter) positions that
+        # break the sequential scan. Skip them so only visible pages are considered.
+        active_filter = getattr(self.before_panel, '_active_page_filter', None)
         current_page = 0
 
         for i, pos in enumerate(page_positions):
+            if active_filter is not None and i not in active_filter:
+                continue  # Skip hidden pages — their positions are stale
             if scene_y >= pos:
                 current_page = i
             else:

@@ -23,7 +23,27 @@ class ComboItemDelegate(QStyledItemDelegate):
 
 import os
 import fitz  # PyMuPDF for page count
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Set, Tuple
+
+
+def _parse_page_ranges(text: str) -> Optional[Set[int]]:
+    """Parse "1-5, 7, 10-15" → {1,2,3,4,5,7,10,11,12,13,14,15}. Returns None if empty/all."""
+    if not text or text.strip().lower() in ('', 'all'):
+        return None
+    result: Set[int] = set()
+    try:
+        for part in [p.strip() for p in text.split(',') if p.strip()]:
+            if '-' in part:
+                a, b = part.split('-', 1)
+                lo, hi = int(a), int(b)
+                if lo > hi:
+                    lo, hi = hi, lo  # guard reverse ranges
+                result.update(range(lo, hi + 1))
+            else:
+                result.add(int(part))
+    except ValueError:
+        return None  # Invalid input → no range filter
+    return result if result else None
 
 
 class FileItemDelegate(QStyledItemDelegate):
@@ -31,9 +51,15 @@ class FileItemDelegate(QStyledItemDelegate):
 
     PAGE_COUNT_WIDTH = 40
 
-    def __init__(self, page_counts: Dict[str, int], parent=None):
+    def __init__(self, page_counts: Dict[str, int], active_pages: Dict[str, Set[int]], parent=None):
         super().__init__(parent)
         self._page_counts = page_counts
+        self._active_pages = active_pages  # shared dict reference
+        self._filter_active_fn = lambda: False
+
+    def set_filter_ref(self, fn):
+        """Store callable that returns True when advanced filter is active"""
+        self._filter_active_fn = fn
 
     def paint(self, painter: QPainter, option, index):
         # Draw default (checkbox + text)
@@ -42,8 +68,12 @@ class FileItemDelegate(QStyledItemDelegate):
         # Draw page count on the right
         file_path = index.data(Qt.UserRole)
         if file_path:
-            page_count = self._page_counts.get(file_path, -1)
-            count_text = str(page_count) if page_count >= 0 else "..."
+            total = self._page_counts.get(file_path, -1)
+            if self._filter_active_fn() and file_path in self._active_pages:
+                active_count = len(self._active_pages[file_path])
+                count_text = f"{active_count}/{total}" if total >= 0 else "..."
+            else:
+                count_text = str(total) if total >= 0 else "..."
 
             painter.save()
 
@@ -74,6 +104,7 @@ class SidebarFileList(QListWidget):
     checkbox_changed = pyqtSignal(int, bool)  # (original_index, is_checked)
     page_counts_updated = pyqtSignal()  # emitted when new page counts are loaded
     filter_changed = pyqtSignal()  # emitted when filter changes (for preload cancel)
+    metadata_filter_updated = pyqtSignal()  # emitted when metadata loaded changes active page filter
 
     # Batch size for lazy loading page counts
     LAZY_LOAD_BATCH_SIZE = 10
@@ -91,6 +122,15 @@ class SidebarFileList(QListWidget):
         self._sort_asc: bool = True
         self._skip_row_change: bool = False  # Prevent double file_selected emit
 
+        # Advanced filter state
+        self._page_metadata: Dict[str, List[Tuple[str, bool]]] = {}
+        # file_path → [(size_cat, is_landscape), ...]
+        self._active_pages: Dict[str, Set[int]] = {}
+        # file_path → {0-indexed active page indices}
+        self._applied_sizes: Set[str] = set()          # empty = no filter
+        self._applied_orientations: Set[str] = set()   # empty = no filter
+        self._applied_range: Optional[Set[int]] = None  # None = all pages
+
         # Lazy loading state
         self._lazy_load_index: int = 0  # Next index to load in current filtered list
         self._lazy_load_timer: QTimer = QTimer()
@@ -99,7 +139,8 @@ class SidebarFileList(QListWidget):
         self._filtered_files: List[str] = []  # Current filtered file list for lazy loading
 
         # Custom delegate for page count display
-        self._delegate = FileItemDelegate(self._page_counts, self)
+        self._delegate = FileItemDelegate(self._page_counts, self._active_pages, self)
+        self._delegate.set_filter_ref(self._is_advanced_filter_active)
         self.setItemDelegate(self._delegate)
 
         # Style
@@ -120,6 +161,10 @@ class SidebarFileList(QListWidget):
             }
             QListWidget::item:hover {
                 background-color: #F3F4F6;
+            }
+            QListWidget::indicator {
+                width: 14px;
+                height: 14px;
             }
         """)
 
@@ -143,6 +188,8 @@ class SidebarFileList(QListWidget):
         self._filter_text = ""
         self._filter_pages = ""
         self._page_counts.clear()
+        self._page_metadata.clear()
+        self._active_pages.clear()
 
         # Don't load page counts here - use lazy loading
         # Build filtered list (initially all files)
@@ -259,6 +306,13 @@ class SidebarFileList(QListWidget):
                 page_count = self._page_counts.get(file_path, -1)
                 if not self._matches_page_filter(page_count):
                     continue
+            # Advanced filter: file must have ≥1 active page
+            if self._is_advanced_filter_active():
+                # Optimistic: metadata not loaded yet → include file
+                if file_path in self._page_metadata:
+                    active = self._active_pages.get(file_path, set())
+                    if len(active) == 0:
+                        continue  # No active pages → hide file
             filtered.append((idx, file_path))
 
         # Sort
@@ -489,6 +543,87 @@ class SidebarFileList(QListWidget):
         visible_pos = self.get_visible_position(original_idx)
         return visible_pos >= 0 and visible_pos < self.count() - 1
 
+    # ── Advanced filter methods ──
+
+    def _is_advanced_filter_active(self) -> bool:
+        """True if any advanced filter is set"""
+        return (bool(self._applied_sizes) or bool(self._applied_orientations)
+                or (self._applied_range is not None))
+
+    def _compute_active_pages(self, file_path: str) -> Set[int]:
+        """Compute 0-indexed active pages for file based on applied filter"""
+        meta = self._page_metadata.get(file_path, [])
+        active: Set[int] = set()
+        for i, (size_cat, is_landscape) in enumerate(meta):
+            page_num = i + 1  # 1-indexed for range comparison
+            if self._applied_sizes and size_cat not in self._applied_sizes:
+                continue
+            if self._applied_orientations:
+                orient = "landscape" if is_landscape else "portrait"
+                if orient not in self._applied_orientations:
+                    continue
+            if self._applied_range is not None and page_num not in self._applied_range:
+                continue
+            active.add(i)
+        return active
+
+    def get_active_pages(self, file_path: str) -> Optional[Set[int]]:
+        """Return active page indices (0-based) for file, or None if no filter active.
+        None = all pages active (backward compatible with processor)."""
+        if not self._is_advanced_filter_active():
+            return None
+        # Metadata not yet loaded: return empty set so filter is visually applied
+        # (pages will appear once metadata arrives and on_metadata_loaded fires)
+        if file_path not in self._page_metadata:
+            return set()
+        return self._active_pages.get(file_path, set())
+
+    def apply_advanced_filter(self, sizes: set, orientations: set, range_text: str):
+        """Apply advanced filter and rebuild sidebar"""
+        self._applied_sizes = sizes
+        self._applied_orientations = orientations
+        self._applied_range = _parse_page_ranges(range_text)
+
+        # Recompute active pages for all files that have metadata
+        self._active_pages.clear()
+        for fp in self._files:
+            if fp in self._page_metadata:
+                self._active_pages[fp] = self._compute_active_pages(fp)
+
+        self._rebuild_list(restart_lazy_load=False)
+        self.selection_changed.emit(self.get_checked_files())
+        self.filter_changed.emit()
+        self.viewport().update()
+
+    def reset_advanced_filter(self):
+        """Clear advanced filter — show all files"""
+        self._applied_sizes = set()
+        self._applied_orientations = set()
+        self._applied_range = None
+        self._active_pages.clear()
+        self._rebuild_list(restart_lazy_load=False)
+        self.selection_changed.emit(self.get_checked_files())
+        self.filter_changed.emit()
+        self.viewport().update()
+
+    def on_metadata_loaded(self, file_path: str, metadata: list):
+        """Store metadata and recompute active pages for this file if filter active"""
+        self._page_metadata[file_path] = metadata
+        if self._is_advanced_filter_active():
+            new_active = self._compute_active_pages(file_path)
+            old_active = self._active_pages.get(file_path)
+            self._active_pages[file_path] = new_active
+            # If visibility changed, rebuild file list
+            was_visible = old_active is None or len(old_active) > 0
+            is_visible = len(new_active) > 0
+            if was_visible != is_visible:
+                self._rebuild_list(restart_lazy_load=False)
+                self.filter_changed.emit()
+            # Always notify that active page filter may have changed for this file
+            # so thumbnail/preview panels can update
+            self.metadata_filter_updated.emit()
+        self.viewport().update()
+
 
 class BatchSidebar(QFrame):
     """
@@ -501,7 +636,7 @@ class BatchSidebar(QFrame):
     - Toggle all checkbox
     """
 
-    EXPANDED_WIDTH = 200
+    EXPANDED_WIDTH = 280
     MIN_WIDTH = 100  # Minimum width when expanded (prevents hiding hamburger)
     COLLAPSED_WIDTH = 30  # Matches nav button size (22px) + padding
 
@@ -510,6 +645,8 @@ class BatchSidebar(QFrame):
     close_requested = pyqtSignal()
     collapsed_changed = pyqtSignal(bool)  # emitted when collapsed state changes
     filter_changed = pyqtSignal()  # emitted when filter/sort changes (to update file counter)
+    advanced_filter_changed = pyqtSignal()  # emitted when advanced page filter applied/reset
+
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -745,9 +882,23 @@ class BatchSidebar(QFrame):
         self._file_list.selection_changed.connect(self._on_selection_changed)
         self._file_list.page_counts_updated.connect(self._on_page_counts_updated)
         self._file_list.filter_changed.connect(self.filter_changed.emit)
+        self._file_list.metadata_filter_updated.connect(self.advanced_filter_changed.emit)
         list_layout.addWidget(self._file_list)
 
+        # Advanced filter panel (at the bottom of list area)
+        from ui.sidebar_advanced_filter import SidebarAdvancedFilter
+        self._advanced_filter = SidebarAdvancedFilter(self)
+        self._advanced_filter.apply_requested.connect(self._on_advanced_filter_apply)
+        self._advanced_filter.reset_requested.connect(self._on_advanced_filter_reset)
+        list_layout.addWidget(self._advanced_filter)
+
         content_layout.addWidget(self._list_container)
+
+        # Page metadata loader (lazy loads size+orientation per page)
+        from ui.page_metadata_loader import PageMetadataLoader
+        self._metadata_loader = PageMetadataLoader(self)
+        self._metadata_loader.metadata_loaded.connect(self._file_list.on_metadata_loaded)
+        self._metadata_loader.batch_complete.connect(self._on_metadata_batch_complete)
 
         self._main_layout.addWidget(self._content)
 
@@ -968,6 +1119,10 @@ class BatchSidebar(QFrame):
         self._base_dir = base_dir
         self._file_list.set_files(files, base_dir)
 
+        # Cancel any in-progress metadata load then restart for new files
+        self._metadata_loader.cancel()
+        self._metadata_loader.load(files)
+
         # Reset filters
         self._name_filter.clear()
         self._pages_combo.blockSignals(True)
@@ -1019,6 +1174,27 @@ class BatchSidebar(QFrame):
     def has_next_file(self, original_idx: int) -> bool:
         """Check if there's a next file in visible order."""
         return self._file_list.has_next_file(original_idx)
+
+    def get_active_pages(self, file_path: str) -> Optional[Set[int]]:
+        """Expose active_pages to main_window. Returns None when no filter active."""
+        return self._file_list.get_active_pages(file_path)
+
+    def _on_advanced_filter_apply(self, sizes: set, orientations: set, range_text: str):
+        """Delegate apply to file list"""
+        self._file_list.apply_advanced_filter(sizes, orientations, range_text)
+        self.advanced_filter_changed.emit()
+
+    def _on_advanced_filter_reset(self):
+        """Delegate reset to file list"""
+        self._file_list.reset_advanced_filter()
+        self.advanced_filter_changed.emit()
+
+    def _on_metadata_batch_complete(self):
+        """Trigger final rebuild after all metadata loaded"""
+        if self._file_list._is_advanced_filter_active():
+            self._file_list._rebuild_list(restart_lazy_load=False)
+            self.filter_changed.emit()
+            self.advanced_filter_changed.emit()
 
     def resizeEvent(self, event):
         """Auto-collapse when dragged too small"""

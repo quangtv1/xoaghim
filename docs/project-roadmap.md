@@ -1,13 +1,27 @@
 # XoaGhim PDF - Project Roadmap
 
-**Last Updated:** 2026-01-27
-**Current Version:** 1.1.23
+**Last Updated:** 2026-03-16
+**Current Version:** 1.1.24
 
 ---
 
 ## Release Timeline
 
-### v1.1.23 (Current - Stable)
+### v1.1.24 (Current - Stable)
+
+**Status:** Advanced Filter Panel Released
+- Collapsible advanced filter at bottom of sidebar
+- Filter operations by page size (A0-A7), orientation (landscape/portrait)
+- Page range filtering (syntax: 1-5, 7, 10-15)
+- Lazy async metadata loading (ThreadPoolExecutor, 10 files parallel)
+- Page size detection from dimensions (A-series with ±15pt tolerance)
+- Apply/Reset buttons with real-time range validation
+- Draw/clean operations only affect filtered pages
+
+**Release Date:** 2026-03-16
+**Status:** Stable/Production
+
+### v1.1.23 (Previous - Stable)
 
 **Status:** Major Performance & UX Improvements Released
 - Sliding window preview (10-page RAM window ±5 from current)
@@ -34,7 +48,11 @@
 **Release Date:** 2026-01-26
 **Status:** Stable/Production
 
-**Cumulative v1.1.x Features (v1.1.23):**
+**Cumulative v1.1.x Features (v1.1.24):**
+- Advanced sidebar filter for page selection (size/orientation/range)
+- Lazy metadata loading with ThreadPoolExecutor (batch size 10)
+- Page size detection (A0-A7) from dimensions with ±15pt tolerance
+- Page range syntax validation (1-5, 7, 10-15 format)
 - Sliding window preview (10-page RAM window ±5) for large PDFs
 - AI detection preload when text protection enabled
 - Background file preload in batch mode
@@ -481,6 +499,7 @@ Before each release:
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
+| 1.4 | 2026-03-16 | Docs Manager | Updated for v1.1.24 release (advanced sidebar filter) |
 | 1.3 | 2026-01-27 | Docs Manager | Updated for v1.1.23 release (sliding window + performance) |
 | 1.2 | 2026-01-26 | Docs Manager | Updated for v1.1.22 release (bug fixes + stability) |
 | 1.1 | 2026-01-19 | Docs Manager | Updated for v1.1.21 release (all core features complete) |
