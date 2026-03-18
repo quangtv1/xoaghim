@@ -146,11 +146,17 @@ class PDFExporter:
 
             total_pages = len(doc)
 
+            # Import here to avoid circular imports at module level
+            from core.parallel_processor import _detect_page_source_dpi
+
             for page_num in range(total_pages):
                 page = doc[page_num]
 
+                # Auto-detect source DPI per page when dpi == 0
+                render_dpi = _detect_page_source_dpi(page) if dpi == 0 else dpi
+
                 # Render
-                mat = fitz.Matrix(dpi / 72, dpi / 72)
+                mat = fitz.Matrix(render_dpi / 72, render_dpi / 72)
                 pix = page.get_pixmap(matrix=mat)
 
                 # Convert to numpy BGR
@@ -160,8 +166,8 @@ class PDFExporter:
                 elif pix.n == 3:
                     img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
-                # Process
-                processed = process_func(img, page_num)
+                # Process — pass actual render_dpi so zone scaling is correct
+                processed = process_func(img, page_num, render_dpi)
 
                 # Choose optimal format based on content
                 if optimize_size and PDFExporter.is_bw_image(processed):

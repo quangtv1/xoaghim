@@ -158,20 +158,21 @@ class ProcessThread(QThread):
             # Apply white background setting
             processor.white_background = self.settings.get('white_background', False)
 
-            # Get DPI for zone coordinate scaling
+            # Get DPI for zone coordinate scaling (0 = auto-detect source DPI per page)
             export_dpi = self.settings.get('dpi', 300)
             preview_dpi = self.settings.get('preview_dpi', 120)
 
             # Deserialize and scale cached protected regions if provided
+            # Skip pre-scaling when export_dpi == 0 (auto): render DPI varies per page
             scaled_regions_by_page = None
             preview_regions = self.settings.get('preview_cached_regions')
-            if preview_regions:
+            if preview_regions and export_dpi != 0:
                 from core.parallel_processor import deserialize_and_scale_protected_regions
                 scaled_regions_by_page = deserialize_and_scale_protected_regions(
                     preview_regions, preview_dpi, export_dpi
                 )
 
-            def process_func(image, page_num):
+            def process_func(image, page_num, render_dpi=None):
                 if self._cancelled:
                     return image
                 # Log format: Trang X/Y: full_path
@@ -191,10 +192,12 @@ class ProcessThread(QThread):
                 if scaled_regions_by_page is not None:
                     page_regions = scaled_regions_by_page.get(page_num, [])
 
+                # Use actual render_dpi (per-page when auto-detect) for zone scaling
+                actual_dpi = render_dpi if render_dpi is not None else (export_dpi or 150)
                 return processor.process_image(
                     image, page_zones,
                     protected_regions=page_regions,
-                    render_dpi=export_dpi
+                    render_dpi=actual_dpi
                 )
 
             def progress_callback(current, total):
@@ -4263,6 +4266,11 @@ Thời gian: {time_str}"""
             # Update options and apply to preview directly (signal might not fire correctly)
             self.settings_panel._text_protection_options.enabled = True
             self.preview.set_text_protection(self.settings_panel._text_protection_options)
+
+        # Sync white background state to preview processor
+        # (signal fires during SettingsPanel.__init__ before connection is established)
+        if self.settings_panel.white_bg_cb.isChecked():
+            self.preview.set_white_background(True)
 
     def _get_default_folder_dir(self) -> str:
         """Get default folder directory from config, fallback to Desktop"""

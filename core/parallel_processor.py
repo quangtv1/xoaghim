@@ -155,6 +155,33 @@ def _get_applicable_zones(zones: List[Zone], page_num: int, total_pages: int) ->
     return applicable
 
 
+def _detect_page_source_dpi(page, max_dpi: int = 600, fallback: int = 150) -> int:
+    """Detect effective DPI from the largest embedded image on the page.
+
+    Uses the pixel width of the widest image divided by the page width in PDF points.
+    Falls back to `fallback` for pure vector/text pages (no embedded images).
+    """
+    try:
+        images = page.get_images(full=True)
+        if not images:
+            return fallback  # Pure vector/text page
+        best_dpi = 0
+        page_w_pts = page.rect.width  # PDF points (1 pt = 1/72 inch)
+        if page_w_pts <= 0:
+            return fallback
+        for img_info in images:
+            # img_info tuple: (xref, smask, width, height, bpc, colorspace, ...)
+            img_w_px = img_info[2]
+            if img_w_px > 0:
+                dpi = round(img_w_px * 72 / page_w_pts)
+                best_dpi = max(best_dpi, dpi)
+        if best_dpi < 60:  # Tiny icon/thumbnail → treat as no real source image
+            return fallback
+        return min(best_dpi, max_dpi)
+    except Exception:
+        return fallback
+
+
 def process_single_pdf(task: ProcessTask, progress_queue=None) -> ProcessResult:
     """
     Process a single PDF file with in-memory buffer (worker function)
@@ -176,6 +203,9 @@ def process_single_pdf(task: ProcessTask, progress_queue=None) -> ProcessResult:
         text_protection = task.settings.get('text_protection')
         if text_protection:
             processor.set_text_protection(text_protection)
+
+        # Apply white background setting (fill removed areas with white instead of avg bg color)
+        processor.white_background = task.settings.get('white_background', False)
 
         # Get settings
         export_dpi = task.settings.get('dpi', 300)
@@ -243,7 +273,10 @@ def process_single_pdf(task: ProcessTask, progress_queue=None) -> ProcessResult:
                 continue
 
             # Render page to image
-            mat = fitz.Matrix(export_dpi / 72, export_dpi / 72)
+            # Auto mode (export_dpi == 0): detect source DPI from embedded images
+            # to match original quality and avoid file size bloat
+            render_dpi = _detect_page_source_dpi(page) if export_dpi == 0 else export_dpi
+            mat = fitz.Matrix(render_dpi / 72, render_dpi / 72)
             pix = page.get_pixmap(matrix=mat)
 
             # Convert to numpy BGR
@@ -261,7 +294,7 @@ def process_single_pdf(task: ProcessTask, progress_queue=None) -> ProcessResult:
             processed = processor.process_image(
                 img, applicable_zones,
                 protected_regions=page_regions,
-                render_dpi=export_dpi
+                render_dpi=render_dpi
             )
 
             # === IN-MEMORY BUFFER (no disk I/O) ===

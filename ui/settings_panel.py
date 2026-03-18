@@ -838,8 +838,8 @@ class SettingsPanel(QWidget):
         lbl_dpi.setFixedWidth(55)
         quality_row.addWidget(lbl_dpi)
         self.quality_combo = QComboBox()
-        self.quality_combo.addItems(["300 dpi", "250 dpi", "200 dpi", "100 dpi", "72 dpi"])
-        self.quality_combo.setCurrentIndex(0)  # Default 300 dpi
+        self.quality_combo.addItems(["Gốc", "300 dpi", "250 dpi", "200 dpi", "100 dpi", "72 dpi"])
+        self.quality_combo.setCurrentIndex(0)  # Default: Gốc (auto-detect source DPI)
         self.quality_combo.setMinimumWidth(90)  # Width to show "300 dpi" fully
         self.quality_combo.setStyleSheet("""
             QComboBox { padding-left: 6px; }
@@ -1949,7 +1949,7 @@ class SettingsPanel(QWidget):
 
     def get_settings(self) -> dict:
         """Lấy settings"""
-        dpi_map = {0: 300, 1: 250, 2: 200, 3: 100, 4: 72}
+        dpi_map = {0: 0, 1: 300, 2: 250, 3: 200, 4: 100, 5: 72}  # 0 = auto-detect source DPI
         jpeg_quality_map = {0: 100, 1: 90, 2: 80, 3: 70}  # 100%, 90%, 80%, 70%
 
         # Determine apply_pages from radio buttons
