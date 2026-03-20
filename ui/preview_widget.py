@@ -104,6 +104,8 @@ class PreviewPanel(QFrame):
         # Title - gray bg like preview area, darker bottom line
         self.title_label = QLabel(title)
         self.title_label.setAlignment(Qt.AlignCenter)
+        self.title_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.title_label.setCursor(Qt.IBeamCursor)
         self.title_label.setStyleSheet("""
             QLabel {
                 font-weight: 600;
