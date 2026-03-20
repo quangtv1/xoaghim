@@ -498,6 +498,15 @@ class SidebarFileList(QListWidget):
                 return False
         return True
 
+    def toggle_checkbox_by_original_index(self, original_idx: int):
+        """Toggle checkbox for file with given original_idx (opposite of current state)"""
+        for i in range(self.count()):
+            item = self.item(i)
+            if item.data(Qt.UserRole + 1) == original_idx:
+                new_state = Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked
+                item.setCheckState(new_state)
+                return
+
     def select_by_original_index(self, original_idx: int):
         """Select row by original file index (without emitting file_selected)"""
         # Block signal to avoid double file loading
@@ -1158,6 +1167,14 @@ class BatchSidebar(QFrame):
     def get_page_count(self, file_path: str) -> int:
         """Get page count for a specific file. Returns -1 if not loaded yet."""
         return self._file_list.get_page_count(file_path)
+
+    def toggle_checkbox_by_original_index(self, original_idx: int):
+        """Toggle checkbox for file with given original_idx"""
+        self._file_list.toggle_checkbox_by_original_index(original_idx)
+
+    def toggle_all_checkboxes(self):
+        """Toggle all file checkboxes (Ctrl+Space shortcut). Reuses header checkbox logic."""
+        self._on_header_checkbox_clicked()
 
     def select_by_original_index(self, original_idx: int):
         """Select file by original index"""
