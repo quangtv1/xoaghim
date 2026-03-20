@@ -1067,6 +1067,17 @@ class MainWindow(QMainWindow):
         self.next_file_shortcut = QShortcut(QKeySequence("]"), self)
         self.next_file_shortcut.activated.connect(self._on_next_file)
 
+        # Space: toggle checkbox of currently viewed file (batch mode only)
+        self.space_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
+        self.space_shortcut.activated.connect(self._on_toggle_current_file_checkbox)
+
+        # Ctrl+Space: toggle all file checkboxes (batch mode only)
+        # On macOS: Qt "Ctrl" = Command (⌘), so "Meta" = actual Control (^)
+        self.ctrl_space_shortcut = QShortcut(QKeySequence("Ctrl+Space"), self)
+        self.ctrl_space_shortcut.activated.connect(self._on_toggle_all_file_checkboxes)
+        self.meta_space_shortcut = QShortcut(QKeySequence("Meta+Space"), self)
+        self.meta_space_shortcut.activated.connect(self._on_toggle_all_file_checkboxes)
+
         # Keyboard shortcut Delete to delete selected zone
         self.delete_zone_shortcut = QShortcut(QKeySequence(Qt.Key_Delete), self)
         self.delete_zone_shortcut.activated.connect(self._on_delete_selected_zone)
@@ -1924,6 +1935,18 @@ class MainWindow(QMainWindow):
 
         self._load_pdf(file_path)
 
+    def _on_toggle_current_file_checkbox(self):
+        """Toggle checkbox of currently viewed file in batch mode (Space shortcut)"""
+        if not self._batch_mode or not self.batch_sidebar:
+            return
+        self.batch_sidebar.toggle_checkbox_by_original_index(self._batch_current_index)
+
+    def _on_toggle_all_file_checkboxes(self):
+        """Toggle all file checkboxes in batch mode (Ctrl+Space shortcut)"""
+        if not self._batch_mode or not self.batch_sidebar:
+            return
+        self.batch_sidebar.toggle_all_checkboxes()
+
     def _on_close_file(self):
         """Close currently opened file or folder"""
         # Check for unsaved changes before closing
@@ -2294,13 +2317,21 @@ class MainWindow(QMainWindow):
         # Force thumbnails to repaint AFTER preview setup (in case layout changed)
         QTimer.singleShot(10, self.preview.repaint_thumbnails)
 
-        # Reset to first page: scroll preview to top and highlight thumbnail
-        self.preview.set_current_page(0)
+        # Reset to first active page (respects advanced filter)
+        first_page = 0
+        if self._batch_mode and self.batch_sidebar and self._current_file_path:
+            active_pages = self.batch_sidebar.get_active_pages(self._current_file_path)
+            if active_pages:
+                first_page = min(active_pages)
+        self.preview.set_current_page(first_page)
         self.preview.scroll_to_top()
-        self.preview.before_panel.update_thumbnail_highlight(0, scroll=True)
+        self.preview.before_panel.update_thumbnail_highlight(first_page, scroll=True)
+        self.page_spin.blockSignals(True)
+        self.page_spin.setValue(first_page + 1)
+        self.page_spin.blockSignals(False)
 
         # Update settings panel with first page dimensions
-        self._update_page_size_for_settings(0)
+        self._update_page_size_for_settings(first_page)
 
         # Apply fit width if needed
         if hasattr(self, '_fit_after_initial_load') and self._fit_after_initial_load:
@@ -3109,7 +3140,10 @@ class MainWindow(QMainWindow):
         # Tìm zone và lấy page_filter của nó
         zone = self.settings_panel.get_zone_by_id(zone_id)
         if zone and hasattr(zone, 'page_filter'):
-            self.settings_panel.set_filter(zone.page_filter)
+            # Don't change the draw filter when in draw mode — clicking Zone Chung while drawing
+            # (e.g., on another page) must not disrupt the user's current draw filter (Từng trang)
+            if not self.settings_panel._current_draw_mode:
+                self.settings_panel.set_filter(zone.page_filter)
         # Chọn zone trong combo box → trigger _on_zone_selected để cập nhật sliders
         self.settings_panel._select_zone_in_combo(zone_id)
     
@@ -3696,11 +3730,12 @@ class MainWindow(QMainWindow):
         btn_layout.addWidget(no_btn)
         
         yes_btn = QPushButton("Có")
+        yes_btn.setDefault(True)  # Enter key confirms
         yes_btn.clicked.connect(dialog.accept)
         btn_layout.addWidget(yes_btn)
-        
+
         layout.addLayout(btn_layout)
-        
+
         return dialog.exec_() == QDialog.Accepted
 
     def _show_overwrite_confirm_dialog(self, file_count: int) -> bool:
@@ -3743,6 +3778,7 @@ class MainWindow(QMainWindow):
         btn_layout.addWidget(no_btn)
 
         yes_btn = QPushButton("Ghi đè")
+        yes_btn.setDefault(True)  # Enter key confirms
         yes_btn.setStyleSheet("""
             QPushButton {
                 padding: 8px 16px; border-radius: 4px; font-size: 13px;
