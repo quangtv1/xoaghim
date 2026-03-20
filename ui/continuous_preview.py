@@ -718,6 +718,7 @@ class ContinuousPreviewPanel(QFrame):
         self._current_file_path: str = ""  # Currently loaded file path
         self._batch_base_dir: str = ""  # Batch folder for persistence
         self._zones_loading: bool = False  # Flag to prevent saving during initial zone load
+        self._file_loading: bool = False  # True when file path changed but set_pages() not yet called
 
         self.setFrameStyle(QFrame.NoFrame)
         self.setStyleSheet("background-color: #E5E7EB;")
@@ -810,6 +811,8 @@ class ContinuousPreviewPanel(QFrame):
 
         # Title label
         self.title_label = QLabel(title)
+        self.title_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.title_label.setCursor(Qt.IBeamCursor)
         self.title_label.setStyleSheet("""
             QLabel {
                 font-weight: normal;
@@ -1195,14 +1198,14 @@ class ContinuousPreviewPanel(QFrame):
                 self._recreate_zone_overlays()
 
     def clear_zone_rieng(self):
-        """Clear only Zone riêng (custom_*, protect_*) from all pages, keep Zone chung (corner_*, margin_*)"""
+        """Clear only Zone riêng (page_filter='none') from all pages, keep Zone chung (preset + custom global)"""
         for page_idx in list(self._per_page_zones.keys()):
             page_zones = self._per_page_zones[page_idx]
-            # Keep only Zone chung (corner_*, margin_*)
+            # Keep only Zone chung (not zone riêng)
             self._per_page_zones[page_idx] = {
                 zone_id: zone_data
                 for zone_id, zone_data in page_zones.items()
-                if zone_id.startswith('corner_') or zone_id.startswith('margin_')
+                if not self._is_zone_rieng(zone_id)
             }
         # Recreate overlays
         if self.show_overlay:
@@ -1212,14 +1215,14 @@ class ContinuousPreviewPanel(QFrame):
                 self._recreate_zone_overlays()
 
     def clear_zone_chung(self):
-        """Clear only Zone chung (corner_*, margin_*) from all pages, keep Zone riêng (custom_*, protect_*)"""
+        """Clear only Zone chung (preset + custom global) from all pages, keep Zone riêng (page_filter='none')"""
         for page_idx in list(self._per_page_zones.keys()):
             page_zones = self._per_page_zones[page_idx]
-            # Keep only Zone riêng (custom_*, protect_*)
+            # Keep only Zone riêng
             self._per_page_zones[page_idx] = {
                 zone_id: zone_data
                 for zone_id, zone_data in page_zones.items()
-                if not zone_id.startswith('corner_') and not zone_id.startswith('margin_')
+                if self._is_zone_rieng(zone_id)
             }
         # Recreate overlays
         if self.show_overlay:
@@ -1229,6 +1232,21 @@ class ContinuousPreviewPanel(QFrame):
                 self._recreate_zone_overlays()
         # Force scene update
         self.scene.update()
+
+    def _is_zone_rieng(self, zone_id: str) -> bool:
+        """Return True if zone_id is Zone Riêng (per-file/per-page), False if Zone Chung.
+
+        Zone Chung: preset zones (corner_*, margin_*) + custom zones with page_filter != 'none'
+        Zone Riêng: custom zones with page_filter == 'none'
+        Unknown zone (no definition): treated as Zone Riêng (user-drawn free zones)
+        """
+        if zone_id.startswith('corner_') or zone_id.startswith('margin_'):
+            return False
+        for zd in self._zone_definitions:
+            if zd.id == zone_id:
+                return getattr(zd, 'page_filter', 'all') == 'none'
+        # No definition found → user-drawn zone, treat as Zone Riêng
+        return True
 
     def _init_per_page_zones(self):
         """Initialize per-page zones - start EMPTY for 'none' mode (Tự do)
@@ -1263,15 +1281,21 @@ class ContinuousPreviewPanel(QFrame):
         if self._zones_loading:
             return
 
-        # Only save Tự do zones (custom_*, protect_*), skip Zone Chung (corner_*, margin_*)
+        # Don't save implicitly (via timer) while a new file is being loaded.
+        # Race condition: _current_file_path is updated before set_pages() clears _per_page_zones,
+        # so a pending timer from the previous file would save old zones to the new file's path.
+        # Explicit saves (file_path passed) always proceed — they come from intentional callers.
+        if file_path is None and self._file_loading:
+            return
+
+        # Only save Zone Riêng (page_filter='none'), skip Zone Chung (preset + custom global)
         zones_to_save = {}
         for page_idx, page_zones in self._per_page_zones.items():
             if page_zones:
-                # Filter to only Tự do zones
                 filtered_zones = {
                     zone_id: zone_data
                     for zone_id, zone_data in page_zones.items()
-                    if not zone_id.startswith('corner_') and not zone_id.startswith('margin_')
+                    if self._is_zone_rieng(zone_id)
                 }
                 if filtered_zones:
                     zones_to_save[page_idx] = filtered_zones
@@ -1335,8 +1359,8 @@ class ContinuousPreviewPanel(QFrame):
             if page_idx not in self._per_page_zones:
                 self._per_page_zones[page_idx] = {}
             for zone_id, zone_data in page_zones.items():
-                # Only load Tự do zones, skip Zone Chung
-                if not zone_id.startswith('corner_') and not zone_id.startswith('margin_'):
+                # Only load Zone Riêng (page_filter='none'), skip Zone Chung
+                if self._is_zone_rieng(zone_id):
                     self._per_page_zones[page_idx][zone_id] = zone_data
 
         # Recreate visual overlays for loaded zones
@@ -1361,6 +1385,9 @@ class ContinuousPreviewPanel(QFrame):
     def set_current_file_path(self, file_path: str):
         """Set current file path for per-file zone tracking."""
         self._current_file_path = file_path
+        # Mark as loading: _per_page_zones still has old file's zones until set_pages() clears it.
+        # This prevents timer-based saves from writing old zones to the new file's path.
+        self._file_loading = True
 
     def clear_per_file_zones(self, reset_paths: bool = False):
         """Clear all per-file zone storage.
@@ -1452,6 +1479,8 @@ class ContinuousPreviewPanel(QFrame):
         # Clear per_page_zones when loading new file
         # This ensures zones will be re-added by set_zone_definitions
         self._per_page_zones.clear()
+        # Pages are now loaded — clear the loading guard so timer-based saves work normally
+        self._file_loading = False
         self._rebuild_scene()
 
     def init_sliding_window(self, total_pages: int, initial_pages: List[np.ndarray] = None):
@@ -1471,6 +1500,7 @@ class ContinuousPreviewPanel(QFrame):
                     self._pages[i] = page
         self._current_page = 0
         self._per_page_zones.clear()
+        self._file_loading = False
         self._rebuild_scene()
 
     def update_window_pages(self, page_updates: dict):
