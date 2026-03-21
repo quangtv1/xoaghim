@@ -1609,19 +1609,17 @@ class SettingsPanel(QWidget):
                 self.zone_preset_toggled.emit(zone_id, enabled, zone_data)
 
     def clear_custom_zones_with_free_filter(self, emit_signal: bool = False):
-        """Clear custom zones that have page_filter='none' (Tự do mode).
+        """Clear ALL custom zones when switching files.
 
-        Called when switching files in batch mode. Zones are saved to per-file
-        storage before clearing, so they can be restored when switching back.
+        All Tùy biến zones (custom_*, protect_*, override_*) are Zone Riêng —
+        per-file only, never inherited across files. They are saved to per-file
+        storage before clearing and restored when switching back.
 
         Args:
             emit_signal: If True, emit zones_changed signal. Default False since
                         caller will typically call set_zones() after loading new file.
         """
-        zones_to_remove = [
-            zone_id for zone_id, zone in self._custom_zones.items()
-            if zone.page_filter == 'none'
-        ]
+        zones_to_remove = list(self._custom_zones.keys())  # Remove ALL custom zones
 
         if not zones_to_remove:
             return False  # No zones removed
@@ -1656,11 +1654,10 @@ class SettingsPanel(QWidget):
         if not path:
             return
 
-        # Get zones with 'none' filter - deep copy each Zone to avoid reference issues
+        # Save ALL custom zones per-file (all Tùy biến zones are Zone Riêng)
         zones_to_save = {
             zone_id: dataclass_replace(zone)
             for zone_id, zone in self._custom_zones.items()
-            if zone.page_filter == 'none'
         }
 
         if zones_to_save:

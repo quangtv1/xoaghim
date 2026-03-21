@@ -264,7 +264,8 @@ class BatchProcessThread(QThread):
 
     def __init__(self, files: List[str], base_dir: str, output_dir: str,
                  zones: List[Zone], settings: dict, page_counts: dict = None,
-                 per_file_zones: dict = None, active_pages_map: dict = None):
+                 per_file_zones: dict = None, active_pages_map: dict = None,
+                 zone_chung: List[Zone] = None):
         super().__init__()
         self.files = files
         self.base_dir = base_dir
@@ -274,6 +275,7 @@ class BatchProcessThread(QThread):
         self.page_counts = page_counts or {}  # {file_path: page_count}
         self.per_file_zones = per_file_zones or {}  # {file_path: {page_idx: {zone_id: tuple}}}
         self.active_pages_map = active_pages_map or {}  # {file_path: List[int]} or empty = all pages
+        self.zone_chung = zone_chung or []  # Zone Chung with original page_filter preserved
         self.overwrite_mode = settings.get('overwrite', False)
         self._cancelled = False
         self._pages_processed = 0
@@ -313,14 +315,21 @@ class BatchProcessThread(QThread):
             self.worker_info.emit(max_workers)
             print(f"[Parallel] Sử dụng {max_workers} processes (CPU/RAM max 80%)")
 
-            # Serialize default zones (from current file)
+            # Serialize default zones (from current file with target_page set)
             default_zone_dicts = serialize_zones(self.zones)
 
-            # Extract Zone Chung (corners, margins) from default zones - apply to all files
-            zone_chung_dicts = [
-                z for z in default_zone_dicts
-                if z['id'].startswith('corner_') or z['id'].startswith('margin_')
-            ]
+            # Build Zone Chung dicts: use zone_chung list with original page_filter if available,
+            # otherwise fall back to extracting corner_*/margin_* from default_zone_dicts.
+            # zone_chung preserves page_filter='all'/'odd'/'even' so custom Zone Chung (custom_*
+            # with Tất cả/Chẵn/Lẻ filter) are correctly applied to all files.
+            if self.zone_chung:
+                zone_chung_dicts = serialize_zones(self.zone_chung)
+            else:
+                # Legacy fallback: only corners/margins (misses custom Zone Chung)
+                zone_chung_dicts = [
+                    z for z in default_zone_dicts
+                    if z['id'].startswith('corner_') or z['id'].startswith('margin_')
+                ]
 
             # Create tasks with file-specific zones
             tasks = []
@@ -518,6 +527,10 @@ class MainWindow(QMainWindow):
         self.WINDOW_HALF = 5   # Pages before/after current
         self._sliding_window_mode = False
         self._window_center = 0  # Current center page in window
+
+        # Async sliding window: queue pages to load without blocking main thread
+        self._pending_window_pages: list = []  # Pages queued for async loading
+        self._pending_window_idx: int = 0      # Current index in queue
 
         self.setWindowTitle("Xóa Ghim PDF (5S)")
         self.setMinimumSize(600, 400)  # Small minimum for flexible resize
@@ -1041,7 +1054,14 @@ class MainWindow(QMainWindow):
 
         self.draw_protect_a = QShortcut(QKeySequence(protect_key), self)
         self.draw_protect_a.setAutoRepeat(False)
-        self.draw_protect_a.activated.connect(self._toggle_draw_protect)
+        # macOS: Ctrl+A (Cmd+A) is context-aware — select all zones in ESC mode, else toggle protect
+        self.draw_protect_a.activated.connect(self._on_ctrl_a_or_protect)
+
+        # Windows/Linux: Ctrl+A is free → dedicated select-all shortcut
+        if sys.platform != 'darwin':
+            self.select_all_zones_shortcut = QShortcut(QKeySequence("Ctrl+A"), self)
+            self.select_all_zones_shortcut.setAutoRepeat(False)
+            self.select_all_zones_shortcut.activated.connect(self._on_select_all_zones)
         self.draw_protect_plus = QShortcut(QKeySequence("Shift+="), self)
         self.draw_protect_plus.setAutoRepeat(False)
         self.draw_protect_plus.activated.connect(self._toggle_draw_protect)
@@ -1067,16 +1087,24 @@ class MainWindow(QMainWindow):
         self.next_file_shortcut = QShortcut(QKeySequence("]"), self)
         self.next_file_shortcut.activated.connect(self._on_next_file)
 
-        # Space: toggle checkbox of currently viewed file (batch mode only)
-        self.space_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
-        self.space_shortcut.activated.connect(self._on_toggle_current_file_checkbox)
+        # V: toggle checkbox of currently viewed file (batch mode only)
+        self.v_shortcut = QShortcut(QKeySequence(Qt.Key_V), self)
+        self.v_shortcut.activated.connect(self._on_toggle_current_file_checkbox)
 
-        # Ctrl+Space: toggle all file checkboxes (batch mode only)
+        # Ctrl+V: toggle all file checkboxes (batch mode only)
         # On macOS: Qt "Ctrl" = Command (⌘), so "Meta" = actual Control (^)
+        self.ctrl_v_shortcut = QShortcut(QKeySequence("Ctrl+V"), self)
+        self.ctrl_v_shortcut.activated.connect(self._on_toggle_all_file_checkboxes)
+        self.meta_v_shortcut = QShortcut(QKeySequence("Meta+V"), self)
+        self.meta_v_shortcut.activated.connect(self._on_toggle_all_file_checkboxes)
+
+        # Space: scroll preview down; Ctrl+Space: scroll preview up
+        self.space_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
+        self.space_shortcut.activated.connect(self._on_scroll_preview_down)
         self.ctrl_space_shortcut = QShortcut(QKeySequence("Ctrl+Space"), self)
-        self.ctrl_space_shortcut.activated.connect(self._on_toggle_all_file_checkboxes)
+        self.ctrl_space_shortcut.activated.connect(self._on_scroll_preview_up)
         self.meta_space_shortcut = QShortcut(QKeySequence("Meta+Space"), self)
-        self.meta_space_shortcut.activated.connect(self._on_toggle_all_file_checkboxes)
+        self.meta_space_shortcut.activated.connect(self._on_scroll_preview_up)
 
         # Keyboard shortcut Delete to delete selected zone
         self.delete_zone_shortcut = QShortcut(QKeySequence(Qt.Key_Delete), self)
@@ -1936,16 +1964,28 @@ class MainWindow(QMainWindow):
         self._load_pdf(file_path)
 
     def _on_toggle_current_file_checkbox(self):
-        """Toggle checkbox of currently viewed file in batch mode (Space shortcut)"""
+        """Toggle checkbox of currently viewed file in batch mode (V shortcut)"""
         if not self._batch_mode or not self.batch_sidebar:
             return
         self.batch_sidebar.toggle_checkbox_by_original_index(self._batch_current_index)
 
     def _on_toggle_all_file_checkboxes(self):
-        """Toggle all file checkboxes in batch mode (Ctrl+Space shortcut)"""
+        """Toggle all file checkboxes in batch mode (Ctrl+V shortcut)"""
         if not self._batch_mode or not self.batch_sidebar:
             return
         self.batch_sidebar.toggle_all_checkboxes()
+
+    def _on_scroll_preview_down(self):
+        """Scroll preview down one page height (Space shortcut)"""
+        vbar = self.preview.before_panel.view.verticalScrollBar()
+        step = self.preview.before_panel.view.viewport().height()
+        vbar.setValue(vbar.value() + step)
+
+    def _on_scroll_preview_up(self):
+        """Scroll preview up one page height (Ctrl+Space shortcut)"""
+        vbar = self.preview.before_panel.view.verticalScrollBar()
+        step = self.preview.before_panel.view.viewport().height()
+        vbar.setValue(vbar.value() - step)
 
     def _on_close_file(self):
         """Close currently opened file or folder"""
@@ -2698,37 +2738,59 @@ class MainWindow(QMainWindow):
             pass  # Page not loaded yet
 
     def _update_sliding_window(self, center_page: int):
-        """Update sliding window - bidirectional loading with forward bias
+        """Update sliding window - filter-aware + async loading.
 
-        Loads 3 pages before + 7 pages after center (total 10 pages).
-        Allows smooth scrolling in both directions.
+        When advanced filter is active, operates on filtered page indices so the
+        window always covers meaningful pages (not pages hidden by the filter).
+        Loading is async (timer-based) so the UI never blocks during scroll.
         """
         if not self._pdf_handler or not self._sliding_window_mode:
             return
 
-        # Check if window needs to shift (debounce)
+        # Check if window needs to shift (debounce: ignore small movements)
         if abs(center_page - self._window_center) < 2:
             return
 
         self._window_center = center_page
 
-        # Bidirectional window: 3 pages back + 7 pages forward = 10 total
-        # E.g., center=30 → pages 27-36 (3 back: 27,28,29 + 7 forward: 30-36)
-        BACKWARD = 3
-        FORWARD = 7
-        start = max(0, center_page - BACKWARD)
-        end = min(self._total_pages, center_page + FORWARD)
+        # --- Filter-aware page pool ---
+        # Get filtered pages from advanced filter (batch_sidebar).
+        # Falls back to all pages when no filter is active.
+        active_filter = None
+        if hasattr(self, 'batch_sidebar') and self._current_file_path:
+            active_filter = self.batch_sidebar.get_active_pages(self._current_file_path)
+
+        if active_filter is not None:
+            # Use filtered page list as virtual index space
+            filtered_pages = sorted(active_filter)
+            if not filtered_pages:
+                return
+            # Find position of center_page (or nearest filtered page)
+            virtual_idx = 0
+            for idx, pg in enumerate(filtered_pages):
+                if pg <= center_page:
+                    virtual_idx = idx
+                else:
+                    break
+            BACKWARD = 3
+            FORWARD = 7
+            v_start = max(0, virtual_idx - BACKWARD)
+            v_end = min(len(filtered_pages), virtual_idx + FORWARD)
+            new_window = set(filtered_pages[v_start:v_end])
+        else:
+            # No filter: standard absolute-page window
+            BACKWARD = 3
+            FORWARD = 7
+            start = max(0, center_page - BACKWARD)
+            end = min(self._total_pages, center_page + FORWARD)
+            new_window = set(range(start, end))
 
         # Find pages to load/unload
-        new_window = set(range(start, end))
         currently_loaded = set(i for i, p in enumerate(self._all_pages) if p is not None)
-        pages_to_load = sorted(new_window - currently_loaded)  # Load in order
+        pages_to_load = sorted(new_window - currently_loaded)
         pages_to_unload = currently_loaded - new_window
 
-        if not pages_to_load:
-            return
-
-        # Unload old pages first (free memory immediately)
+        # Unload pages outside window immediately (free RAM)
         if pages_to_unload:
             unload_updates = {}
             for page_idx in pages_to_unload:
@@ -2738,36 +2800,45 @@ class MainWindow(QMainWindow):
             if unload_updates:
                 self.preview.update_window_pages(unload_updates)
 
-        # Load pages sequentially (simple, no wave pattern)
-        self._load_pages_sequential(pages_to_load, start, end)
-
-    def _load_pages_sequential(self, pages: list, start: int, end: int):
-        """Load pages sequentially, display all at once when done
-
-        Simple batch loading: load all pages, then update preview once.
-        """
-        if not self._pdf_handler:
+        if not pages_to_load:
             return
 
-        self.statusBar().showMessage(f"Đang tải trang {start+1}-{end}...")
+        # Queue pages for async loading (replaces blocking _load_pages_sequential)
+        self._pending_window_pages = pages_to_load
+        self._pending_window_idx = 0
+        QTimer.singleShot(0, self._load_next_window_page)
 
-        page_updates = {}
-        for page_idx in pages:
-            if not self._pdf_handler:  # Check in case file closed during loading
-                break
+    def _load_next_window_page(self):
+        """Load one page from the async sliding window queue, then schedule next.
 
-            preview_img = self._pdf_handler.render_page(page_idx, dpi=self.PREVIEW_DPI)
-            if preview_img is not None:
-                while len(self._all_pages) <= page_idx:
-                    self._all_pages.append(None)
-                self._all_pages[page_idx] = preview_img
-                page_updates[page_idx] = preview_img
+        Non-blocking: called via QTimer so the UI event loop stays responsive
+        between each page load. Cancels automatically if window has shifted.
+        """
+        if not self._pdf_handler or not self._pending_window_pages:
+            return
 
-        # Update preview once with all loaded pages
-        if page_updates:
-            self.preview.update_window_pages(page_updates)
+        if self._pending_window_idx >= len(self._pending_window_pages):
+            self._pending_window_pages = []
+            return
 
-        self.statusBar().showMessage(f"Đã tải trang {start+1}-{end}", 2000)
+        page_idx = self._pending_window_pages[self._pending_window_idx]
+        self._pending_window_idx += 1
+
+        # Skip if already loaded (window may have overlapped a previously loaded page)
+        if page_idx < len(self._all_pages) and self._all_pages[page_idx] is not None:
+            QTimer.singleShot(0, self._load_next_window_page)
+            return
+
+        preview_img = self._pdf_handler.render_page(page_idx, dpi=self.PREVIEW_DPI)
+        if preview_img is not None:
+            while len(self._all_pages) <= page_idx:
+                self._all_pages.append(None)
+            self._all_pages[page_idx] = preview_img
+            self.preview.update_window_pages({page_idx: preview_img})
+
+        # Schedule next page load (8ms gap → ~120 fps ceiling, keeps UI responsive)
+        if self._pending_window_idx < len(self._pending_window_pages):
+            QTimer.singleShot(8, self._load_next_window_page)
 
     def _on_zoom_in(self):
         """Zoom in by 5%, snapping to nearest multiple of 5"""
@@ -3005,9 +3076,14 @@ class MainWindow(QMainWindow):
         self.preview.set_draw_mode(mode)
 
     def _cancel_draw_mode(self):
-        """Cancel current draw mode (Esc key)"""
+        """Cancel current draw mode (Esc key).
+        If already in ESC mode (no draw mode), deselect all selected zones.
+        """
         if self._current_draw_mode is not None:
             self._set_draw_mode_with_filter(None)
+        else:
+            # Already in ESC mode — clear any zone selection
+            self.preview.before_panel.deselect_all_zones()
 
     def _toggle_draw_protect(self):
         """Toggle protection zone (+) draw mode.
@@ -3134,16 +3210,26 @@ class MainWindow(QMainWindow):
         self.settings_panel.save_per_file_custom_zones()
 
     def _on_zone_selected_from_preview(self, zone_id: str):
-        """Khi click vào zone trong preview → chuyển filter theo zone và cập nhật combo/sliders"""
+        """Khi click vào zone trong preview → sync toolbar mode+filter theo zone đó"""
         # Track selected zone for Delete shortcut
         self._selected_zone_id = zone_id
-        # Tìm zone và lấy page_filter của nó
         zone = self.settings_panel.get_zone_by_id(zone_id)
-        if zone and hasattr(zone, 'page_filter'):
-            # Don't change the draw filter when in draw mode — clicking Zone Chung while drawing
-            # (e.g., on another page) must not disrupt the user's current draw filter (Từng trang)
-            if not self.settings_panel._current_draw_mode:
+        if zone:
+            is_custom = (zone_id.startswith('custom_') or
+                         zone_id.startswith('protect_') or
+                         zone_id.startswith('override_'))
+            if is_custom:
+                # Map zone_type → draw mode for toolbar display
+                draw_mode = 'protect' if zone.zone_type == 'protect' else 'remove'
+                # Sync toolbar draw mode buttons (visual only, does not activate draw mode)
+                self.settings_panel.set_draw_mode(draw_mode)
+                self.compact_toolbar.set_draw_mode_state(draw_mode)
+                # Sync filter (page_filter = 'all'/'odd'/'even'/'none'/'override')
                 self.settings_panel.set_filter(zone.page_filter)
+            elif hasattr(zone, 'page_filter'):
+                # Zone Chung (corner/margin) - only sync filter if not actively drawing
+                if not self.settings_panel._current_draw_mode:
+                    self.settings_panel.set_filter(zone.page_filter)
         # Chọn zone trong combo box → trigger _on_zone_selected để cập nhật sliders
         self.settings_panel._select_zone_in_combo(zone_id)
     
@@ -3184,9 +3270,27 @@ class MainWindow(QMainWindow):
         # Update zone counts
         self._update_zone_counts()
 
+    def _on_ctrl_a_or_protect(self):
+        """Ctrl+A (macOS Cmd+A): select all zones in ESC mode, else toggle protect draw mode"""
+        if self.settings_panel._current_draw_mode:
+            self._toggle_draw_protect()
+        else:
+            self._on_select_all_zones()
+
+    def _on_select_all_zones(self):
+        """Select all custom zones currently visible in preview (for Ctrl+A in ESC mode)"""
+        if not self.settings_panel._current_draw_mode:
+            self.preview.before_panel.select_all_zones()
+
     def _on_delete_selected_zone(self):
-        """Handle Delete key shortcut - delete selected zone"""
-        if self._selected_zone_id:
+        """Handle Delete key shortcut - delete all selected zones (or single selected zone)"""
+        # Get all selected zone IDs from before_panel
+        selected_ids = self.preview.before_panel.get_selected_base_ids()
+        if selected_ids:
+            for zone_id in list(selected_ids):
+                self._on_zone_delete_from_preview(zone_id)
+            self._selected_zone_id = None
+        elif self._selected_zone_id:
             self._on_zone_delete_from_preview(self._selected_zone_id)
             self._selected_zone_id = None
 
@@ -3367,6 +3471,13 @@ class MainWindow(QMainWindow):
         # This ensures Zone Riêng (per-page zones) work correctly in batch mode
         zones = self.preview.get_all_zones_for_batch_processing()
 
+        # Zone Chung = ONLY corner_* and margin_* (always global, always inherited).
+        # Custom zones (custom_*, protect_*, override_*) are Zone Riêng — per-file only,
+        # never inherited. They are passed via per_file_zones, not zone_chung.
+        all_enabled_zones = self.settings_panel.get_zones()
+        zone_chung = [z for z in all_enabled_zones
+                      if z.id.startswith('corner_') or z.id.startswith('margin_')]
+
         # Get per-file zones for batch processing (Zone Riêng for each file)
         per_file_zones = self.preview.get_per_file_zones_for_batch()
 
@@ -3388,7 +3499,8 @@ class MainWindow(QMainWindow):
 
         # Show batch progress dialog
         self._show_batch_progress_dialog(checked_files, output_dir, zones, settings, per_file_zones,
-                                         active_pages_map if active_pages_map else None)
+                                         active_pages_map if active_pages_map else None,
+                                         zone_chung=zone_chung)
     
     def _on_cancel(self):
         if self._process_thread:
@@ -3893,7 +4005,8 @@ class MainWindow(QMainWindow):
     def _show_batch_progress_dialog(self, files: List[str], output_dir: str,
                                     zones: List[Zone], settings: dict,
                                     per_file_zones: dict = None,
-                                    active_pages_map: dict = None):
+                                    active_pages_map: dict = None,
+                                    zone_chung: List[Zone] = None):
         """Show batch processing progress dialog"""
         self._batch_dialog = QDialog(self)
         self._batch_dialog.setWindowTitle("Đang xử lý...")
@@ -3978,7 +4091,7 @@ class MainWindow(QMainWindow):
         # Start batch processing
         self._batch_process_thread = BatchProcessThread(
             files, self._batch_base_dir, output_dir, zones, settings, self._batch_page_counts,
-            per_file_zones, active_pages_map
+            per_file_zones, active_pages_map, zone_chung=zone_chung
         )
         self._batch_process_thread.progress.connect(self._on_batch_progress)
         self._batch_process_thread.file_progress.connect(self._on_batch_page_progress)

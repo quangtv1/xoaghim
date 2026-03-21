@@ -11,7 +11,7 @@ from .page_thumbnail_sidebar import ThumbnailPanel
 from PyQt5.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
-    QGraphicsRectItem, QFrame, QSplitter, QScrollArea, QPushButton,
+    QGraphicsRectItem, QGraphicsItem, QFrame, QSplitter, QScrollArea, QPushButton,
     QGraphicsOpacityEffect, QApplication
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QRectF, QTimer, QPointF, QPropertyAnimation, QEasingCurve, QEvent
@@ -256,6 +256,8 @@ class ContinuousGraphicsView(QGraphicsView):
         self._page_bounds = None  # (x, y, w, h) of current page (fallback)
         self._all_page_bounds = []  # List of (x, y, w, h) for all pages
         self._page_index_map = []  # Maps _all_page_bounds list position → real page_idx
+        # Rubber-band selection tracking: True while dragging rubber band from empty space
+        self._rubber_band_active = False
     
     def wheelEvent(self, event):
         """Zoom với Ctrl+Scroll"""
@@ -374,10 +376,13 @@ class ContinuousGraphicsView(QGraphicsView):
             # Set custom crosshair cursor immediately if mouse is inside viewport
             if self.viewport().underMouse():
                 self.viewport().setCursor(self._get_draw_cursor())
+            # Disable interaction on all existing ZoneItems so drawing a new zone
+            # is not blocked by clicking/dragging over an existing zone.
+            self._set_zone_items_interactive(False)
         else:
             # Remove event filter and restore cursor
             self.viewport().removeEventFilter(self)
-            self.setDragMode(QGraphicsView.NoDrag)
+            self.setDragMode(QGraphicsView.RubberBandDrag)  # Enable rubber-band multi-select in ESC mode
             self.viewport().unsetCursor()
             # Clean up any in-progress drawing
             try:
@@ -388,6 +393,28 @@ class ContinuousGraphicsView(QGraphicsView):
             self._draw_rect_item = None
             self._drawing = False
             self._draw_start = None
+            # Restore interaction on all ZoneItems
+            self._set_zone_items_interactive(True)
+
+    def _set_zone_items_interactive(self, interactive: bool):
+        """Enable or disable mouse interaction on all ZoneItems in the scene.
+
+        Called when entering/leaving draw mode so new zones can be drawn freely
+        over existing ones without existing zones intercepting the mouse events.
+        """
+        if not self.scene():
+            return
+        from ui.zone_item import ZoneItem
+        for item in self.scene().items():
+            if isinstance(item, ZoneItem):
+                item.setFlag(QGraphicsItem.ItemIsMovable, interactive)
+                item.setFlag(QGraphicsItem.ItemIsSelectable, interactive)
+                item.setAcceptedMouseButtons(Qt.LeftButton | Qt.RightButton if interactive
+                                             else Qt.NoButton)
+                if interactive:
+                    item.setCursor(Qt.SizeAllCursor)  # Restore move cursor
+                else:
+                    item.unsetCursor()  # Let viewport crosshair show through
 
     def eventFilter(self, obj, event):
         """Handle viewport events for cursor in draw mode"""
@@ -397,16 +424,9 @@ class ContinuousGraphicsView(QGraphicsView):
             elif event.type() == QEvent.Leave:
                 self.viewport().unsetCursor()
             elif event.type() == QEvent.MouseMove:
-                # Check if hovering over a zone item
-                scene_pos = self.mapToScene(event.pos())
-                item = self.scene().itemAt(scene_pos, self.transform()) if self.scene() else None
-                from ui.zone_item import ZoneItem
-                if isinstance(item, ZoneItem) or (hasattr(item, 'parentItem') and isinstance(item.parentItem(), ZoneItem)):
-                    # Over zone - let zone set its own cursor (resize handles, move cursor)
-                    self.viewport().unsetCursor()
-                else:
-                    # Over empty space - show custom crosshair cursor
-                    self.viewport().setCursor(self._get_draw_cursor())
+                # Always show crosshair in draw mode — zone items are non-interactive
+                # so we never defer the cursor to them while drawing.
+                self.viewport().setCursor(self._get_draw_cursor())
         return super().eventFilter(obj, event)
 
     def _create_crosshair_cursor(self, color: QColor) -> QCursor:
@@ -501,15 +521,9 @@ class ContinuousGraphicsView(QGraphicsView):
         """Start drawing if in draw mode, or interact with existing zones"""
         if self._draw_mode and event.button() == Qt.LeftButton:
             scene_pos = self.mapToScene(event.pos())
-            # Check if clicking on an existing zone item
-            item = self.scene().itemAt(scene_pos, self.transform()) if self.scene() else None
-            # Import ZoneItem for type check
-            from ui.zone_item import ZoneItem
-            if isinstance(item, ZoneItem) or (hasattr(item, 'parentItem') and isinstance(item.parentItem(), ZoneItem)):
-                # Clicking on existing zone - let it handle the event (resize/move)
-                super().mousePressEvent(event)
-                return
-            # Not clicking on a zone - start drawing new zone
+            # In draw mode: ALWAYS start drawing regardless of what is under the cursor.
+            # Existing ZoneItems are non-interactive during draw mode so drawing a new
+            # zone can start anywhere, including inside an existing zone.
             page_bounds = self._find_page_at_y(scene_pos.y())
             if page_bounds:
                 px, py, pw, ph = page_bounds
@@ -520,19 +534,15 @@ class ContinuousGraphicsView(QGraphicsView):
                 self._draw_start = QPointF(clamped_x, clamped_y)
                 self._draw_rect_item = None
         else:
-            # Check if clicking on empty space (no item at click position)
+            # ESC mode: track rubber-band start on empty space clicks
             if event.button() == Qt.LeftButton:
                 scene_pos = self.mapToScene(event.pos())
                 item = self.scene().itemAt(scene_pos, self.transform()) if self.scene() else None
-                # If no item or only page background, deselect all zones
+                from ui.zone_item import ZoneItem
                 if item is None or isinstance(item, QGraphicsPixmapItem):
-                    # Find parent panel and deselect all zones
-                    parent = self.parent()
-                    while parent:
-                        if hasattr(parent, 'deselect_all_zones'):
-                            parent.deselect_all_zones()
-                            break
-                        parent = parent.parent() if hasattr(parent, 'parent') else None
+                    # Starting rubber band or plain click on empty space
+                    # selectionChanged will fire after super() and handle deselect/select
+                    self._rubber_band_active = True
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -607,7 +617,9 @@ class ContinuousGraphicsView(QGraphicsView):
             self._draw_rect_item = None
             self._draw_start = None
         else:
+            # selectionChanged fires inside super() for rubber-band completion; clear flag after
             super().mouseReleaseEvent(event)
+            self._rubber_band_active = False
 
     def _find_page_at_y(self, y: float) -> tuple:
         """Find page bounds containing the given y coordinate"""
@@ -719,6 +731,8 @@ class ContinuousPreviewPanel(QFrame):
         self._batch_base_dir: str = ""  # Batch folder for persistence
         self._zones_loading: bool = False  # Flag to prevent saving during initial zone load
         self._file_loading: bool = False  # True when file path changed but set_pages() not yet called
+        # Multi-select: set of base zone IDs currently selected
+        self._selected_base_ids: set = set()
 
         self.setFrameStyle(QFrame.NoFrame)
         self.setStyleSheet("background-color: #E5E7EB;")
@@ -945,6 +959,8 @@ class ContinuousPreviewPanel(QFrame):
         self.view.setScene(self.scene)
         self.view.setStyleSheet("background-color: #E5E7EB; border: none;")
         self.view.rect_drawn.connect(self._on_rect_drawn)
+        # Sync selection state after Qt rubber-band selection
+        self.scene.selectionChanged.connect(self._on_rubber_band_selection)
         self.view.file_dropped.connect(self.file_dropped.emit)
         self.view.folder_dropped.connect(self.folder_dropped.emit)
         self.view.files_dropped.connect(self.files_dropped.emit)
@@ -1198,7 +1214,7 @@ class ContinuousPreviewPanel(QFrame):
                 self._recreate_zone_overlays()
 
     def clear_zone_rieng(self):
-        """Clear only Zone riêng (page_filter='none') from all pages, keep Zone chung (preset + custom global)"""
+        """Clear only Zone Riêng (custom_*, protect_*, override_*) from all pages, keep Zone Chung (corner_*, margin_*)"""
         for page_idx in list(self._per_page_zones.keys()):
             page_zones = self._per_page_zones[page_idx]
             # Keep only Zone chung (not zone riêng)
@@ -1215,7 +1231,7 @@ class ContinuousPreviewPanel(QFrame):
                 self._recreate_zone_overlays()
 
     def clear_zone_chung(self):
-        """Clear only Zone chung (preset + custom global) from all pages, keep Zone riêng (page_filter='none')"""
+        """Clear only Zone Chung (corner_*, margin_*) from all pages, keep Zone Riêng (custom_*, protect_*, override_*)"""
         for page_idx in list(self._per_page_zones.keys()):
             page_zones = self._per_page_zones[page_idx]
             # Keep only Zone riêng
@@ -1234,19 +1250,13 @@ class ContinuousPreviewPanel(QFrame):
         self.scene.update()
 
     def _is_zone_rieng(self, zone_id: str) -> bool:
-        """Return True if zone_id is Zone Riêng (per-file/per-page), False if Zone Chung.
+        """Return True if zone_id is Zone Riêng (per-file), False if Zone Chung.
 
-        Zone Chung: preset zones (corner_*, margin_*) + custom zones with page_filter != 'none'
-        Zone Riêng: custom zones with page_filter == 'none'
-        Unknown zone (no definition): treated as Zone Riêng (user-drawn free zones)
+        Zone Chung: ONLY corner_* and margin_* preset zones (always global, always inherited)
+        Zone Riêng: ALL other zones — custom_*, protect_*, override_*, and unknown drawn zones
+                    These are per-file and never inherited across files.
         """
-        if zone_id.startswith('corner_') or zone_id.startswith('margin_'):
-            return False
-        for zd in self._zone_definitions:
-            if zd.id == zone_id:
-                return getattr(zd, 'page_filter', 'all') == 'none'
-        # No definition found → user-drawn zone, treat as Zone Riêng
-        return True
+        return not (zone_id.startswith('corner_') or zone_id.startswith('margin_'))
 
     def _init_per_page_zones(self):
         """Initialize per-page zones - start EMPTY for 'none' mode (Tự do)
@@ -1288,7 +1298,7 @@ class ContinuousPreviewPanel(QFrame):
         if file_path is None and self._file_loading:
             return
 
-        # Only save Zone Riêng (page_filter='none'), skip Zone Chung (preset + custom global)
+        # Only save Zone Riêng (custom_*, protect_*, override_*), skip Zone Chung (corner_*, margin_*)
         zones_to_save = {}
         for page_idx, page_zones in self._per_page_zones.items():
             if page_zones:
@@ -1350,7 +1360,7 @@ class ContinuousPreviewPanel(QFrame):
         if saved_zones is None:
             return False
 
-        # Restore only Tự do zones (custom_*, protect_*) to _per_page_zones
+        # Restore Zone Riêng (custom_*, protect_*, override_*) to _per_page_zones
         # Skip Zone Chung (corner_*, margin_*) - they use current global values
         # NOTE: Store zones for ALL pages, not just loaded ones. Visual overlays
         # will be created only for loaded pages, and zones for later pages will
@@ -1656,7 +1666,10 @@ class ContinuousPreviewPanel(QFrame):
         self.set_page_visibility_in_view(active_indices)
 
     def set_page_visibility_in_view(self, active_indices):
-        """Hide page items not in active_indices and reflow vertical layout.
+        """Show only active page items in scene and reflow vertical layout.
+
+        Hidden items are fully removed from the scene (not just setVisible(False))
+        to eliminate Qt rendering overhead for large PDFs with sparse filter results.
 
         Args:
             active_indices: set/list of page indices to show, or None to show all pages.
@@ -1676,9 +1689,13 @@ class ContinuousPreviewPanel(QFrame):
 
         for page_idx, item in enumerate(self._page_items):
             is_visible = self._active_page_filter is None or page_idx in self._active_page_filter
-            item.setVisible(is_visible)
 
             if is_visible:
+                # Re-add to scene if it was removed (filter change)
+                if item.scene() is None:
+                    self.scene.addItem(item)
+                item.setVisible(True)
+
                 pixmap = item.pixmap()
                 page_w = pixmap.width() if pixmap else 0
                 page_h = pixmap.height() if pixmap else 0
@@ -1693,10 +1710,12 @@ class ContinuousPreviewPanel(QFrame):
                 max_width = max(max_width, page_w)
                 y_offset += page_h + self.PAGE_SPACING
             else:
-                # Hidden pages: keep _page_positions entry unchanged to preserve
-                # original page numbering (page 3 stays "3"), but position is
-                # irrelevant for scrolling since the page is not visible
-                pass
+                # Remove from scene entirely — reduces Qt scene item count,
+                # eliminating rendering overhead during scroll for hidden pages.
+                # Items remain in _page_items list for re-insertion when filter changes.
+                item.setVisible(False)
+                if item.scene() is not None:
+                    self.scene.removeItem(item)
 
         # Recenter all visible pages horizontally using the new max_width
         if max_width > 0:
@@ -2725,6 +2744,11 @@ class ContinuousPreviewPanel(QFrame):
                 self.scene.addItem(zone_item)
                 self._zones.append(zone_item)
 
+        # If draw mode is active, disable interaction on newly created zone items
+        # so they don't block drawing new zones over existing ones.
+        if getattr(self.view, '_draw_mode', None):
+            self.view._set_zone_items_interactive(False)
+
     def update_page(self, page_idx: int, image: np.ndarray):
         """Cập nhật ảnh một trang"""
         if 0 <= page_idx < len(self._page_items) and page_idx < len(self._pages):
@@ -2849,16 +2873,58 @@ class ContinuousPreviewPanel(QFrame):
         # Get base zone id (without page index) to select all instances across pages
         base_id = zone_id.rsplit('_', 1)[0] if zone_id.count('_') > 1 else zone_id
 
-        # Highlight all zones with same base_id across all pages
+        # Ctrl+click = toggle multi-select; plain click = single select
+        modifiers = QApplication.keyboardModifiers()
+        if modifiers & Qt.ControlModifier:
+            if base_id in self._selected_base_ids:
+                self._selected_base_ids.discard(base_id)
+            else:
+                self._selected_base_ids.add(base_id)
+        else:
+            self._selected_base_ids = {base_id}
+            self.zone_selected.emit(zone_id)  # Sync toolbar only for single select
+
+        # Update visual state for all zones
         for zone in self._zones:
-            zone_base_id = zone.zone_id.rsplit('_', 1)[0] if zone.zone_id.count('_') > 1 else zone.zone_id
-            zone.set_selected(zone_base_id == base_id)
-        self.zone_selected.emit(zone_id)
+            z_base = zone.zone_id.rsplit('_', 1)[0] if zone.zone_id.count('_') > 1 else zone.zone_id
+            zone.set_selected(z_base in self._selected_base_ids)
+
+    def _on_rubber_band_selection(self):
+        """Sync visual selection after Qt rubber-band drag on empty space"""
+        if not self.view._rubber_band_active:
+            return
+        from ui.zone_item import ZoneItem
+        selected_qt = {item for item in self.scene.selectedItems() if isinstance(item, ZoneItem)}
+        self._selected_base_ids.clear()
+        for item in selected_qt:
+            base_id = item.zone_id.rsplit('_', 1)[0] if item.zone_id.count('_') > 1 else item.zone_id
+            self._selected_base_ids.add(base_id)
+        # Update visual state
+        for zone in self._zones:
+            z_base = zone.zone_id.rsplit('_', 1)[0] if zone.zone_id.count('_') > 1 else zone.zone_id
+            zone.set_selected(z_base in self._selected_base_ids)
+        # Sync toolbar when exactly one zone selected
+        if len(self._selected_base_ids) == 1:
+            self.zone_selected.emit(next(iter(self._selected_base_ids)))
 
     def deselect_all_zones(self):
         """Deselect all zones - restore z-order"""
+        self._selected_base_ids.clear()
         for zone in self._zones:
             zone.set_selected(False)
+
+    def get_selected_base_ids(self) -> set:
+        """Return set of currently selected base zone IDs"""
+        return set(self._selected_base_ids)
+
+    def select_all_zones(self):
+        """Select all custom zones currently in scene (for Ctrl+A)"""
+        self._selected_base_ids.clear()
+        for zone in self._zones:
+            if zone.scene():  # Zone is currently in scene
+                base_id = zone.zone_id.rsplit('_', 1)[0] if zone.zone_id.count('_') > 1 else zone.zone_id
+                self._selected_base_ids.add(base_id)
+                zone.set_selected(True)
     
     def _on_zone_delete(self, zone_id: str):
         """Handle zone delete request"""
