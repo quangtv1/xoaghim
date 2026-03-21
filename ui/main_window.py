@@ -1086,6 +1086,11 @@ class MainWindow(QMainWindow):
         self.prev_file_shortcut.activated.connect(self._on_prev_file)
         self.next_file_shortcut = QShortcut(QKeySequence("]"), self)
         self.next_file_shortcut.activated.connect(self._on_next_file)
+        # Cmd+Left/Right arrow for file navigation (macOS: Qt Ctrl = Cmd)
+        self.prev_file_arrow_shortcut = QShortcut(QKeySequence("Ctrl+Left"), self)
+        self.prev_file_arrow_shortcut.activated.connect(self._on_prev_file)
+        self.next_file_arrow_shortcut = QShortcut(QKeySequence("Ctrl+Right"), self)
+        self.next_file_arrow_shortcut.activated.connect(self._on_next_file)
 
         # V: toggle checkbox of currently viewed file (batch mode only)
         self.v_shortcut = QShortcut(QKeySequence(Qt.Key_V), self)
@@ -1098,13 +1103,11 @@ class MainWindow(QMainWindow):
         self.meta_v_shortcut = QShortcut(QKeySequence("Meta+V"), self)
         self.meta_v_shortcut.activated.connect(self._on_toggle_all_file_checkboxes)
 
-        # Space: scroll preview down; Ctrl+Space: scroll preview up
+        # Space: scroll preview down; Shift+Space: scroll preview up
         self.space_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
         self.space_shortcut.activated.connect(self._on_scroll_preview_down)
-        self.ctrl_space_shortcut = QShortcut(QKeySequence("Ctrl+Space"), self)
-        self.ctrl_space_shortcut.activated.connect(self._on_scroll_preview_up)
-        self.meta_space_shortcut = QShortcut(QKeySequence("Meta+Space"), self)
-        self.meta_space_shortcut.activated.connect(self._on_scroll_preview_up)
+        self.shift_space_shortcut = QShortcut(QKeySequence("Shift+Space"), self)
+        self.shift_space_shortcut.activated.connect(self._on_scroll_preview_up)
 
         # Keyboard shortcut Delete to delete selected zone
         self.delete_zone_shortcut = QShortcut(QKeySequence(Qt.Key_Delete), self)
@@ -1124,6 +1127,25 @@ class MainWindow(QMainWindow):
         else:
             self.reset_zones_shortcut = QShortcut(QKeySequence("Ctrl+Delete"), self)
             self.reset_zones_shortcut.activated.connect(self._on_reset_zones_shortcut)
+
+        # Cmd+1-5: activate remove (-) mode with specific page filter
+        # Shift+1-4: activate protect (+) mode with specific page filter
+        # (macOS: Qt "Ctrl" = Cmd key)
+        _remove_filters = [("Ctrl+1", "all"), ("Ctrl+2", "odd"), ("Ctrl+3", "even"),
+                            ("Ctrl+4", "none"), ("Ctrl+5", "override")]
+        _protect_filters = [("Shift+1", "all"), ("Shift+2", "odd"), ("Shift+3", "even"),
+                             ("Shift+4", "none")]
+        self._draw_filter_shortcuts = []
+        for key, flt in _remove_filters:
+            sc = QShortcut(QKeySequence(key), self)
+            sc.setAutoRepeat(False)
+            sc.activated.connect(lambda flt=flt: self._activate_draw_mode_filter('remove', flt))
+            self._draw_filter_shortcuts.append(sc)
+        for key, flt in _protect_filters:
+            sc = QShortcut(QKeySequence(key), self)
+            sc.setAutoRepeat(False)
+            sc.activated.connect(lambda flt=flt: self._activate_draw_mode_filter('protect', flt))
+            self._draw_filter_shortcuts.append(sc)
 
         # Initialize selected zone tracker
         self._selected_zone_id = None
@@ -3124,6 +3146,13 @@ class MainWindow(QMainWindow):
 
         # Update preview
         self.preview.set_draw_mode(mode)
+
+    def _activate_draw_mode_filter(self, mode: str, filter_mode: str):
+        """Activate draw mode and set a specific page filter in one action.
+        Used by Cmd+1-5 (remove) and Shift+1-4 (protect) shortcuts.
+        """
+        self._set_draw_mode_with_filter(mode)
+        self.settings_panel.set_filter(filter_mode)
 
     def _on_rect_drawn_from_preview(self, x: float, y: float, w: float, h: float, mode: str, page_idx: int):
         """Handle rectangle drawn on preview - create custom zone on specific page"""
